@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Users · Bourbon Book{% endblock %}
 {% block page %}
-<header class="editor-bar"><a class="back-button" href="/" aria-label="Back">←</a><strong>Admin users</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+<header class="editor-bar"><a class="back-button" href="/" aria-label="Back">←</a><strong>Admin users</strong><a class="edit-button" href="/admin/config">Config</a></header>
 <main id="main" class="app-shell edit-page admin-page">
   <section class="collection-head">
-    <div><p class="eyebrow">Administration</p><h1>Users</h1><p class="muted">{{ total }} account{{ "" if total == 1 else "s" }}</p></div>
+    <div><p class="eyebrow">Administration</p><h1>Users</h1><p class="muted">{{ total }} account{{ "" if total == 1 else "s" }} · <a href="/admin/usage">API usage</a></p></div>
   </section>
   <form class="catalog-tools" method="get" action="/admin/users">
     <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search users</span><input name="q" value="{{ q }}" placeholder="Search email or screen name" autocomplete="off"></label>

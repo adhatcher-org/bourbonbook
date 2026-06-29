@@ -67,6 +67,7 @@ def test_production_identity_configuration_rejects_unsafe_proxy(tmp_path: Path) 
         tmp_path,
         app_env="production",
         public_base_url="https://bourbonbook.example.com",
+        secure_cookies=True,
         proxy_headers=True,
         forwarded_allow_ips="*",
     )

@@ -43,9 +43,30 @@ def settings_for(tmp_path: Path, **changes) -> Settings:
             {
                 "app_env": "production",
                 "public_base_url": "https://example.com",
+                "secure_cookies": True,
                 "proxy_headers": False,
             },
             "PROXY_HEADERS",
+        ),
+        (
+            {
+                "app_env": "production",
+                "public_base_url": "https://example.com",
+                "secure_cookies": False,
+                "proxy_headers": True,
+                "forwarded_allow_ips": "172.18.0.4",
+            },
+            "SECURE_COOKIES",
+        ),
+        (
+            {
+                "app_env": "production",
+                "public_base_url": "https://example.com",
+                "secure_cookies": True,
+                "proxy_headers": True,
+                "forwarded_allow_ips": "172.18.0.4, *",
+            },
+            "restricted FORWARDED_ALLOW_IPS",
         ),
     ],
 )

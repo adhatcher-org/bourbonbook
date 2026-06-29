@@ -48,19 +48,24 @@ provider, operation, model, bounded error type, duration, token counts, optional
 and timestamp only; it does not store prompts, responses, bottle names, email addresses, URLs, or
 API keys. Set `API_USAGE_RETENTION_DAYS` to control local ledger cleanup.
 
+`/admin/config` exposes every setting listed in `.env.example` with server-side type, range, and
+allowed-value validation. Secret fields are never displayed; leave one blank to preserve it or use
+its clear checkbox for optional secrets. Saves are written atomically with owner-only permissions
+to `<DATA_DIR>/.env`, which takes precedence over container environment values at the next startup.
+The restart action terminates the app process after returning its response. Production deployments
+must use a process supervisor such as Docker with `restart: unless-stopped`; without one, the app
+stops and must be started manually.
+
 ## Docker / Unraid
 
-### Back up before the first migration-enabled release
+The production image is `ghcr.io/adhatcher-org/bourbonbook:latest`. It listens on container port
+`8000`, stores all persistent state under `/data`, and runs one Uvicorn worker. Logs are mirrored to
+stdout/stderr and written as newline-delimited JSON to `/data/logs/bourbonbook.log`. The checked-in
+`compose.yaml` is a local-development smoke-test topology: it publishes
+host port `8088`, uses a named volume, and creates an example `bourbon-services` network. Do not copy
+those local defaults into Unraid production.
 
-Stop the existing Bourbon Book container before making a backup. Then copy or snapshot the complete
-Unraid host directory configured by `DATA_PATH`, including both `bourbonbook.db` and `uploads/`.
-For example, if `DATA_PATH` is `/mnt/user/appdata/bourbonbook`, back up that directory only after the
-container has stopped. Do not make a normal file copy of `bourbonbook.db` while the application is
-running; a live SQLite file copy may be inconsistent. Keep the backup until the upgraded container
-has started successfully and the catalog and photos have been checked.
-
-The container runs the migration bootstrap before Uvicorn. Startup intentionally fails with a schema
-mismatch message if an unversioned database is partial or does not match the known legacy schema.
+For local Docker testing only:
 
 ```bash
 cp .env.example .env
@@ -69,35 +74,64 @@ docker network connect bourbon-services ollama  # once, for an existing Ollama c
 docker compose up -d --build
 ```
 
-Unraid settings:
+### Production Unraid Settings
 
-- Repository: `ghcr.io/adhatcher-org/bourbonbook:latest`
-- Web UI: port `8000` in the container; the Compose example publishes `8088`
-- Persistent path: `/data` (map to `/mnt/user/appdata/bourbonbook`)
-- Network: the same user-defined Docker network as the `ollama` container
-- Required variable: `SESSION_SECRET` (generate with `openssl rand -hex 32`)
-- Analysis provider: set `ANALYSIS_PROVIDER` to `ollama` or `openai`
-- Ollama variables: Compose sets `OLLAMA_URL=http://ollama:11434`; the default vision model is `gemma3:4b`
-- OpenAI variables: set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` (default `gpt-5.5`)
-- Optional: set `SECURE_COOKIES=true` when the app is served behind HTTPS
-- Public identity settings: `APP_ENV=production`,
-  `PUBLIC_BASE_URL=https://bourbonbook.aaronhatcher.com`, `EMAIL_DELIVERY_MODE=smtp`, and the
-  `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`,
-  `SMTP_FROM_NAME`, and `SMTP_TLS_MODE` values supplied by your relay. Mark `SMTP_PASSWORD` as a
-  masked secret in Unraid.
-- Initial admin: set `DEFAULT_ADMIN_EMAIL` and masked `DEFAULT_ADMIN_PASSWORD` for the first start.
-  The account is unverified and receives a verification link. Remove `DEFAULT_ADMIN_PASSWORD` after
-  the first admin is created; later starts do not reapply bootstrap credentials.
-- Proxy trust: set `PROXY_HEADERS=true` and restrict `FORWARDED_ALLOW_IPS` to SWAG's fixed container
-  IP or the smallest proxy-network CIDR. Production rejects a missing allowlist and `*`. Local runs
-  keep proxy processing disabled, so spoofed forwarding headers are ignored.
-- Observability: leave `METRICS_ENABLED=true` for Prometheus, set `LOG_FORMAT=json` in production,
-  and tune `LOG_LEVEL` as needed. Logs are written only to stdout/stderr for Docker collection.
-- Keep one Uvicorn worker. Identity rate limits are bounded and process-local; use a shared limiter
-  before adding workers or replicas.
+Create an Unraid path setting named `DATA_PATH` and map its host value to container path `/data`.
+`/mnt/user/appdata/bourbonbook` is a reasonable example host value, but backups and restores must use
+the value actually configured in Unraid.
 
-The SQLite database and normalized bottle photos live under `/data`. `/healthz` is used by the
-container health check.
+| Setting name | Unraid type | Container target/key | Example/default | Required | Secret |
+| --- | --- | --- | --- | --- | --- |
+| Repository | Repository | Image | `ghcr.io/adhatcher-org/bourbonbook:latest` | Yes | No |
+| Web UI | WebUI | URL | `https://bourbonbook.aaronhatcher.com` | Yes | No |
+| App port | Port | Container `8000` | No host-published port | Yes | No |
+| `DATA_PATH` | Path | `/data` | `/mnt/user/appdata/bourbonbook` | Yes | No |
+| Docker network | Network | Unraid-selected network | SWAG shared network | Yes | No |
+| Optional service network | Network | Additional network | Ollama/service network | If using Ollama | No |
+| `APP_ENV` | Variable | `APP_ENV` | `production` | Yes | No |
+| `SESSION_SECRET` | Variable | `SESSION_SECRET` | generated with `openssl rand -hex 32` | Yes | Yes |
+| `SECURE_COOKIES` | Variable | `SECURE_COOKIES` | `true` | Yes | No |
+| `PUBLIC_BASE_URL` | Variable | `PUBLIC_BASE_URL` | `https://bourbonbook.aaronhatcher.com` | Yes | No |
+| `PROXY_HEADERS` | Variable | `PROXY_HEADERS` | `true` | Yes | No |
+| `FORWARDED_ALLOW_IPS` | Variable | `FORWARDED_ALLOW_IPS` | SWAG fixed IP or smallest proxy CIDR | Yes | No |
+| `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama` or `openai` | Yes | No |
+| `OLLAMA_URL` | Variable | `OLLAMA_URL` | `http://ollama:11434` | If using Ollama | No |
+| `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `gemma3:4b` | If using Ollama | No |
+| `OPENAI_API_KEY` | Variable | `OPENAI_API_KEY` | masked value | If using OpenAI | Yes |
+| `OPENAI_MODEL` | Variable | `OPENAI_MODEL` | `gpt-5.5` | No | No |
+| `EMAIL_DELIVERY_MODE` | Variable | `EMAIL_DELIVERY_MODE` | `smtp` | Yes | No |
+| `SMTP_HOST` | Variable | `SMTP_HOST` | relay hostname | Yes for SMTP | No |
+| `SMTP_PORT` | Variable | `SMTP_PORT` | `587` | Yes for SMTP | No |
+| `SMTP_USERNAME` | Variable | `SMTP_USERNAME` | relay username | Relay-dependent | Yes |
+| `SMTP_PASSWORD` | Variable | `SMTP_PASSWORD` | masked value | Relay-dependent | Yes |
+| `SMTP_FROM_EMAIL` | Variable | `SMTP_FROM_EMAIL` | `bourbonbook@example.com` | Yes for SMTP | No |
+| `SMTP_FROM_NAME` | Variable | `SMTP_FROM_NAME` | `Bourbon Book` | No | No |
+| `SMTP_TLS_MODE` | Variable | `SMTP_TLS_MODE` | `starttls` | Yes for SMTP | No |
+| `VERIFICATION_TTL_HOURS` | Variable | `VERIFICATION_TTL_HOURS` | `24` | No | No |
+| `RESET_TTL_MINUTES` | Variable | `RESET_TTL_MINUTES` | `60` | No | No |
+| `DEFAULT_ADMIN_EMAIL` | Variable | `DEFAULT_ADMIN_EMAIL` | owner email | First startup only | No |
+| `DEFAULT_ADMIN_PASSWORD` | Variable | `DEFAULT_ADMIN_PASSWORD` | masked temporary value | First startup only | Yes |
+| `METRICS_ENABLED` | Variable | `METRICS_ENABLED` | `true` | No | No |
+| `API_USAGE_RETENTION_DAYS` | Variable | `API_USAGE_RETENTION_DAYS` | `90` | No | No |
+| `LOG_FORMAT` | Variable | `LOG_FORMAT` | `json` | Yes | No |
+| `LOG_LEVEL` | Variable | `LOG_LEVEL` | `INFO` | No | No |
+
+Never put real secrets in the image, Compose file, documentation examples, or repository. Use masked
+Unraid variables for `SESSION_SECRET`, `OPENAI_API_KEY`, SMTP credentials, and the temporary
+bootstrap password. Production startup rejects insecure cookies, non-HTTPS `PUBLIC_BASE_URL`, missing
+proxy-header support, an empty forwarded allowlist, and any `*` entry in `FORWARDED_ALLOW_IPS`.
+
+The initial admin is bootstrap-only. Set `DEFAULT_ADMIN_EMAIL` and masked `DEFAULT_ADMIN_PASSWORD`
+for the first start, verify that the account was created and received a verification email, then
+remove `DEFAULT_ADMIN_PASSWORD` from the Unraid template and restart the container. Startup must
+still succeed after removal because an admin already exists. If restoring an empty or pre-admin
+database, supply fresh bootstrap values again.
+
+Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
+are process-local; add a shared limiter before scaling workers or replicas.
+
+The container health check calls `/healthz`, which reports only process liveness. `/readyz` verifies
+database connectivity and that Alembic has reached the application migration head.
 
 ### Prometheus, SWAG, and Loki
 
@@ -116,10 +150,26 @@ internal monitoring network. Keep `/metrics`, `/healthz`, and `/readyz` off the 
 host with exact-match denies, for example:
 
 ```nginx
+location / {
+    proxy_pass http://bourbonbook:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+}
+
 location = /metrics { return 404; }
 location = /healthz { return 404; }
 location = /readyz { return 404; }
 ```
+
+Replace `bourbonbook` with the actual Docker DNS name if Unraid assigns a different container name.
+Use the same SWAG HTTPS route for LAN and Tailscale browser testing; do not publish the application
+port on the host for direct browser access. Preserve or replace forwarding headers at SWAG so the app
+trusts only SWAG's fixed address or proxy-network CIDR, never arbitrary client-supplied forwarding
+headers.
 
 Useful starter PromQL:
 
@@ -131,9 +181,30 @@ histogram_quantile(0.95, sum(rate(bourbonbook_ai_request_duration_seconds_bucket
 sum(rate(bourbonbook_ai_requests_total{result="failure"}[5m])) by (provider, operation)
 ```
 
-For Promtail/Loki, keep low-cardinality labels such as `app`, `container`, `level`, and optionally
-`event`. Parse each Docker stdout/stderr line as JSON when `LOG_FORMAT=json`; leave request IDs and
-user IDs as parsed fields, not labels. Useful Loki filters include:
+For Promtail/Loki, mount the configured Unraid `DATA_PATH` read-only into the collector and scrape
+`<DATA_PATH>/logs/*.log` (inside the app container this is `/data/logs/*.log`). Each line is JSON
+regardless of the console `LOG_FORMAT`. Keep low-cardinality labels such as `app`, `container`,
+`level`, and optionally `event`; leave request IDs and user IDs as parsed fields, not labels. A
+minimal Promtail scrape target is:
+
+```yaml
+scrape_configs:
+  - job_name: bourbonbook
+    static_configs:
+      - targets: [localhost]
+        labels:
+          app: bourbonbook
+          __path__: /bourbonbook-data/logs/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: severity
+            event: event
+```
+
+In this example, mount the same Unraid appdata directory at `/bourbonbook-data` in Promtail. Use
+external `logrotate` with `copytruncate` or normal rename/create rotation; the app's watched file
+handler reopens a replaced file. Useful Loki filters include:
 
 ```logql
 {app="bourbonbook"} | json | event="login_failed"
@@ -145,6 +216,47 @@ user IDs as parsed fields, not labels. Useful Loki filters include:
 For interactive recovery of the sole administrator, open a container terminal and run
 `uv run python -m bourbonbook.admin_cli recover`. It prompts for secrets and does not accept a
 password argument that could leak through shell history or the process list.
+
+### Deployment Validation Runbook
+
+Before deploying a migration-enabled image, stop the old Bourbon Book container and copy or snapshot
+the complete Unraid host directory configured by `DATA_PATH`, including `bourbonbook.db` and
+`uploads/`. Do not make a normal file copy of `bourbonbook.db` while the app is running. Keep the
+backup until the upgraded container has started and the catalog, ownership, price sources, and photos
+have been checked.
+
+Production rollout checklist:
+
+1. Pull or build the target image and confirm the Unraid template uses the production settings above.
+2. Start the container and inspect startup logs for migration bootstrap, admin bootstrap if needed,
+   and Uvicorn startup. A partial or unknown unversioned schema intentionally fails startup.
+3. Verify internal health from another container on the selected Docker network:
+   `curl http://bourbonbook:8000/healthz` and `curl http://bourbonbook:8000/readyz`.
+4. Verify public routing through SWAG at `https://bourbonbook.aaronhatcher.com`, including secure
+   cookies, redirects, PWA assets, and normal browser access from LAN or Tailscale.
+5. Confirm public `https://bourbonbook.aaronhatcher.com/metrics`, `/healthz`, and `/readyz` return
+   the configured denial while Prometheus can scrape `http://bourbonbook:8000/metrics` internally.
+6. Run the account flow end to end: register, open the captured or delivered verification link,
+   confirm verification, land on profile, set a screen name, change profile fields and password,
+   request and complete a reset, and delete a test account.
+7. Add a bottle using the selected Ollama analysis settings plus OpenAI grounded pricing, then verify
+   final prices, clickable price sources, and admin API usage totals.
+8. Exercise admin user actions from `/admin/users` and review `/admin/usage`.
+9. Query Loki for JSON events such as `login_succeeded`, `admin_action`, and
+   `ai_request_completed`; confirm secrets, one-time tokens, passwords, and user email addresses are
+   absent from logs and metrics.
+10. Remove `DEFAULT_ADMIN_PASSWORD` after first admin creation, restart, and confirm startup and
+    login still work.
+
+Local pre-PR validation remains:
+
+```bash
+make pr-review
+```
+
+For rollback, stop the new container, restore the backup from the host path currently configured by
+`DATA_PATH`, and redeploy the previous image. Do not rely on schema downgrades as a substitute for a
+database and uploads backup.
 
 ## iPhone installation
 

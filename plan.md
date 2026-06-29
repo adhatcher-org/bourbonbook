@@ -23,7 +23,7 @@ and released together.
 | 8 | Expose Prometheus Metrics at `/metrics` | Complete | Implemented in `659dc8b` on PR #9 with `/metrics`, request instrumentation, and `tests/test_metrics.py`. |
 | 9 | Add Structured Logging for Promtail and Loki | Complete | Implemented in `659dc8b` on PR #9 with structured JSON logging support and `tests/test_logging.py`. |
 | 10 | Add the Makefile and Enforce Pre-PR Quality Gates | Complete | Implemented in `72ab2de`; draft PR #2 passed `quality`, `security`, `dependency`, `review-readiness`, and `container`. |
-| 11 | Integration, Deployment, and End-to-End Verification | Not started | Final Docker/Unraid rollout and production verification part. |
+| 11 | Integration, Deployment, and End-to-End Verification | Complete | Implemented on `feature/validation` with readiness checks and Unraid rollout/runbook docs. |
 
 ## Branch and Pull Requests
 

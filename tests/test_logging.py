@@ -73,4 +73,16 @@ def test_logging_filter_redacts_args_and_formatter_handles_exceptions(tmp_path) 
             log_format="json",
         )
     )
-    assert isinstance(logging.getLogger().handlers[0].formatter, JsonFormatter)
+    root = logging.getLogger()
+    assert isinstance(root.handlers[0].formatter, JsonFormatter)
+    assert isinstance(root.handlers[1].formatter, JsonFormatter)
+
+    logging.getLogger("bourbonbook.test").info(
+        "file event", extra={"event": "file_event", "password": "secret-canary"}
+    )
+    for handler in root.handlers:
+        handler.flush()
+    payload = json.loads((tmp_path / "logs" / "bourbonbook.log").read_text().strip())
+    assert payload["event"] == "file_event"
+    assert payload["password"] == "[REDACTED]"
+    assert "secret-canary" not in json.dumps(payload)

@@ -160,3 +160,29 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
     ]
     assert captured["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
     assert captured["include"] == ["web_search_call.action.sources"]
+
+
+def test_missing_parsed_openai_outputs_are_unavailable(tmp_path, monkeypatch) -> None:
+    class FakeResponse:
+        output_parsed = None
+        output = []
+
+    class FakeResponses:
+        async def parse(self, **kwargs):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            self.responses = FakeResponses()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
+    settings = settings_for(tmp_path)
+
+    assert asyncio.run(search_prices("Bottle", settings)) == ({}, [], "unavailable")
+    assert asyncio.run(request_analysis("Prompt", settings)) == ({}, "unavailable")

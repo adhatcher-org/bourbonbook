@@ -21,7 +21,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3,<9",
+  "bandit[toml]>=1.8,<2",
+  "pip-audit>=2.9,<3",
+  "pytest>=9.0.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.11,<1",
 ]
@@ -37,3 +39,25 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.coverage.run]
+source = ["bourbonbook"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = [
+  # Static type-checking imports are deliberately not executable at runtime.
+  "if TYPE_CHECKING:",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+# The production container must bind its internal service port on all interfaces so Docker can
+# route traffic to it. Host exposure remains controlled by the deployment network configuration.
+skips = ["B104"]

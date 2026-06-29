@@ -7,7 +7,8 @@ services:
     ports:
       - "8088:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATA_DIR: /data
       OLLAMA_URL: http://ollama:11434

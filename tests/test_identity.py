@@ -72,3 +72,31 @@ def test_production_identity_configuration_rejects_unsafe_proxy(tmp_path: Path) 
     )
     with pytest.raises(ValueError, match="restricted FORWARDED_ALLOW_IPS"):
         settings.validate_identity()
+
+
+def test_admin_bootstrap_requires_credentials_in_production_and_creates_fresh_admin(
+    tmp_path: Path,
+) -> None:
+    production = settings_for(tmp_path, app_env="production")
+    database = Database(production)
+    database.create_all()
+    with (
+        database.session_factory() as session,
+        pytest.raises(RuntimeError, match="DEFAULT_ADMIN_EMAIL"),
+    ):
+        asyncio.run(bootstrap_admin(session, production, MemoryEmailSender()))
+    database.engine.dispose()
+
+    configured = settings_for(
+        tmp_path,
+        default_admin_email="fresh@example.com",
+        default_admin_password="temporary-admin-password",
+    )
+    database = Database(configured)
+    sender = MemoryEmailSender()
+    with database.session_factory() as session:
+        admin = asyncio.run(bootstrap_admin(session, configured, sender))
+        assert admin.email == "fresh@example.com"
+        assert admin.is_admin
+        assert len(sender.messages) == 1
+    database.engine.dispose()

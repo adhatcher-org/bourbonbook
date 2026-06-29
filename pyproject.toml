@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "itsdangerous>=2.2,<3",
   "jinja2>=3.1,<4",
+  "openai>=1.93,<3",
   "pillow>=11,<13",
   "pwdlib[argon2]>=0.3,<1",
   "python-multipart>=0.0.20,<1",

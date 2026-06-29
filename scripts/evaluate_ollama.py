@@ -8,8 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from bourbonbook.analysis import analyze_bottle
 from bourbonbook.config import Settings
-from bourbonbook.ollama import analyze_bottle
 
 IMAGE_PATTERN = re.compile(r"^image:\s*!\[[^]]*]\(([^)]+)\)\s*$", re.IGNORECASE)
 VALUE_PATTERN = re.compile(r"^([a-z_]+):\s*(.*?)\s*$", re.IGNORECASE)
@@ -103,7 +103,12 @@ async def evaluate(images_dir: Path, settings: Settings) -> dict[str, Any]:
             }
         )
     return {
-        "model": settings.ollama_model,
+        "provider": settings.analysis_provider,
+        "model": (
+            settings.openai_model
+            if settings.analysis_provider == "openai"
+            else settings.ollama_model
+        ),
         "score": total_correct,
         "possible": total_fields,
         "accuracy": round(total_correct / total_fields, 4) if total_fields else 0,
@@ -117,12 +122,18 @@ async def evaluate(images_dir: Path, settings: Settings) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate bottle extraction against fixtures")
     parser.add_argument("--images", type=Path, default=Path("tests/images"))
-    parser.add_argument("--model", help="Override OLLAMA_MODEL for this evaluation")
+    parser.add_argument("--provider", choices=("ollama", "openai"))
+    parser.add_argument("--model", help="Override the selected provider's model")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     settings = Settings.from_env()
+    if args.provider:
+        settings = replace(settings, analysis_provider=args.provider)
     if args.model:
-        settings = replace(settings, ollama_model=args.model)
+        model_field = (
+            "openai_model" if settings.analysis_provider == "openai" else "ollama_model"
+        )
+        settings = replace(settings, **{model_field: args.model})
     report = asyncio.run(evaluate(args.images, settings))
     rendered = json.dumps(report, indent=2)
     if args.output:

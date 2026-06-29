@@ -16,6 +16,9 @@ class Settings:
     ollama_model: str
     max_users: int
     max_upload_mb: int
+    analysis_provider: str = "ollama"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.5"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -33,4 +36,7 @@ class Settings:
             ollama_model=os.getenv("OLLAMA_MODEL", "gemma3:4b"),
             max_users=int(os.getenv("MAX_USERS", "10")),
             max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "15")),
+            analysis_provider=os.getenv("ANALYSIS_PROVIDER", "ollama").strip().lower(),
+            openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+            openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5"),
         )

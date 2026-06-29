@@ -5,10 +5,32 @@ from typing import Any
 
 
 def normalize_product_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    value = value.lower().replace("’", "").replace("'", "")
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
 VERIFIED_PRODUCTS: dict[str, dict[str, Any]] = {
+    "blantons-original-single-barrel": {
+        "aliases": {
+            "blantons original single barrel",
+            "blantons the original single barrel",
+            "blantons the original single barrel bourbon whiskey",
+            "blantons the original single barrel kentucky straight bourbon whiskey",
+            "blantons the original single barrel straight from the barrel",
+        },
+        "values": {
+            "name": "Blanton's Original Single Barrel",
+            "brand": "Blanton's",
+            "release": "The Original Single Barrel",
+            "edition": "Single Barrel",
+            "spirit_type": "Bourbon",
+            "distilled_by": "Buffalo Trace Distillery",
+            "mash_bill": "Corn, rye, and malted barley (Buffalo Trace Mash Bill #2)",
+            "proof": 93.0,
+            "abv": 46.5,
+            "size": "750ml",
+        },
+    },
     "weller-full-proof": {
         "aliases": {
             "weller full proof",
@@ -41,4 +63,3 @@ def verified_product(name: str) -> dict[str, Any] | None:
         if normalized in aliases:
             return dict(product["values"])
     return None
-

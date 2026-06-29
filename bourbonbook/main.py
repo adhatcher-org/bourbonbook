@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
+from bourbonbook.analysis import analyze_bottle, analyze_bottle_name
 from bourbonbook.auth import (
     csrf_token,
     current_user,
@@ -26,7 +27,6 @@ from bourbonbook.catalog import verified_product
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
 from bourbonbook.models import Bottle, User
-from bourbonbook.ollama import analyze_bottle, analyze_bottle_name
 from bourbonbook.photos import save_photo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -129,12 +129,12 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any]) -> None:
 
 
 async def enrich_bottle_by_name(
-    bottle: Bottle, settings: Settings, *, allow_ollama: bool = True
+    bottle: Bottle, settings: Settings, *, allow_provider: bool = True
 ) -> tuple[dict[str, Any], str]:
     verified = verified_product(bottle.name)
     if verified:
         return verified, "verified"
-    if not allow_ollama:
+    if not allow_provider:
         return {}, "unavailable"
     return await analyze_bottle_name(bottle.name, settings)
 
@@ -291,7 +291,7 @@ def register_routes(app: FastAPI) -> None:
             apply_analysis(bottle, analysis)
             if bottle.name and bottle.name != "Untitled bottle":
                 enrichment, enrichment_status = await enrich_bottle_by_name(
-                    bottle, app.state.settings, allow_ollama=False
+                    bottle, app.state.settings, allow_provider=False
                 )
                 apply_analysis(bottle, enrichment)
                 if enrichment:
@@ -387,7 +387,7 @@ def register_routes(app: FastAPI) -> None:
             apply_analysis(bottle, analysis)
             if mode == "photo" and bottle.name:
                 enrichment, enrichment_status = await enrich_bottle_by_name(
-                    bottle, app.state.settings, allow_ollama=False
+                    bottle, app.state.settings, allow_provider=False
                 )
                 apply_analysis(bottle, enrichment)
                 if enrichment:

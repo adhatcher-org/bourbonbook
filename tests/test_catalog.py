@@ -14,3 +14,14 @@ def test_weller_full_proof_verified_values() -> None:
 
 def test_unknown_product_has_no_verified_override() -> None:
     assert verified_product("An entirely unknown bottle") is None
+
+
+def test_blantons_verbose_name_maps_to_verified_values() -> None:
+    product = verified_product(
+        "Blanton's The Original Single Barrel Kentucky Straight Bourbon Whiskey"
+    )
+
+    assert product
+    assert product["name"] == "Blanton's Original Single Barrel"
+    assert product["proof"] == 93.0
+    assert product["abv"] == 46.5

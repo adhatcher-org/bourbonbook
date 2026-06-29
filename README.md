@@ -99,11 +99,39 @@ Serve the app over HTTPS, open it in Safari, choose **Share → Add to Home Scre
 
 ## Development
 
+The Makefile is the canonical command interface for local development and CI:
+
 ```bash
-uv run ruff check .
-uv run pytest --cov=bourbonbook
-docker build -t bourbonbook .
+make install       # install the exact uv.lock environment
+make test          # fast deterministic tests
+make coverage      # branch coverage with the enforced 90% floor
+make pr-review     # all pre-PR gates plus the production image build
+make help          # list every available target
 ```
+
+During development, run focused tests as needed, then run `make pr-review` before opening or
+updating a pull request. It checks lint and formatting, coverage, Bandit, the dependency lock and
+known vulnerabilities, diff/tracked-file integrity, migrations, Compose configuration, and the
+production Docker build. These checks use test configuration and do not load `.env`; only
+`make run_local` loads that file. `build-local` builds the local Compose topology, while `build`
+builds the production image used by CI and Unraid.
+
+Repository administrators must configure the `main` branch ruleset to require the `quality`,
+`security`, `dependency`, `review-readiness`, and `container` GitHub Actions jobs before merge.
+Dependabot opens weekly Python, Actions, and Docker update pull requests, which must pass the same
+required checks.
+
+To intentionally upgrade the lock, run `make update`; it audits the upgraded environment and then
+runs the complete non-container gate before returning success.
+
+Run the app locally with proxy-header processing disabled:
+
+```bash
+make run_local
+```
+
+It binds to `127.0.0.1:8000` and defaults `SECURE_COOKIES` to false. Override `HOST` or `PORT` on the
+Make command line when needed.
 
 Evaluate either analysis provider against the bottle-image fixtures:
 

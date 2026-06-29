@@ -13,6 +13,7 @@ from bourbonbook.config import Settings
 
 logger = logging.getLogger(__name__)
 
+
 async def request_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:

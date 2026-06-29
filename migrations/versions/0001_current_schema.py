@@ -76,9 +76,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["bottle_id"], ["bottles.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_price_sources_bottle_id", "price_sources", ["bottle_id"], unique=False
-    )
+    op.create_index("ix_price_sources_bottle_id", "price_sources", ["bottle_id"], unique=False)
 
 
 def downgrade() -> None:

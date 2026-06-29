@@ -130,9 +130,7 @@ def main() -> None:
     if args.provider:
         settings = replace(settings, analysis_provider=args.provider)
     if args.model:
-        model_field = (
-            "openai_model" if settings.analysis_provider == "openai" else "ollama_model"
-        )
+        model_field = "openai_model" if settings.analysis_provider == "openai" else "ollama_model"
         settings = replace(settings, **{model_field: args.model})
     report = asyncio.run(evaluate(args.images, settings))
     rendered = json.dumps(report, indent=2)

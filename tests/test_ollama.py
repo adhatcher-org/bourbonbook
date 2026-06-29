@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from bourbonbook.config import Settings
-from bourbonbook.ollama import normalize_analysis, request_analysis
+from bourbonbook.ollama import analyze_bottle_name, normalize_analysis, request_analysis
 
 
 class FakeResponse:
@@ -61,3 +61,28 @@ def test_status_is_derived_from_fill_level() -> None:
         "status": "Opened",
     }
     assert normalize_analysis({"fill_level": 0}) == {"fill_level": 0, "status": "Empty"}
+
+
+def test_invalid_ollama_response_is_unavailable(tmp_path, monkeypatch) -> None:
+    class InvalidResponse(FakeResponse):
+        def json(self) -> dict[str, object]:
+            return {"response": None}
+
+    class InvalidClient(FakeClient):
+        async def post(self, url: str, json: dict) -> InvalidResponse:
+            return InvalidResponse()
+
+    monkeypatch.setattr("bourbonbook.ollama.httpx.AsyncClient", InvalidClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.invalid",
+        ollama_model="test",
+        max_users=1,
+        max_upload_mb=1,
+    )
+
+    assert asyncio.run(request_analysis("prompt", settings)) == ({}, "unavailable")
+    assert asyncio.run(analyze_bottle_name("Bottle", settings)) == ({}, "unavailable")

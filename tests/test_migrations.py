@@ -3,12 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from alembic import command
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
-from bourbonbook.migrations import BASELINE_REVISION, MigrationBootstrapError, bootstrap_database
+from bourbonbook.migrations import (
+    BASELINE_REVISION,
+    HEAD_REVISION,
+    MigrationBootstrapError,
+    alembic_config,
+    bootstrap_database,
+)
 from bourbonbook.models import Bottle, PriceSource, User
 
 
@@ -42,9 +49,10 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             "alembic_version",
             "bottles",
             "price_sources",
+            "user_tokens",
             "users",
         }
-        assert current_revision(database) == BASELINE_REVISION
+        assert current_revision(database) == HEAD_REVISION
     finally:
         database.engine.dispose()
 
@@ -56,31 +64,37 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
     photo = uploads / "legacy-photo.jpg"
     photo.write_bytes(b"existing bottle photo")
 
+    command.upgrade(alembic_config(settings.database_url), BASELINE_REVISION)
     database = Database(settings)
-    database.create_all()
-    with database.session_factory() as session:
-        user = User(
-            username="aaron",
-            display_name="Aaron",
-            password_hash="existing-password-hash",
-        )
-        bottle = Bottle(
-            owner=user,
-            name="Eagle Rare 10 Year",
-            photo_name=photo.name,
-        )
-        bottle.price_sources.append(
-            PriceSource(
-                kind="msrp",
-                title="Existing source",
-                url="https://example.com/eagle-rare",
-                basis="Listed price",
+    with database.engine.begin() as connection:
+        connection.execute(text("DROP TABLE alembic_version"))
+        user_id = connection.execute(
+            text(
+                "INSERT INTO users (username, display_name, password_hash, created_at) "
+                "VALUES ('aaron@example.com', 'Aaron', 'existing-password-hash', CURRENT_TIMESTAMP)"
             )
+        ).lastrowid
+        bottle_id = connection.execute(
+            text(
+                "INSERT INTO bottles (owner_id, name, brand, release, edition, spirit_type, "
+                "distilled_by, mash_bill, size, age_statement, barrel_number, bottle_number, "
+                "warehouse, floor, status, fill_level, quantity, storage_location, rating, "
+                "tasting_notes, notes, photo_name, analysis_status, created_at, updated_at) VALUES "
+                "(:owner, 'Eagle Rare 10 Year', '', '', '', 'Bourbon', '', '', '750ml', '', '', "
+                "'', '', '', 'Unopened', 100, 1, '', 0, '', '', :photo, 'manual', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            {"owner": user_id, "photo": photo.name},
+        ).lastrowid
+        connection.execute(
+            text(
+                "INSERT INTO price_sources "
+                "(bottle_id, kind, title, url, basis, checked_at) VALUES "
+                "(:bottle, 'msrp', 'Existing source', "
+                "'https://example.com/eagle-rare', 'Listed price', CURRENT_TIMESTAMP)"
+            ),
+            {"bottle": bottle_id},
         )
-        session.add(user)
-        session.commit()
-        user_id = user.id
-        bottle_id = bottle.id
     database.engine.dispose()
 
     bootstrap_database(settings)
@@ -91,11 +105,11 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
         with migrated.session_factory() as session:
             user = session.get(User, user_id)
             bottle = session.get(Bottle, bottle_id)
-            source = session.scalar(
-                select(PriceSource).where(PriceSource.bottle_id == bottle_id)
-            )
+            source = session.scalar(select(PriceSource).where(PriceSource.bottle_id == bottle_id))
             assert user is not None
-            assert user.username == "aaron"
+            assert user.username == "aaron@example.com"
+            assert user.email == "aaron@example.com"
+            assert user.email_verified_at is None
             assert user.password_hash == "existing-password-hash"
             assert bottle is not None
             assert bottle.name == "Eagle Rare 10 Year"
@@ -103,7 +117,7 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
             assert source is not None
             assert source.url == "https://example.com/eagle-rare"
         assert photo.read_bytes() == b"existing bottle photo"
-        assert current_revision(migrated) == BASELINE_REVISION
+        assert current_revision(migrated) == HEAD_REVISION
     finally:
         migrated.engine.dispose()
 

@@ -4,7 +4,7 @@
 <header class="topbar">
   <a class="wordmark" href="/" aria-label="Bourbon Book home"><span>BB</span><b>Bourbon Book</b></a>
   <div class="profile-cluster">
-    <span class="profile-name">{{ user.display_name }}</span>
+    <a class="profile-name" href="/profile">{{ user.screen_name }}</a>
     <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Sign out</button></form>
   </div>
 </header>
@@ -62,4 +62,3 @@
   <span class="nav-spacer" aria-hidden="true"></span>
 </nav>
 {% endblock %}
-

@@ -11,7 +11,14 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    bootstrap_database(Settings.from_env())
+    settings = Settings.from_env()
+    settings.validate_identity()
+    bootstrap_database(settings)
+    proxy_args = (
+        ["--proxy-headers", "--forwarded-allow-ips", settings.forwarded_allow_ips]
+        if settings.proxy_headers
+        else ["--no-proxy-headers"]
+    )
     os.execvp(
         "uvicorn",
         [
@@ -21,7 +28,8 @@ def main() -> None:
             "0.0.0.0",
             "--port",
             "8000",
-            "--proxy-headers",
+            "--no-access-log",
+            *proxy_args,
         ],
     )
 

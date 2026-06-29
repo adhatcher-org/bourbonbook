@@ -17,17 +17,16 @@
     <form method="post" action="/{{ mode }}" class="stack-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {% if mode == "register" %}
-      <label>Display name<input name="display_name" autocomplete="name" required maxlength="80" placeholder="Aaron"></label>
+      <label>Screen name <span class="muted">(optional)</span><input name="screen_name" autocomplete="name" maxlength="80" placeholder="Aaron"></label>
       {% endif %}
-      <label>Username<input name="username" autocomplete="username" required maxlength="40" autocapitalize="none" placeholder="your_username"></label>
+      <label>Email<input name="email" type="email" autocomplete="email" required maxlength="254" autocapitalize="none" placeholder="you@example.com"></label>
       <label>Password<input name="password" type="password" autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}" required minlength="10" placeholder="At least 10 characters"></label>
       <button class="primary-button wide" type="submit">{{ "Create account" if mode == "register" else "Sign in" }} <span aria-hidden="true">→</span></button>
     </form>
     <p class="auth-switch">
       {% if mode == "register" %}Already have a book? <a href="/login">Sign in</a>
-      {% else %}New to Bourbon Book? <a href="/register">Create an account</a>{% endif %}
+      {% else %}New to Bourbon Book? <a href="/register">Create an account</a><br><a href="/forgot-password">Forgot password?</a>{% endif %}
     </p>
   </section>
 </main>
 {% endblock %}
-

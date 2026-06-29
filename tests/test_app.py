@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -36,18 +37,32 @@ def csrf(response) -> str:
 
 
 def register(client: TestClient, username: str = "aaron") -> None:
+    email = f"{username}@example.com"
     response = client.get("/register")
     response = client.post(
         "/register",
         data={
             "csrf_token": csrf(response),
-            "display_name": "Aaron",
-            "username": username,
+            "screen_name": "Aaron",
+            "email": email,
             "password": "correct-horse-battery",
         },
         follow_redirects=False,
     )
     assert response.status_code == 303
+    assert response.headers["location"] == "/check-email"
+    message = client.app.state.email_sender.messages[-1]
+    verification_url = re.search(r"https?://\S+", message.text).group(0)
+    parsed = urlsplit(verification_url)
+    staged = client.get(f"{parsed.path}?{parsed.query}", follow_redirects=False)
+    assert staged.headers["location"] == "/verify-email/confirm"
+    confirmation = client.get(staged.headers["location"])
+    verified = client.post(
+        "/verify-email/confirm",
+        data={"csrf_token": csrf(confirmation)},
+        follow_redirects=False,
+    )
+    assert verified.headers["location"] == "/profile"
 
 
 def test_health_and_auth_redirect(tmp_path: Path) -> None:
@@ -79,7 +94,7 @@ def test_bottles_are_scoped_to_current_user(tmp_path: Path) -> None:
     with client:
         register(client)
         with app.state.database.session_factory() as session:
-            owner = session.scalar(select(User).where(User.username == "aaron"))
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
             session.add(Bottle(owner_id=owner.id, name="Eagle Rare", brand="Eagle Rare"))
             session.commit()
         assert "Eagle Rare" in client.get("/").text
@@ -95,7 +110,11 @@ def test_rejects_bad_csrf(tmp_path: Path) -> None:
     with client:
         response = client.post(
             "/register",
-            data={"csrf_token": "wrong", "username": "aaron", "password": "long-password"},
+            data={
+                "csrf_token": "wrong",
+                "email": "aaron@example.com",
+                "password": "long-password",
+            },
         )
         assert response.status_code == 403
 
@@ -212,6 +231,6 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert detail.status_code == 200
         assert "Oak and orange peel" in detail.text
         assert "$200.00" in detail.text
-        photo_match = re.search(r'/media/([^\"]+)', detail.text)
+        photo_match = re.search(r"/media/([^\"]+)", detail.text)
         assert photo_match
         assert client.get("/media/" + photo_match.group(1)).status_code == 200

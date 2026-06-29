@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -23,6 +24,7 @@ from bourbonbook.auth import (
     current_user,
     hash_password,
     normalize_email,
+    require_admin,
     require_verified_user,
     validate_password,
     verify_csrf,
@@ -33,8 +35,25 @@ from bourbonbook.config import Settings
 from bourbonbook.database import Database
 from bourbonbook.email import create_email_sender, security_message
 from bourbonbook.identity import bootstrap_admin, issue_reset, issue_verification
+from bourbonbook.logging_config import (
+    REQUEST_ID_HEADER,
+    configure_logging,
+    log_event,
+    request_id_var,
+    valid_request_id,
+)
 from bourbonbook.migrations import bootstrap_database
-from bourbonbook.models import Bottle, PriceSource, User, UserToken
+from bourbonbook.models import ApiUsage, Bottle, PriceSource, User, UserToken
+from bourbonbook.observability import (
+    HTTP_IN_PROGRESS,
+    AIUsageRecorder,
+    ObservedEmailSender,
+    metrics_response,
+    observe_auth_event,
+    observe_http,
+    route_template,
+    usage_context,
+)
 from bourbonbook.photos import save_photo
 from bourbonbook.rate_limit import RateLimiter
 from bourbonbook.tokens import (
@@ -45,7 +64,6 @@ from bourbonbook.tokens import (
     revoke_tokens,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent
@@ -61,23 +79,43 @@ templates.env.filters["money"] = money
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    configure_logging(settings)
     database = Database(settings)
+    usage_recorder = AIUsageRecorder(
+        database.session_factory,
+        retention_days=settings.api_usage_retention_days,
+        metrics_enabled=settings.metrics_enabled,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        log_event(logger, logging.INFO, "app_starting", "Bourbon Book starting")
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
         bootstrap_database(settings)
+        removed = app.state.usage_recorder.cleanup_old_records()
+        if removed:
+            log_event(
+                logger,
+                logging.INFO,
+                "usage_retention_cleanup",
+                "Old API usage records removed",
+                removed=removed,
+            )
         with database.session_factory() as session:
             await bootstrap_admin(session, settings, app.state.email_sender)
         yield
+        log_event(logger, logging.INFO, "app_stopping", "Bourbon Book stopping")
         database.engine.dispose()
 
     app = FastAPI(title="Bourbon Book", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.database = database
-    app.state.email_sender = create_email_sender(settings)
+    app.state.usage_recorder = usage_recorder
+    app.state.email_sender = ObservedEmailSender(
+        create_email_sender(settings), metrics_enabled=settings.metrics_enabled
+    )
     app.state.rate_limiter = RateLimiter(
         settings.rate_limit_secret or settings.session_secret,
         limit=settings.rate_limit_attempts,
@@ -92,8 +130,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_age=60 * 60 * 24 * 30,
     )
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    register_observability(app)
     register_routes(app)
     return app
+
+
+def register_observability(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def request_context(request: Request, call_next):
+        inbound = request.headers.get(REQUEST_ID_HEADER)
+        request_id = inbound if valid_request_id(inbound) else uuid4().hex
+        token = request_id_var.set(request_id)
+        start = time.perf_counter()
+        method = request.method
+        HTTP_IN_PROGRESS.labels(method, "pending").inc()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration = time.perf_counter() - start
+            template = route_template(request)
+            observe_http(method, template, 500, duration)
+            log_event(
+                logger,
+                logging.ERROR,
+                "request_exception",
+                "Unhandled request exception",
+                method=method,
+                route=template,
+                status=500,
+                duration_ms=round(duration * 1000),
+                exc_info=True,
+            )
+            raise
+        finally:
+            HTTP_IN_PROGRESS.labels(method, "pending").dec()
+            request_id_var.reset(token)
+        response.headers[REQUEST_ID_HEADER] = request_id
+        if request.url.path != "/metrics":
+            duration = time.perf_counter() - start
+            template = route_template(request)
+            observe_http(method, template, response.status_code, duration)
+            log_event(
+                logger,
+                logging.INFO,
+                "request_completed",
+                "Request completed",
+                method=method,
+                route=template,
+                status=response.status_code,
+                duration_ms=round(duration * 1000),
+                request_id=request_id,
+            )
+        return response
 
 
 def render(request: Request, name: str, **context: Any) -> HTMLResponse:
@@ -193,6 +281,41 @@ def owned_bottle(session: Session, user: User, bottle_id: int) -> Bottle | None:
     return session.scalar(select(Bottle).where(Bottle.id == bottle_id, Bottle.owner_id == user.id))
 
 
+def render_admin_user(
+    request: Request,
+    session: Session,
+    admin: User,
+    target: User,
+    error: str | None,
+    notice: str | None,
+    status_code: int,
+) -> HTMLResponse:
+    bottle_count = session.scalar(select(func.count(Bottle.id)).where(Bottle.owner_id == target.id))
+    return render(
+        request,
+        "admin/user_detail.html",
+        user=admin,
+        target=target,
+        bottle_count=bottle_count or 0,
+        error=error,
+        notice=notice,
+        status_code=status_code,
+    )
+
+
+def log_admin_action(actor_user_id: int, target_user_id: int, action: str, success: bool) -> None:
+    log_event(
+        logger,
+        logging.INFO if success else logging.WARNING,
+        "admin_action",
+        "Admin action completed",
+        actor_user_id=actor_user_id,
+        target_user_id=target_user_id,
+        action=action,
+        result="success" if success else "failure",
+    )
+
+
 def register_routes(app: FastAPI) -> None:
     def limited(request: Request, operation: str, email: str) -> bool:
         client_ip = request.client.host if request.client else "unknown"
@@ -210,6 +333,13 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> Response:
+        if not app.state.settings.metrics_enabled:
+            return Response(status_code=404)
+        content, media_type = metrics_response()
+        return Response(content=content, media_type=media_type)
 
     @app.get("/manifest.webmanifest", include_in_schema=False)
     def manifest() -> FileResponse:
@@ -239,6 +369,8 @@ def register_routes(app: FastAPI) -> None:
         with app.state.database.session_factory() as session:
             user = session.scalar(select(User).where(User.email == email))
             if not user or not verify_password(str(form.get("password", "")), user.password_hash):
+                observe_auth_event("login", "failure")
+                log_event(logger, logging.INFO, "login_failed", "Login failed")
                 return render(
                     request,
                     "login.html",
@@ -246,6 +378,7 @@ def register_routes(app: FastAPI) -> None:
                     error="Email or password is incorrect.",
                 )
             if not user.email:
+                observe_auth_event("login", "failure")
                 return render(
                     request,
                     "login.html",
@@ -253,10 +386,19 @@ def register_routes(app: FastAPI) -> None:
                     error="Contact an administrator to update this legacy account.",
                 )
             if not user.email_verified_at:
+                observe_auth_event("login", "unverified")
                 request.session.clear()
                 request.session["unverified_user_id"] = user.id
                 return RedirectResponse("/check-email", 303)
             authenticate_session(request, user)
+            observe_auth_event("login", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "login_succeeded",
+                "Login succeeded",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/", 303)
 
     @app.get("/register", response_class=HTMLResponse)
@@ -304,6 +446,14 @@ def register_routes(app: FastAPI) -> None:
             except Exception:
                 logger.exception("Verification email delivery failed user_id=%s", user.id)
                 return render(request, "check_email.html", delivery_error=True, status_code=503)
+            observe_auth_event("registration", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "registration_succeeded",
+                "Registration succeeded",
+                target_user_id=user.id,
+            )
         return RedirectResponse("/check-email", 303)
 
     @app.get("/check-email", response_class=HTMLResponse)
@@ -334,6 +484,7 @@ def register_routes(app: FastAPI) -> None:
                 except Exception:
                     logger.exception("Verification email delivery failed user_id=%s", user.id)
                     return render(request, "check_email.html", delivery_error=True, status_code=503)
+                observe_auth_event("verification_requested", "success")
         return render(request, "check_email.html", delivery_error=False, resent=True)
 
     @app.get("/verify-email")
@@ -381,6 +532,14 @@ def register_routes(app: FastAPI) -> None:
             user.email_verified_at = datetime.now(UTC)
             session.commit()
             authenticate_session(request, user)
+            observe_auth_event("verification_completed", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "verification_completed",
+                "Email verification completed",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/profile", 303)
 
     @app.get("/forgot-password", response_class=HTMLResponse)
@@ -405,6 +564,7 @@ def register_routes(app: FastAPI) -> None:
                     await issue_reset(session, user, app.state.settings, app.state.email_sender)
                 except Exception:
                     logger.exception("Password reset email delivery failed user_id=%s", user.id)
+            observe_auth_event("reset_requested", "success")
         return render(request, "forgot_password.html", sent=True)
 
     @app.get("/reset-password")
@@ -476,6 +636,14 @@ def register_routes(app: FastAPI) -> None:
                 await app.state.email_sender.send(security_message(user.email or ""))
             except Exception:
                 logger.exception("Password change notification failed user_id=%s", user.id)
+            observe_auth_event("reset_completed", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "password_reset_completed",
+                "Password reset completed",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/login", 303)
 
     @app.get("/profile", response_class=HTMLResponse)
@@ -546,6 +714,14 @@ def register_routes(app: FastAPI) -> None:
             except Exception:
                 logger.exception("Verification email delivery failed user_id=%s", user.id)
                 return render(request, "check_email.html", delivery_error=True, status_code=503)
+            observe_auth_event("email_changed", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "email_changed",
+                "Email changed",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/check-email", 303)
 
     @app.post("/profile/password")
@@ -576,6 +752,13 @@ def register_routes(app: FastAPI) -> None:
             revoke_tokens(session, user.id, RESET_PASSWORD)
             session.commit()
             request.session.clear()
+            log_event(
+                logger,
+                logging.INFO,
+                "password_changed",
+                "Password changed",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/login", 303)
 
     @app.post("/profile/delete")
@@ -607,17 +790,264 @@ def register_routes(app: FastAPI) -> None:
             for path in photo_paths:
                 path.unlink(missing_ok=True)
             request.session.clear()
+            observe_auth_event("account_deleted", "success")
+            log_event(
+                logger,
+                logging.INFO,
+                "account_deleted",
+                "Account deleted",
+                actor_user_id=user.id,
+            )
         return RedirectResponse("/account-deleted", 303)
 
     @app.get("/account-deleted", response_class=HTMLResponse)
     def account_deleted(request: Request) -> Response:
         return render(request, "account_deleted.html")
 
+    @app.get("/admin/users", response_class=HTMLResponse)
+    def admin_users(request: Request, q: str = "", page: int = 1) -> Response:
+        page_size = 20
+        page = max(1, page)
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            statement = (
+                select(User, func.count(Bottle.id).label("bottle_count"))
+                .outerjoin(Bottle, Bottle.owner_id == User.id)
+                .group_by(User.id)
+            )
+            count_statement = select(func.count(User.id))
+            if q.strip():
+                term = f"%{q.strip()}%"
+                criteria = or_(User.email.ilike(term), User.screen_name.ilike(term))
+                statement = statement.where(criteria)
+                count_statement = count_statement.where(criteria)
+            total = session.scalar(count_statement) or 0
+            rows = list(
+                session.execute(
+                    statement.order_by(User.created_at.desc())
+                    .limit(page_size)
+                    .offset((page - 1) * page_size)
+                )
+            )
+            return render(
+                request,
+                "admin/users.html",
+                user=admin,
+                users=rows,
+                q=q,
+                page=page,
+                page_size=page_size,
+                total=total,
+                max_page=max(1, (total + page_size - 1) // page_size),
+            )
+
+    @app.get("/admin/users/{target_id}", response_class=HTMLResponse)
+    def admin_user_detail(request: Request, target_id: int) -> Response:
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            target = session.get(User, target_id)
+            if not target:
+                return RedirectResponse("/admin/users", 303)
+            bottle_count = session.scalar(
+                select(func.count(Bottle.id)).where(Bottle.owner_id == target.id)
+            )
+            return render(
+                request,
+                "admin/user_detail.html",
+                user=admin,
+                target=target,
+                bottle_count=bottle_count or 0,
+                error=None,
+                notice=None,
+            )
+
+    @app.post("/admin/users/{target_id}/send-reset")
+    async def admin_send_reset(request: Request, target_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            target = session.get(User, target_id)
+            if not target or not target.email:
+                return RedirectResponse("/admin/users", 303)
+            if not limited(request, "admin-reset", str(target.id)):
+                return render_admin_user(
+                    request, session, admin, target, "Too many attempts.", None, 429
+                )
+            try:
+                await issue_reset(session, target, app.state.settings, app.state.email_sender)
+            except Exception:
+                log_admin_action(admin.id, target.id, "send_reset", False)
+                return render_admin_user(
+                    request, session, admin, target, "Reset email could not be sent.", None, 503
+                )
+            log_admin_action(admin.id, target.id, "send_reset", True)
+            observe_auth_event("admin_reset_requested", "success")
+            return render_admin_user(
+                request, session, admin, target, None, "Password reset email sent.", 200
+            )
+
+    @app.post("/admin/users/{target_id}/resend-verification")
+    async def admin_resend_verification(request: Request, target_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            target = session.get(User, target_id)
+            if not target or not target.email:
+                return RedirectResponse("/admin/users", 303)
+            if not limited(request, "admin-verification", str(target.id)):
+                return render_admin_user(
+                    request, session, admin, target, "Too many attempts.", None, 429
+                )
+            try:
+                await issue_verification(
+                    session, target, app.state.settings, app.state.email_sender
+                )
+            except Exception:
+                log_admin_action(admin.id, target.id, "resend_verification", False)
+                return render_admin_user(
+                    request,
+                    session,
+                    admin,
+                    target,
+                    "Verification email could not be sent.",
+                    None,
+                    503,
+                )
+            log_admin_action(admin.id, target.id, "resend_verification", True)
+            observe_auth_event("admin_verification_requested", "success")
+            return render_admin_user(
+                request, session, admin, target, None, "Verification email sent.", 200
+            )
+
+    @app.post("/admin/users/{target_id}/email")
+    async def admin_update_email(request: Request, target_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            target = session.get(User, target_id)
+            if not target:
+                return RedirectResponse("/admin/users", 303)
+            try:
+                email = normalize_email(str(form.get("email", "")))
+            except ValueError as exc:
+                return render_admin_user(request, session, admin, target, str(exc), None, 400)
+            if str(form.get("confirmation", "")).strip().lower() != email:
+                return render_admin_user(
+                    request,
+                    session,
+                    admin,
+                    target,
+                    "Type the new email address exactly to confirm.",
+                    None,
+                    400,
+                )
+            duplicate = session.scalar(
+                select(User).where(User.email == email, User.id != target.id)
+            )
+            if duplicate:
+                return render_admin_user(
+                    request, session, admin, target, "That email is already in use.", None, 400
+                )
+            target.email = email
+            target.username = email
+            target.email_verified_at = None
+            target.session_version += 1
+            revoke_tokens(session, target.id)
+            session.flush()
+            try:
+                await issue_verification(
+                    session, target, app.state.settings, app.state.email_sender
+                )
+            except Exception:
+                log_admin_action(admin.id, target.id, "update_email", False)
+                return render_admin_user(
+                    request,
+                    session,
+                    admin,
+                    target,
+                    "Email was changed, but verification could not be sent.",
+                    None,
+                    503,
+                )
+            log_admin_action(admin.id, target.id, "update_email", True)
+            observe_auth_event("admin_email_changed", "success")
+            return render_admin_user(
+                request,
+                session,
+                admin,
+                target,
+                None,
+                "Email changed and verification sent.",
+                200,
+            )
+
+    @app.get("/admin/usage", response_class=HTMLResponse)
+    def admin_usage(request: Request, days: int = 7, page: int = 1) -> Response:
+        page = max(1, page)
+        days = max(1, min(365, days))
+        page_size = 25
+        since = datetime.now(UTC) - timedelta(days=days)
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            totals = list(
+                session.execute(
+                    select(
+                        ApiUsage.provider,
+                        ApiUsage.operation,
+                        ApiUsage.model,
+                        ApiUsage.success,
+                        func.count(ApiUsage.id).label("calls"),
+                        func.coalesce(func.sum(ApiUsage.input_tokens), 0).label("input_tokens"),
+                        func.coalesce(func.sum(ApiUsage.output_tokens), 0).label("output_tokens"),
+                        func.coalesce(func.sum(ApiUsage.total_tokens), 0).label("total_tokens"),
+                        func.coalesce(func.avg(ApiUsage.duration_ms), 0).label("avg_duration_ms"),
+                    )
+                    .where(ApiUsage.created_at >= since)
+                    .group_by(
+                        ApiUsage.provider,
+                        ApiUsage.operation,
+                        ApiUsage.model,
+                        ApiUsage.success,
+                    )
+                    .order_by(ApiUsage.provider, ApiUsage.operation, ApiUsage.model)
+                )
+            )
+            total_records = (
+                session.scalar(select(func.count(ApiUsage.id)).where(ApiUsage.created_at >= since))
+                or 0
+            )
+            recent = list(
+                session.scalars(
+                    select(ApiUsage)
+                    .where(ApiUsage.created_at >= since)
+                    .order_by(ApiUsage.created_at.desc())
+                    .limit(page_size)
+                    .offset((page - 1) * page_size)
+                )
+            )
+            return render(
+                request,
+                "admin/usage.html",
+                user=admin,
+                days=days,
+                page=page,
+                page_size=page_size,
+                total_records=total_records,
+                max_page=max(1, (total_records + page_size - 1) // page_size),
+                totals=totals,
+                recent=recent,
+            )
+
     @app.post("/logout")
     async def logout(request: Request) -> Response:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         request.session.clear()
+        observe_auth_event("logout", "success")
+        log_event(logger, logging.INFO, "logout", "User logged out")
         return RedirectResponse("/login", 303)
 
     @app.get("/", response_class=HTMLResponse)
@@ -675,9 +1105,10 @@ def register_routes(app: FastAPI) -> None:
             photo_name = await save_photo(
                 photo, app.state.settings.data_dir / "uploads", app.state.settings.max_upload_mb
             )
-            analysis, analysis_status = await analyze_bottle(
-                app.state.settings.data_dir / "uploads" / photo_name, app.state.settings
-            )
+            with usage_context(app.state.usage_recorder, user.id):
+                analysis, analysis_status = await analyze_bottle(
+                    app.state.settings.data_dir / "uploads" / photo_name, app.state.settings
+                )
             bottle = Bottle(
                 owner_id=user.id,
                 photo_name=photo_name,
@@ -691,7 +1122,8 @@ def register_routes(app: FastAPI) -> None:
                 apply_analysis(bottle, enrichment)
                 if enrichment:
                     bottle.analysis_status = enrichment_status
-                price_status = await refresh_prices(bottle, app.state.settings)
+                with usage_context(app.state.usage_recorder, user.id):
+                    price_status = await refresh_prices(bottle, app.state.settings)
                 if price_status == "complete":
                     bottle.analysis_status = price_status
             bottle.purchase_price = parse_float(purchase_price)
@@ -775,14 +1207,19 @@ def register_routes(app: FastAPI) -> None:
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
             if mode == "price":
-                analysis, analysis_status = {}, await refresh_prices(bottle, app.state.settings)
+                with usage_context(app.state.usage_recorder, user.id):
+                    analysis, analysis_status = {}, await refresh_prices(bottle, app.state.settings)
             elif mode == "name":
-                analysis, analysis_status = await enrich_bottle_by_name(bottle, app.state.settings)
+                with usage_context(app.state.usage_recorder, user.id):
+                    analysis, analysis_status = await enrich_bottle_by_name(
+                        bottle, app.state.settings
+                    )
             elif bottle.photo_name:
-                analysis, analysis_status = await analyze_bottle(
-                    app.state.settings.data_dir / "uploads" / bottle.photo_name,
-                    app.state.settings,
-                )
+                with usage_context(app.state.usage_recorder, user.id):
+                    analysis, analysis_status = await analyze_bottle(
+                        app.state.settings.data_dir / "uploads" / bottle.photo_name,
+                        app.state.settings,
+                    )
             else:
                 analysis, analysis_status = {}, "unavailable"
             apply_analysis(bottle, analysis)
@@ -794,7 +1231,8 @@ def register_routes(app: FastAPI) -> None:
                 if enrichment:
                     analysis_status = enrichment_status
             if mode in {"name", "photo"} and bottle.name:
-                price_status = await refresh_prices(bottle, app.state.settings)
+                with usage_context(app.state.usage_recorder, user.id):
+                    price_status = await refresh_prices(bottle, app.state.settings)
                 if price_status == "complete":
                     analysis_status = price_status
             bottle.analysis_status = analysis_status

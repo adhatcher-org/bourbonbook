@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -11,6 +12,13 @@ from pydantic import BaseModel
 
 from bourbonbook.analysis import normalize_analysis
 from bourbonbook.config import Settings
+from bourbonbook.observability import (
+    UsageMetadata,
+    bounded_error_type,
+    current_usage_recorder,
+    current_usage_user_id,
+    openai_usage_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +91,9 @@ reliable evidence is unavailable or conflicting. Select one best direct source f
 price. Source titles and URLs must come from the web results. Keep each basis to one short sentence
 in plain text without Markdown."""
 
+    recorder = current_usage_recorder()
+    start = time.perf_counter()
+    metadata = UsageMetadata()
     try:
         async with AsyncOpenAI(api_key=settings.openai_api_key, timeout=120.0) as client:
             response = await client.responses.parse(
@@ -93,8 +104,20 @@ in plain text without Markdown."""
                 input=prompt,
                 text_format=PriceAnalysis,
             )
+        metadata = openai_usage_metadata(response)
         parsed = response.output_parsed
         if parsed is None:
+            if recorder:
+                recorder.record(
+                    provider="openai",
+                    operation="price_search",
+                    model=settings.openai_model,
+                    success=False,
+                    duration_ms=round((time.perf_counter() - start) * 1000),
+                    metadata=metadata,
+                    error_type="parse_error",
+                    user_id=current_usage_user_id(),
+                )
             logger.warning(
                 "OpenAI price search unavailable: response did not contain parsed output"
             )
@@ -116,9 +139,35 @@ in plain text without Markdown."""
                     "basis": getattr(parsed, f"{kind}_basis") or "",
                 }
             )
-        return prices, sources, "complete" if prices else "unavailable"
+        status = "complete" if prices else "unavailable"
+        if recorder:
+            recorder.record(
+                provider="openai",
+                operation="price_search",
+                model=settings.openai_model,
+                success=True,
+                duration_ms=round((time.perf_counter() - start) * 1000),
+                metadata=metadata,
+                user_id=current_usage_user_id(),
+            )
+        return prices, sources, status
     except (APIError, OSError, ValueError, TypeError) as exc:
-        logger.warning("OpenAI price search unavailable: %s", exc)
+        error_type = bounded_error_type(exc)
+        if recorder:
+            recorder.record(
+                provider="openai",
+                operation="price_search",
+                model=settings.openai_model,
+                success=False,
+                duration_ms=round((time.perf_counter() - start) * 1000),
+                metadata=metadata,
+                error_type=error_type,
+                user_id=current_usage_user_id(),
+            )
+        logger.warning(
+            "OpenAI price search unavailable",
+            extra={"event": "openai_price_search_failed", "error_type": error_type},
+        )
         return {}, [], "unavailable"
 
 
@@ -129,6 +178,10 @@ async def request_analysis(
         logger.warning("OpenAI analysis unavailable: OPENAI_API_KEY is not configured")
         return {}, "unavailable"
 
+    recorder = current_usage_recorder()
+    operation = "photo_analysis" if photo else "name_analysis"
+    start = time.perf_counter()
+    metadata = UsageMetadata()
     try:
         content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
         if photo:
@@ -146,11 +199,52 @@ async def request_analysis(
                 input=[{"role": "user", "content": content}],
                 text_format=BottleAnalysis,
             )
+        metadata = openai_usage_metadata(response)
         if response.output_parsed is None:
+            if recorder:
+                recorder.record(
+                    provider="openai",
+                    operation=operation,
+                    model=settings.openai_model,
+                    success=False,
+                    duration_ms=round((time.perf_counter() - start) * 1000),
+                    metadata=metadata,
+                    error_type="parse_error",
+                    user_id=current_usage_user_id(),
+                )
             logger.warning("OpenAI analysis unavailable: response did not contain parsed output")
             return {}, "unavailable"
         values = response.output_parsed.model_dump(exclude_none=True)
+        if recorder:
+            recorder.record(
+                provider="openai",
+                operation=operation,
+                model=settings.openai_model,
+                success=True,
+                duration_ms=round((time.perf_counter() - start) * 1000),
+                metadata=metadata,
+                user_id=current_usage_user_id(),
+            )
         return normalize_analysis(values), "complete"
     except (APIError, OSError, ValueError, TypeError) as exc:
-        logger.warning("OpenAI analysis unavailable: %s", exc)
+        error_type = bounded_error_type(exc)
+        if recorder:
+            recorder.record(
+                provider="openai",
+                operation=operation,
+                model=settings.openai_model,
+                success=False,
+                duration_ms=round((time.perf_counter() - start) * 1000),
+                metadata=metadata,
+                error_type=error_type,
+                user_id=current_usage_user_id(),
+            )
+        logger.warning(
+            "OpenAI analysis unavailable",
+            extra={
+                "event": "openai_analysis_failed",
+                "operation": operation,
+                "error_type": error_type,
+            },
+        )
         return {}, "unavailable"

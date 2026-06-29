@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}User · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>User detail</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+<main id="main" class="app-shell edit-page profile-page admin-page">
+  <section class="collection-head">
+    <div>
+      <p class="eyebrow">Administration</p>
+      <h1>{{ target.screen_name }}</h1>
+      <p class="muted">User #{{ target.id }} · {{ bottle_count }} bottle{{ "" if bottle_count == 1 else "s" }} · {{ "verified" if target.email_verified_at else "unverified" }}</p>
+    </div>
+  </section>
+  {% if error %}<div class="form-alert" role="alert">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="analysis-banner">{{ notice }}</div>{% endif %}
+  <section class="form-section">
+    <h2>Account</h2>
+    <dl class="admin-facts">
+      <div><dt>Email</dt><dd>{{ target.email or "Needs email" }}</dd></div>
+      <div><dt>Screen name</dt><dd>{{ target.screen_name }}</dd></div>
+      <div><dt>Role</dt><dd>{{ "Admin" if target.is_admin else "User" }}</dd></div>
+      <div><dt>Created</dt><dd>{{ target.created_at.strftime("%Y-%m-%d") }}</dd></div>
+    </dl>
+  </section>
+  <section class="form-section">
+    <h2>Email correction</h2>
+    <p class="muted">Use this only after verifying the person outside Bourbon Book. Changing the email signs out existing sessions, revokes old email tokens, and sends verification to the new address.</p>
+    <form method="post" action="/admin/users/{{ target.id }}/email" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>New email<input type="email" name="email" required maxlength="254"></label>
+      <label>Type the new email again<input type="email" name="confirmation" required maxlength="254"></label>
+      <button class="primary-button" type="submit">Change and send verification</button>
+    </form>
+  </section>
+  <section class="form-section admin-actions">
+    <h2>Safe actions</h2>
+    <p class="muted">Admins can send links, but never view or set a plaintext password. A reset sent to an inaccessible old email cannot recover that account; correct the email first.</p>
+    <form method="post" action="/admin/users/{{ target.id }}/resend-verification"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary-button" type="submit">Send verification</button></form>
+    <form method="post" action="/admin/users/{{ target.id }}/send-reset"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary-button" type="submit">Send password reset</button></form>
+  </section>
+</main>
+{% endblock %}

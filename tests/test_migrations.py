@@ -47,6 +47,7 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
     try:
         assert set(inspect(database.engine).get_table_names()) == {
             "alembic_version",
+            "api_usage",
             "bottles",
             "price_sources",
             "user_tokens",

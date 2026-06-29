@@ -8,7 +8,6 @@ A private, mobile-first bourbon collection that photographs bottles, asks a loca
 cp .env.example .env
 # Set SESSION_SECRET in .env
 uv sync
-uv run --env-file .env python -m bourbonbook.migrations
 uv run --env-file .env uvicorn bourbonbook.main:app --reload
 ```
 
@@ -19,9 +18,9 @@ in the running process. To exercise real delivery, set `EMAIL_DELIVERY_MODE=smtp
 SMTP settings shown in `.env.example`. Links are always built from `PUBLIC_BASE_URL`, never the
 incoming Host header.
 
-The migration bootstrap must run before Uvicorn. It initializes a fresh database, safely stamps a
-recognized pre-Alembic database, and upgrades an already-versioned database to the latest revision.
-It is safe to run repeatedly. Container startup runs this command automatically.
+Application startup runs the idempotent migration bootstrap before serving requests. It initializes
+a fresh database, safely stamps a recognized pre-Alembic database, and upgrades an already-versioned
+database to the latest revision. Container startup also runs it explicitly before Uvicorn.
 
 Choose the image-analysis provider in `.env` and restart the app:
 

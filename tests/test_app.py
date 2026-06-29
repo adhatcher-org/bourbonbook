@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from bourbonbook.config import Settings
 from bourbonbook.main import create_app
+from bourbonbook.migrations import bootstrap_database
 from bourbonbook.models import Bottle, User
 
 
@@ -25,8 +26,8 @@ def make_client(tmp_path: Path) -> tuple[TestClient, object]:
         max_users=10,
         max_upload_mb=2,
     )
+    bootstrap_database(settings)
     app = create_app(settings)
-    app.state.database.create_all()
     return TestClient(app), app
 
 

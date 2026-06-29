@@ -33,6 +33,7 @@ from bourbonbook.config import Settings
 from bourbonbook.database import Database
 from bourbonbook.email import create_email_sender, security_message
 from bourbonbook.identity import bootstrap_admin, issue_reset, issue_verification
+from bourbonbook.migrations import bootstrap_database
 from bourbonbook.models import Bottle, PriceSource, User, UserToken
 from bourbonbook.photos import save_photo
 from bourbonbook.rate_limit import RateLimiter
@@ -67,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        bootstrap_database(settings)
         with database.session_factory() as session:
             await bootstrap_admin(session, settings, app.state.email_sender)
         yield

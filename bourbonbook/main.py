@@ -50,7 +50,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        database.create_all()
         yield
         database.engine.dispose()
 

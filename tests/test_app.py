@@ -25,6 +25,7 @@ def make_client(tmp_path: Path) -> tuple[TestClient, object]:
         max_upload_mb=2,
     )
     app = create_app(settings)
+    app.state.database.create_all()
     return TestClient(app), app
 
 

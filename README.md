@@ -8,10 +8,15 @@ A private, mobile-first bourbon collection that photographs bottles, asks a loca
 cp .env.example .env
 # Set SESSION_SECRET in .env
 uv sync
+uv run --env-file .env python -m bourbonbook.migrations
 uv run --env-file .env uvicorn bourbonbook.main:app --reload
 ```
 
 Open `http://localhost:8000`, create an account, and add a bottle. Local development uses `https://ollama.aaronhatcher.com` by default. If the selected analyzer is not reachable, the photo is still saved and the review form opens for manual entry.
+
+The migration bootstrap must run before Uvicorn. It initializes a fresh database, safely stamps a
+recognized pre-Alembic database, and upgrades an already-versioned database to the latest revision.
+It is safe to run repeatedly. Container startup runs this command automatically.
 
 Choose the image-analysis provider in `.env` and restart the app:
 
@@ -33,6 +38,18 @@ The bottle detail page shows the source and lookup basis, and the edit page can 
 without re-analyzing the photo. Each refresh uses an additional OpenAI web-search tool call.
 
 ## Docker / Unraid
+
+### Back up before the first migration-enabled release
+
+Stop the existing Bourbon Book container before making a backup. Then copy or snapshot the complete
+Unraid host directory configured by `DATA_PATH`, including both `bourbonbook.db` and `uploads/`.
+For example, if `DATA_PATH` is `/mnt/user/appdata/bourbonbook`, back up that directory only after the
+container has stopped. Do not make a normal file copy of `bourbonbook.db` while the application is
+running; a live SQLite file copy may be inconsistent. Keep the backup until the upgraded container
+has started successfully and the catalog and photos have been checked.
+
+The container runs the migration bootstrap before Uvicorn. Startup intentionally fails with a schema
+mismatch message if an unversioned database is partial or does not match the known legacy schema.
 
 ```bash
 cp .env.example .env

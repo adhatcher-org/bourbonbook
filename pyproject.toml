@@ -5,6 +5,7 @@ description = "A private, photo-first bourbon collection PWA"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "alembic>=1.16,<2",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "itsdangerous>=2.2,<3",

@@ -1,3 +1,5 @@
+# Local development and smoke-test topology only.
+# Do not copy the published port, named volume, or example network directly into Unraid production.
 services:
   bourbonbook:
     build: .

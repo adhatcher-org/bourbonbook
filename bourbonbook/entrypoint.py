@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import logging
 import os
 
 from bourbonbook.config import Settings
+from bourbonbook.logging_config import configure_logging
 from bourbonbook.migrations import bootstrap_database
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
     settings = Settings.from_env()
+    configure_logging(settings)
     settings.validate_identity()
     bootstrap_database(settings)
     proxy_args = (

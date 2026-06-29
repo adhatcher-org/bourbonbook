@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Configuration · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>Configuration</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+<main id="main" class="app-shell edit-page admin-page config-page">
+  <section class="collection-head">
+    <div><p class="eyebrow">Administration</p><h1>Configuration</h1><p class="muted">Saved to {{ config_path }}. Changes apply after restart.</p></div>
+  </section>
+  {% if error %}<div class="form-alert" role="alert">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="analysis-banner" role="status">{{ notice }}</div>{% endif %}
+  <form method="post" action="/admin/config">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for group, fields in field_groups.items() %}
+    <section class="form-section">
+      <h2>{{ group }}</h2>
+      <div class="field-grid">
+      {% for field in fields %}
+        <label>{{ field.label }}
+          {% if field.kind == "choice" %}
+          <select name="{{ field.key }}" required>
+            {% for option in field.options %}<option value="{{ option }}"{% if values[field.key] == option %} selected{% endif %}>{{ option }}</option>{% endfor %}
+          </select>
+          {% elif field.kind == "boolean" %}
+          <select name="{{ field.key }}" required>
+            <option value="true"{% if values[field.key] == "true" %} selected{% endif %}>Enabled</option>
+            <option value="false"{% if values[field.key] == "false" %} selected{% endif %}>Disabled</option>
+          </select>
+          {% elif field.kind == "integer" %}
+          <input type="number" name="{{ field.key }}" value="{{ values[field.key] }}"{% if field.minimum is not none %} min="{{ field.minimum }}"{% endif %}{% if field.maximum is not none %} max="{{ field.maximum }}"{% endif %} required>
+          {% elif field.secret %}
+          <input type="password" name="{{ field.key }}" value="" placeholder="Leave blank to keep current value" autocomplete="new-password"{% if not field.optional %} aria-required="true"{% endif %}>
+          {% if field.optional %}<span class="config-clear"><input type="checkbox" name="clear_{{ field.key }}" value="true"> Clear stored value</span>{% endif %}
+          {% elif field.kind == "email" %}
+          <input type="email" name="{{ field.key }}" value="{{ values[field.key] }}"{% if not field.optional %} required{% endif %}>
+          {% elif field.kind == "url" %}
+          <input type="url" name="{{ field.key }}" value="{{ values[field.key] }}" required>
+          {% else %}
+          <input name="{{ field.key }}" value="{{ values[field.key] }}"{% if not field.optional %} required{% endif %}>
+          {% endif %}
+        </label>
+      {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+    <div class="config-actions"><button class="primary-button" type="submit">Save configuration</button></div>
+  </form>
+  <section class="form-section danger-zone">
+    <h2>Restart application</h2>
+    <p class="muted">Ends the current process so the container restart policy can launch it with the saved configuration.</p>
+    <form method="post" action="/admin/restart"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Restart app</button></form>
+  </section>
+</main>
+{% endblock %}

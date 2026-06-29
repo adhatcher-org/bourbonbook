@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from bourbonbook.config import Settings
 from bourbonbook.main import create_app
@@ -19,7 +19,7 @@ def make_client(tmp_path: Path) -> tuple[TestClient, object]:
     settings = Settings(
         data_dir=tmp_path,
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
-        session_secret="test-secret-that-is-long-enough",
+        session_secret="test-secret-that-is-long-enough!",
         secure_cookies=False,
         ollama_url="http://ollama.invalid",
         ollama_model="test",
@@ -70,9 +70,22 @@ def test_health_and_auth_redirect(tmp_path: Path) -> None:
     client, _ = make_client(tmp_path)
     with client:
         assert client.get("/healthz").json() == {"status": "ok"}
+        assert client.get("/readyz").json() == {"status": "ok"}
         response = client.get("/", follow_redirects=False)
         assert response.status_code == 303
         assert response.headers["location"] == "/login"
+
+
+def test_readyz_reports_unready_when_database_is_not_at_head(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        with app.state.database.engine.begin() as connection:
+            connection.execute(
+                text("update alembic_version set version_num = '0001_current_schema'")
+            )
+        response = client.get("/readyz")
+        assert response.status_code == 503
+        assert response.json() == {"status": "not_ready"}
 
 
 def test_registration_library_and_logout(tmp_path: Path) -> None:

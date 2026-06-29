@@ -6,6 +6,7 @@ import logging
 import re
 import sys
 from datetime import UTC, datetime
+from logging.handlers import WatchedFileHandler
 from typing import Any
 
 from bourbonbook.config import Settings
@@ -110,10 +111,13 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(settings: Settings) -> None:
     root = logging.getLogger()
+    for existing_handler in root.handlers:
+        existing_handler.close()
     root.handlers.clear()
     root.setLevel(settings.log_level.upper())
+    redaction_filter = RedactionFilter()
     handler = logging.StreamHandler(sys.stdout)
-    handler.addFilter(RedactionFilter())
+    handler.addFilter(redaction_filter)
     if settings.log_format == "json":
         handler.setFormatter(JsonFormatter())
     else:
@@ -124,6 +128,13 @@ def configure_logging(settings: Settings) -> None:
             )
         )
     root.addHandler(handler)
+
+    log_dir = settings.data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_handler = WatchedFileHandler(log_dir / "bourbonbook.log", encoding="utf-8")
+    file_handler.addFilter(redaction_filter)
+    file_handler.setFormatter(JsonFormatter())
+    root.addHandler(file_handler)
     logging.getLogger("uvicorn.access").disabled = True
 
 

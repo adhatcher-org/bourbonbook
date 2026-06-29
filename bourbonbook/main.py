@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -9,14 +11,22 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
+from bourbonbook.admin_config import (
+    CONFIG_FIELDS,
+    managed_config_path,
+    parse_config_form,
+    settings_values,
+    write_managed_config,
+)
 from bourbonbook.analysis import analyze_bottle, analyze_bottle_name, search_bottle_prices
 from bourbonbook.auth import (
     authenticate_session,
@@ -42,7 +52,7 @@ from bourbonbook.logging_config import (
     request_id_var,
     valid_request_id,
 )
-from bourbonbook.migrations import bootstrap_database
+from bourbonbook.migrations import HEAD_REVISION, bootstrap_database
 from bourbonbook.models import ApiUsage, Bottle, PriceSource, User, UserToken
 from bourbonbook.observability import (
     HTTP_IN_PROGRESS,
@@ -122,6 +132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window=settings.rate_limit_window_seconds,
         global_limit=settings.rate_limit_global_attempts,
     )
+    app.state.restart = lambda: os.kill(os.getpid(), signal.SIGTERM)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -333,6 +344,20 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz() -> JSONResponse:
+        try:
+            with app.state.database.engine.connect() as connection:
+                revision = connection.execute(
+                    text("select version_num from alembic_version")
+                ).scalar()
+                connection.execute(text("select 1")).scalar_one()
+        except Exception:
+            return JSONResponse({"status": "not_ready"}, status_code=503)
+        if revision != HEAD_REVISION:
+            return JSONResponse({"status": "not_ready"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     @app.get("/metrics", include_in_schema=False)
     def metrics() -> Response:
@@ -815,6 +840,7 @@ def register_routes(app: FastAPI) -> None:
                 .outerjoin(Bottle, Bottle.owner_id == User.id)
                 .group_by(User.id)
             )
+
             count_statement = select(func.count(User.id))
             if q.strip():
                 term = f"%{q.strip()}%"
@@ -840,6 +866,73 @@ def register_routes(app: FastAPI) -> None:
                 total=total,
                 max_page=max(1, (total + page_size - 1) // page_size),
             )
+
+    def render_admin_config(
+        request: Request,
+        admin: User,
+        *,
+        values: dict[str, str] | None = None,
+        error: str | None = None,
+        notice: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        field_groups: dict[str, list[Any]] = {}
+        for field in CONFIG_FIELDS:
+            field_groups.setdefault(field.group, []).append(field)
+        return render(
+            request,
+            "admin/config.html",
+            user=admin,
+            field_groups=field_groups,
+            values=values or settings_values(app.state.settings),
+            error=error,
+            notice=notice,
+            config_path=managed_config_path(app.state.settings),
+            status_code=status_code,
+        )
+
+    @app.get("/admin/config", response_class=HTMLResponse)
+    def admin_config(request: Request) -> Response:
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            return render_admin_config(request, admin)
+
+    @app.post("/admin/config", response_class=HTMLResponse)
+    async def admin_save_config(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            submitted = {field.key: str(form.get(field.key, "")) for field in CONFIG_FIELDS}
+            try:
+                values, _candidate = parse_config_form(form, app.state.settings)
+                write_managed_config(managed_config_path(app.state.settings), values)
+            except (OSError, ValueError) as exc:
+                log_admin_action(admin.id, admin.id, "update_config", False)
+                return render_admin_config(
+                    request, admin, values=submitted, error=str(exc), status_code=400
+                )
+            log_admin_action(admin.id, admin.id, "update_config", True)
+            return render_admin_config(
+                request,
+                admin,
+                values=values,
+                notice="Configuration saved. Restart the app to apply these changes.",
+            )
+
+    @app.post("/admin/restart")
+    async def admin_restart(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            log_admin_action(admin.id, admin.id, "restart_app", True)
+        return HTMLResponse(
+            "<!doctype html><title>Restarting</title>"
+            '<meta http-equiv="refresh" content="5;url=/admin/config">'
+            "<p>Bourbon Book is restarting. This page will reconnect shortly.</p>",
+            background=BackgroundTask(app.state.restart),
+        )
 
     @app.get("/admin/users/{target_id}", response_class=HTMLResponse)
     def admin_user_detail(request: Request, target_id: int) -> Response:

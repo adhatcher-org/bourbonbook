@@ -5,7 +5,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from bourbonbook.admin_config import CONFIG_FIELDS, read_managed_config, settings_values
 from bourbonbook.auth import hash_password
+from bourbonbook.config import Settings
 from bourbonbook.models import ApiUsage, User
 from tests.test_app import csrf, make_client, register
 
@@ -38,6 +40,88 @@ def test_admin_routes_require_admin(tmp_path: Path) -> None:
     with client:
         register(client)
         assert client.get("/admin/users").status_code == 403
+        assert client.get("/admin/config").status_code == 403
+
+
+def config_form(app, **changes: str) -> dict[str, str]:
+    values = settings_values(app.state.settings)
+    for field in CONFIG_FIELDS:
+        if field.secret:
+            values[field.key] = ""
+    values.update(changes)
+    return values
+
+
+def test_admin_can_save_validated_configuration_and_secrets_are_masked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+
+        page = client.get("/admin/config")
+        assert page.status_code == 200
+        assert "Analysis provider" in page.text
+        assert app.state.settings.session_secret not in page.text
+
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, ANALYSIS_PROVIDER="openai", OPENAI_MODEL="gpt-test"),
+                "csrf_token": csrf(page),
+                "OPENAI_API_KEY": "sk-test-secret",
+            },
+        )
+        assert response.status_code == 200
+        assert "Configuration saved" in response.text
+
+    stored = read_managed_config(tmp_path / ".env")
+    assert stored["ANALYSIS_PROVIDER"] == "openai"
+    assert stored["OPENAI_API_KEY"] == "sk-test-secret"
+    assert stored["SESSION_SECRET"] == app.state.settings.session_secret
+    assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    reloaded = Settings.from_env()
+    assert reloaded.analysis_provider == "openai"
+    assert reloaded.openai_model == "gpt-test"
+
+
+def test_admin_config_rejects_invalid_choices_without_writing(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/config")
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, ANALYSIS_PROVIDER="other"),
+                "csrf_token": csrf(page),
+            },
+        )
+
+        assert response.status_code == 400
+        assert "ANALYSIS_PROVIDER must be one of" in response.text
+        assert not (tmp_path / ".env").exists()
+
+
+def test_admin_can_request_process_restart(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    restarted = []
+    app.state.restart = lambda: restarted.append(True)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/config")
+        response = client.post(
+            "/admin/restart", data={"csrf_token": csrf(page)}, follow_redirects=False
+        )
+
+        assert response.status_code == 200
+        assert "restarting" in response.text.lower()
+        assert restarted == [True]
 
 
 def test_admin_email_correction_invalidates_session_and_sends_verification(

@@ -1,0 +1,13 @@
+{
+  "name": "Bourbon Book",
+  "short_name": "Bourbon Book",
+  "description": "Your private, photo-first bourbon collection.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0c0b",
+  "theme_color": "#0d0c0b",
+  "icons": [
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
+

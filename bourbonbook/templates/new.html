@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Add a Bottle · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar"><a class="back-button" href="/" aria-label="Back to collection">←</a><strong>Add a bottle</strong><span></span></header>
+<main id="main" class="app-shell capture-page">
+  <section class="capture-intro">
+    <p class="eyebrow">New entry</p>
+    <h1>Put the label<br>in the light.</h1>
+    <p>Use a clear, straight-on photo. Your Ollama model will read the label, then you can review every field before saving.</p>
+  </section>
+  <form method="post" action="/bottles" enctype="multipart/form-data" class="capture-form" data-upload-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="photo-drop" data-photo-drop>
+      <input type="file" name="photo" accept="image/*" capture="environment" required data-photo-input>
+      <img alt="Bottle preview" data-photo-preview hidden>
+      <span class="camera-glyph" aria-hidden="true">⌾</span>
+      <strong>Take or choose a photo</strong>
+      <small>JPEG or PNG · up to 15 MB</small>
+    </label>
+    <div class="capture-metadata">
+      <label>Purchase price <span class="money-input"><i>$</i><input name="purchase_price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Optional"></span></label>
+      <label>Bottles owned <span class="quantity-input"><input name="quantity" type="number" min="1" max="99" value="1" inputmode="numeric"><i>qty</i></span></label>
+    </div>
+    <div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Local by design.</strong> The photo is sent only to the Ollama service configured on your network.</p></div>
+    <button class="primary-button wide" type="submit" data-submit-button>Analyze bottle <span aria-hidden="true">✦</span></button>
+  </form>
+  <div class="analyzing" data-analyzing hidden role="status" aria-live="polite"><span class="spinner"></span><strong>Reading the label…</strong><small>This can take a minute on the first run.</small></div>
+</main>
+{% endblock %}

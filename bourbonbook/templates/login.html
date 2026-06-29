@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ "Join" if mode == "register" else "Sign in" }} · Bourbon Book{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block page %}
+<main id="main" class="auth-shell">
+  <section class="auth-story" aria-labelledby="welcome-title">
+    <div class="brand-mark" aria-hidden="true"><span>BB</span></div>
+    <p class="eyebrow">A private bottle ledger</p>
+    <h1 id="welcome-title">Keep the story<br>behind every pour.</h1>
+    <p class="auth-copy">Photograph a bottle. Let local AI read the label. Keep the details, value, and fill level close at hand.</p>
+    <div class="barrel-seal" aria-hidden="true">EST.<br>2026</div>
+  </section>
+  <section class="auth-panel" aria-labelledby="form-title">
+    <p class="eyebrow">{{ "First time here" if mode == "register" else "Welcome back" }}</p>
+    <h2 id="form-title">{{ "Start your book" if mode == "register" else "Open your cabinet" }}</h2>
+    {% if error %}<div class="form-alert" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/{{ mode }}" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if mode == "register" %}
+      <label>Display name<input name="display_name" autocomplete="name" required maxlength="80" placeholder="Aaron"></label>
+      {% endif %}
+      <label>Username<input name="username" autocomplete="username" required maxlength="40" autocapitalize="none" placeholder="your_username"></label>
+      <label>Password<input name="password" type="password" autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}" required minlength="10" placeholder="At least 10 characters"></label>
+      <button class="primary-button wide" type="submit">{{ "Create account" if mode == "register" else "Sign in" }} <span aria-hidden="true">→</span></button>
+    </form>
+    <p class="auth-switch">
+      {% if mode == "register" %}Already have a book? <a href="/login">Sign in</a>
+      {% else %}New to Bourbon Book? <a href="/register">Create an account</a>{% endif %}
+    </p>
+  </section>
+</main>
+{% endblock %}
+

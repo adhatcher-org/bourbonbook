@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ bottle.name }} · Bourbon Book{% endblock %}
+{% block page %}
+<form method="post" action="/bottles/{{ bottle.id }}/edit" enctype="multipart/form-data" class="edit-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <header class="editor-bar"><a class="cancel-button" href="{{ '/' if is_new else '/bottles/' ~ bottle.id }}">{{ "Later" if is_new else "Cancel" }}</a><strong>{{ "Review details" if is_new else "Edit bottle" }}</strong><button class="save-button" type="submit">Save</button></header>
+  <main id="main" class="app-shell edit-page">
+    {% if is_new or analysis_result %}{% set analysis_ok = bottle.analysis_status in ['complete', 'verified'] %}<div class="analysis-banner analysis-{{ bottle.analysis_status }}" role="status"><span aria-hidden="true">{{ "✦" if analysis_ok else "!" }}</span><div><strong>{{ "Verified bottle details applied" if bottle.analysis_status == "verified" else "Bottle details updated" if analysis_result and analysis_ok else "Label analysis complete" if analysis_ok else "Bottle lookup unavailable" }}</strong><p>{{ "Specifications were matched against the verified catalog. Review them before saving." if bottle.analysis_status == "verified" else "Review the refreshed fields before saving." if analysis_result and analysis_ok else "Review what the model found, then save your bottle." if analysis_ok else "Your existing details are unchanged. You can edit them manually or try again." }}</p></div></div>{% endif %}
+    <section class="edit-photo-wrap">
+      {% if bottle.photo_name %}<img class="edit-photo" src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle">{% endif %}
+      <div class="photo-actions"><label class="replace-photo"><input type="file" name="photo" accept="image/*" capture="environment">⌾ Replace photo</label><button class="reanalyze-button" type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="photo" data-analysis-action>✦ Re-analyze photo</button></div>
+    </section>
+    <section class="form-section"><div class="section-heading"><span>01</span><h2>Basic information</h2></div><div class="field-grid">
+      <div class="field-span name-refresh"><label for="bottle-name">Name</label><div><input id="bottle-name" name="name" value="{{ bottle.name }}" required><button type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="name" data-analysis-action>Update fields from name <span aria-hidden="true">✦</span></button></div><small>Correct or expand the name, then ask Ollama to refresh known product details.</small></div>
+      <label>Brand<input name="brand" value="{{ bottle.brand }}"></label><label>Release<input name="release" value="{{ bottle.release }}"></label>
+      <label>Edition<input name="edition" value="{{ bottle.edition }}" placeholder="Batch, vintage, act…"></label><label>Type<select name="spirit_type">{% for option in ['Bourbon','Rye','American Whiskey','Scotch','Irish Whiskey','Japanese Whisky','Other'] %}<option {{ 'selected' if bottle.spirit_type == option }}>{{ option }}</option>{% endfor %}</select></label>
+      <label class="field-span">Distilled by<input name="distilled_by" value="{{ bottle.distilled_by }}"></label><label class="field-span">Mash bill<input name="mash_bill" value="{{ bottle.mash_bill }}"></label>
+      <label>Proof<input name="proof" type="number" step="0.1" min="0" value="{{ bottle.proof if bottle.proof is not none else '' }}" inputmode="decimal"></label><label>ABV %<input name="abv" type="number" step="0.1" min="0" max="100" value="{{ bottle.abv if bottle.abv is not none else '' }}" inputmode="decimal"></label>
+      <label>Size<input name="size" value="{{ bottle.size }}" placeholder="750ml"></label><label>Age statement<input name="age_statement" value="{{ bottle.age_statement }}" placeholder="e.g. 10 Year"></label>
+    </div></section>
+    <section class="form-section"><div class="section-heading"><span>02</span><h2>Barrel information</h2></div><div class="field-grid">
+      <label>Barrel number<input name="barrel_number" value="{{ bottle.barrel_number }}"></label><label>Bottle number<input name="bottle_number" value="{{ bottle.bottle_number }}"></label><label>Warehouse<input name="warehouse" value="{{ bottle.warehouse }}"></label><label>Floor<input name="floor" value="{{ bottle.floor }}"></label>
+    </div></section>
+    <section class="form-section"><div class="section-heading"><span>03</span><h2>Valuation &amp; status</h2></div>
+      <fieldset class="status-picker"><legend>Status</legend>{% for option in ['Empty','Opened','Unopened'] %}<label><input type="radio" name="status" value="{{ option }}" {{ 'checked' if bottle.status == option }}><span>{{ option }}</span></label>{% endfor %}</fieldset>
+      <label class="range-field"><span>Fill level <output data-fill-output>{{ bottle.fill_level }}%</output></span><input name="fill_level" type="range" min="0" max="100" step="5" value="{{ bottle.fill_level }}" data-fill-range></label>
+      <div class="field-grid"><label>Quantity<input name="quantity" type="number" min="1" max="99" value="{{ bottle.quantity }}"></label><label>Storage location<input name="storage_location" value="{{ bottle.storage_location }}" placeholder="Cabinet A, shelf 3"></label><label>Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="{{ bottle.purchase_price if bottle.purchase_price is not none else '' }}" inputmode="decimal"></label><label>MSRP<input name="msrp" type="number" min="0" step="0.01" value="{{ bottle.msrp if bottle.msrp is not none else '' }}" inputmode="decimal"></label><label>Secondary price<input name="secondary_price" type="number" min="0" step="0.01" value="{{ bottle.secondary_price if bottle.secondary_price is not none else '' }}" inputmode="decimal"></label></div>
+    </section>
+    <section class="form-section"><div class="section-heading"><span>04</span><h2>Tasting &amp; notes</h2></div>
+      <fieldset class="rating-picker"><legend>Your rating</legend>{% for option in range(5,0,-1) %}<input id="rating-{{ option }}" type="radio" name="rating" value="{{ option }}" {{ 'checked' if bottle.rating == option }}><label for="rating-{{ option }}" aria-label="{{ option }} stars">★</label>{% endfor %}</fieldset>
+      <div class="field-grid"><label class="field-span">Tasting notes<textarea name="tasting_notes" rows="3" placeholder="Caramel, oak, orange peel…">{{ bottle.tasting_notes }}</textarea></label><label class="field-span">Private notes<textarea name="notes" rows="4" placeholder="Where you found it, who shared it, what to remember…">{{ bottle.notes }}</textarea></label></div>
+    </section>
+    <button class="primary-button wide mobile-save" type="submit">Save bottle</button>
+  </main>
+</form>
+<div class="analyzing" data-analysis-overlay hidden role="status" aria-live="polite"><span class="spinner"></span><strong>Refreshing bottle details…</strong><small>Existing values are preserved when Ollama returns an unknown field.</small></div>
+{% if not is_new %}<form method="post" action="/bottles/{{ bottle.id }}/delete" class="delete-form" data-delete-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Delete bottle</button></form>{% endif %}
+{% endblock %}

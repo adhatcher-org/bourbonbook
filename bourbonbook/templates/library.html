@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}My Collection · Bourbon Book{% endblock %}
+{% block page %}
+<header class="topbar">
+  <a class="wordmark" href="/" aria-label="Bourbon Book home"><span>BB</span><b>Bourbon Book</b></a>
+  <div class="profile-cluster">
+    <span class="profile-name">{{ user.display_name }}</span>
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Sign out</button></form>
+  </div>
+</header>
+<main id="main" class="app-shell library-page">
+  <section class="collection-head">
+    <div>
+      <p class="eyebrow">Private collection</p>
+      <h1>My Collection</h1>
+      <p class="collection-stats"><strong>{{ bottle_count }}</strong> {{ "bottle" if bottle_count == 1 else "bottles" }} <i></i> <strong>{{ total_value|money }}</strong> estimated value</p>
+    </div>
+    <a class="primary-button desktop-add" href="/bottles/new"><span aria-hidden="true">＋</span> Add bottle</a>
+  </section>
+
+  <form class="catalog-tools" method="get" action="/">
+    <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search collection</span><input name="q" value="{{ q }}" placeholder="Search bottles…" autocomplete="off"></label>
+    <label class="sort-field"><span class="sr-only">Sort collection</span><select name="sort" onchange="this.form.submit()">
+      <option value="newest" {{ 'selected' if sort == 'newest' }}>Newest</option>
+      <option value="oldest" {{ 'selected' if sort == 'oldest' }}>Oldest</option>
+      <option value="name" {{ 'selected' if sort == 'name' }}>Name</option>
+      <option value="value" {{ 'selected' if sort == 'value' }}>Value</option>
+    </select></label>
+  </form>
+
+  {% if bottles %}
+  <section class="bottle-grid" aria-label="Bottle collection">
+    {% for bottle in bottles %}
+    <a class="bottle-card reveal" href="/bottles/{{ bottle.id }}" style="--delay: {{ loop.index0 * 45 }}ms">
+      <div class="bottle-photo">
+        {% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle" loading="lazy">{% else %}<div class="bottle-placeholder" aria-hidden="true">BB</div>{% endif %}
+        <span class="status-chip status-{{ bottle.status|lower }}">{{ bottle.status }}</span>
+        {% if bottle.quantity > 1 %}<span class="quantity-chip">×{{ bottle.quantity }}</span>{% endif %}
+      </div>
+      <div class="bottle-card-body">
+        <div class="card-meta"><span>{{ bottle.brand or bottle.spirit_type }}</span><b>{{ bottle.estimated_value|money }}</b></div>
+        <h2>{{ bottle.name }}</h2>
+        <div class="fill-track"><span style="width: {{ bottle.fill_level }}%"></span></div>
+        <p>{{ bottle.proof|string + ' proof' if bottle.proof else bottle.size }}</p>
+      </div>
+    </a>
+    {% endfor %}
+  </section>
+  {% else %}
+  <section class="empty-state">
+    <div class="empty-bottle" aria-hidden="true"><span></span></div>
+    <p class="eyebrow">Your shelf is waiting</p>
+    <h2>{{ "No matches in the cabinet" if q else "Add the bottle that starts the story." }}</h2>
+    <p>{{ "Try another name, brand, or release." if q else "Take a photo and Bourbon Book will read the label into an editable record." }}</p>
+    {% if q %}<a class="secondary-button" href="/">Clear search</a>{% else %}<a class="primary-button" href="/bottles/new">Photograph a bottle <span>→</span></a>{% endif %}
+  </section>
+  {% endif %}
+</main>
+<nav class="mobile-nav" aria-label="Primary navigation">
+  <a class="active" href="/"><span aria-hidden="true">▦</span>Collection</a>
+  <a class="nav-add" href="/bottles/new" aria-label="Add bottle"><span>＋</span></a>
+  <span class="nav-spacer" aria-hidden="true"></span>
+</nav>
+{% endblock %}
+

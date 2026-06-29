@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ bottle.name }} · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar detail-bar"><a class="back-button" href="/" aria-label="Back to collection">←</a><strong>{{ bottle.brand or "Bottle details" }}</strong><a class="edit-button" href="/bottles/{{ bottle.id }}/edit">Edit</a></header>
+<main id="main" class="app-shell detail-page">
+  <section class="bottle-hero">
+    <div class="hero-photo">{% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle">{% else %}<div class="bottle-placeholder">BB</div>{% endif %}<span class="hero-proof">{{ bottle.proof|round(1) if bottle.proof else "—" }}<small>proof</small></span></div>
+    <div class="hero-copy"><p class="eyebrow">{{ bottle.spirit_type }}</p><h1>{{ bottle.name }}</h1><p>{{ bottle.release or bottle.distilled_by or "Personal collection" }}</p><div class="hero-value"><span>Estimated value</span><strong>{{ bottle.estimated_value|money }}</strong></div></div>
+  </section>
+  <div class="detail-grid">
+    <section class="detail-card"><h2>Basic information</h2><dl>
+      <div><dt>Brand</dt><dd>{{ bottle.brand or "—" }}</dd></div><div><dt>Release</dt><dd>{{ bottle.release or "—" }}</dd></div><div><dt>Edition</dt><dd>{{ bottle.edition or "—" }}</dd></div><div><dt>Type</dt><dd>{{ bottle.spirit_type or "—" }}</dd></div><div><dt>Distilled by</dt><dd>{{ bottle.distilled_by or "—" }}</dd></div><div class="wide-row"><dt>Mash bill</dt><dd>{{ bottle.mash_bill or "—" }}</dd></div><div><dt>Proof</dt><dd>{{ bottle.proof or "—" }}</dd></div><div><dt>ABV</dt><dd>{{ (bottle.abv|string + '%') if bottle.abv else "—" }}</dd></div><div><dt>Size</dt><dd>{{ bottle.size or "—" }}</dd></div><div><dt>Age</dt><dd>{{ bottle.age_statement or "—" }}</dd></div>
+    </dl></section>
+    <section class="detail-card"><h2>Barrel information</h2><dl>
+      <div><dt>Barrel no.</dt><dd>{{ bottle.barrel_number or "—" }}</dd></div><div><dt>Bottle no.</dt><dd>{{ bottle.bottle_number or "—" }}</dd></div><div><dt>Warehouse</dt><dd>{{ bottle.warehouse or "—" }}</dd></div><div><dt>Floor</dt><dd>{{ bottle.floor or "—" }}</dd></div>
+    </dl></section>
+    <section class="detail-card valuation-card"><h2>Valuation &amp; status</h2>
+      <div class="status-line"><span class="status-dot status-{{ bottle.status|lower }}"></span><strong>{{ bottle.status }}</strong><span>{{ bottle.quantity }} {{ "bottle" if bottle.quantity == 1 else "bottles" }}</span></div>
+      <div class="fill-display"><div><span>Fill level</span><strong>{{ bottle.fill_level }}%</strong></div><div class="fill-track large"><span style="width: {{ bottle.fill_level }}%"></span></div></div>
+      <dl><div><dt>Purchase price</dt><dd>{{ bottle.purchase_price|money }}</dd></div><div><dt>MSRP</dt><dd>{{ bottle.msrp|money }}</dd></div><div><dt>Secondary</dt><dd>{{ bottle.secondary_price|money }}</dd></div><div><dt>Stored at</dt><dd>{{ bottle.storage_location or "—" }}</dd></div></dl>
+    </section>
+    <section class="detail-card notes-card"><h2>Tasting &amp; notes</h2><div class="rating-display" aria-label="{{ bottle.rating }} out of 5 stars"><span>{% for i in range(1,6) %}<i class="{{ 'on' if i <= bottle.rating }}">★</i>{% endfor %}</span><strong>{{ bottle.rating|round(1) }}</strong></div>{% if bottle.tasting_notes %}<h3>Tasting notes</h3><p>{{ bottle.tasting_notes }}</p>{% endif %}{% if bottle.notes %}<h3>Notes</h3><p>{{ bottle.notes }}</p>{% endif %}{% if not bottle.tasting_notes and not bottle.notes %}<p class="muted">No tasting notes yet.</p>{% endif %}</section>
+  </div>
+</main>
+{% endblock %}
+

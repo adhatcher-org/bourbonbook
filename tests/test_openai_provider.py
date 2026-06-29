@@ -4,7 +4,12 @@ import asyncio
 from types import SimpleNamespace
 
 from bourbonbook.config import Settings
-from bourbonbook.openai_provider import BottleAnalysis, request_analysis
+from bourbonbook.openai_provider import (
+    BottleAnalysis,
+    PriceAnalysis,
+    request_analysis,
+    search_prices,
+)
 
 
 def settings_for(tmp_path, api_key: str | None = "test-key") -> Settings:
@@ -91,3 +96,67 @@ def test_missing_openai_key_is_unavailable(tmp_path, monkeypatch) -> None:
 
     assert status == "unavailable"
     assert result == {}
+
+
+def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    class FakeWebCall:
+        type = "web_search_call"
+
+        def model_dump(self):
+            return {
+                "type": "web_search_call",
+                "action": {
+                    "sources": [
+                        {"url": "https://example.com/msrp?utm_source=openai"},
+                        {"url": "https://example.com/auction/123"},
+                    ]
+                },
+            }
+
+    class FakeResponses:
+        async def parse(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output_parsed=PriceAnalysis(
+                    msrp=59.99,
+                    secondary_price=125,
+                    msrp_source_title="Official price book",
+                    msrp_source_url="https://example.com/msrp",
+                    msrp_basis="Current official listing.",
+                    secondary_source_title="Completed auction",
+                    secondary_source_url="https://example.com/not-consulted",
+                    secondary_basis="Recent completed sale.",
+                ),
+                output=[FakeWebCall()],
+            )
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            self.responses = FakeResponses()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            pass
+
+    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
+
+    prices, sources, status = asyncio.run(
+        search_prices("Weller Antique 107", settings_for(tmp_path))
+    )
+
+    assert status == "complete"
+    assert prices == {"msrp": 59.99}
+    assert sources == [
+        {
+            "kind": "msrp",
+            "title": "Official price book",
+            "url": "https://example.com/msrp",
+            "basis": "Current official listing.",
+        }
+    ]
+    assert captured["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
+    assert captured["include"] == ["web_search_call.action.sources"]

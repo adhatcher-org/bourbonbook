@@ -61,9 +61,24 @@ class Bottle(Base):
         DateTime(timezone=True), default=now_utc, onupdate=now_utc
     )
     owner: Mapped[User] = relationship(back_populates="bottles")
+    price_sources: Mapped[list[PriceSource]] = relationship(
+        back_populates="bottle", cascade="all, delete-orphan", order_by="PriceSource.kind"
+    )
 
     @property
     def estimated_value(self) -> float:
         unit_value = self.secondary_price or self.msrp or self.purchase_price or 0
         return unit_value * self.quantity
 
+
+class PriceSource(Base):
+    __tablename__ = "price_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bottle_id: Mapped[int] = mapped_column(ForeignKey("bottles.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(240), default="")
+    url: Mapped[str] = mapped_column(Text)
+    basis: Mapped[str] = mapped_column(Text, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    bottle: Mapped[Bottle] = relationship(back_populates="price_sources")

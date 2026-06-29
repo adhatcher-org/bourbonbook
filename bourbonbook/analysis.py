@@ -108,3 +108,13 @@ async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, 
 
         return await request_analysis(prompt, settings)
     return {}, "unavailable"
+
+
+async def search_bottle_prices(
+    name: str, settings: Settings
+) -> tuple[dict[str, float], list[dict[str, str]], str]:
+    if settings.analysis_provider != "openai":
+        return {}, [], "unavailable"
+    from bourbonbook.openai_provider import search_prices
+
+    return await search_prices(name, settings)

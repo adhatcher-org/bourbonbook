@@ -18,9 +18,9 @@
       <div class="status-line"><span class="status-dot status-{{ bottle.status|lower }}"></span><strong>{{ bottle.status }}</strong><span>{{ bottle.quantity }} {{ "bottle" if bottle.quantity == 1 else "bottles" }}</span></div>
       <div class="fill-display"><div><span>Fill level</span><strong>{{ bottle.fill_level }}%</strong></div><div class="fill-track large"><span style="width: {{ bottle.fill_level }}%"></span></div></div>
       <dl><div><dt>Purchase price</dt><dd>{{ bottle.purchase_price|money }}</dd></div><div><dt>MSRP</dt><dd>{{ bottle.msrp|money }}</dd></div><div><dt>Secondary</dt><dd>{{ bottle.secondary_price|money }}</dd></div><div><dt>Stored at</dt><dd>{{ bottle.storage_location or "—" }}</dd></div></dl>
+      {% if bottle.price_sources %}<div class="price-sources"><h3>Grounded price sources</h3>{% for source in bottle.price_sources %}<a href="{{ source.url }}" target="_blank" rel="noopener noreferrer"><span>{{ "MSRP" if source.kind == "msrp" else "Secondary" }}</span><strong>{{ source.title }}</strong><small>{{ source.basis }}</small></a>{% endfor %}<p>Checked {{ bottle.price_sources[0].checked_at.strftime('%b %d, %Y') }}</p></div>{% endif %}
     </section>
     <section class="detail-card notes-card"><h2>Tasting &amp; notes</h2><div class="rating-display" aria-label="{{ bottle.rating }} out of 5 stars"><span>{% for i in range(1,6) %}<i class="{{ 'on' if i <= bottle.rating }}">★</i>{% endfor %}</span><strong>{{ bottle.rating|round(1) }}</strong></div>{% if bottle.tasting_notes %}<h3>Tasting notes</h3><p>{{ bottle.tasting_notes }}</p>{% endif %}{% if bottle.notes %}<h3>Notes</h3><p>{{ bottle.notes }}</p>{% endif %}{% if not bottle.tasting_notes and not bottle.notes %}<p class="muted">No tasting notes yet.</p>{% endif %}</section>
   </div>
 </main>
 {% endblock %}
-

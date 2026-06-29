@@ -27,6 +27,11 @@ OPENAI_MODEL=gpt-5.5
 
 Keep the real API key only in `.env` or your container's secret environment settings; do not add it to `.env.example` or commit it.
 
+When OpenAI is selected, bottle analysis is followed by a grounded web search for current MSRP and
+secondary-market evidence. Only prices tied to a URL actually consulted by OpenAI are accepted.
+The bottle detail page shows the source and lookup basis, and the edit page can refresh prices
+without re-analyzing the photo. Each refresh uses an additional OpenAI web-search tool call.
+
 ## Docker / Unraid
 
 ```bash

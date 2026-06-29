@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-from bourbonbook.analysis import analyze_bottle, analyze_bottle_name
+from bourbonbook.analysis import analyze_bottle, analyze_bottle_name, search_bottle_prices
 from bourbonbook.auth import (
     csrf_token,
     current_user,
@@ -26,7 +26,7 @@ from bourbonbook.auth import (
 from bourbonbook.catalog import verified_product
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
-from bourbonbook.models import Bottle, User
+from bourbonbook.models import Bottle, PriceSource, User
 from bourbonbook.photos import save_photo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -126,6 +126,28 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any]) -> None:
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
+
+
+def apply_price_search(
+    bottle: Bottle, prices: dict[str, float], sources: list[dict[str, str]]
+) -> None:
+    for field in ("msrp", "secondary_price"):
+        if field in prices:
+            setattr(bottle, field, prices[field])
+    if sources:
+        refreshed_kinds = {source["kind"] for source in sources}
+        for existing in list(bottle.price_sources):
+            if existing.kind in refreshed_kinds:
+                bottle.price_sources.remove(existing)
+        bottle.price_sources.extend(PriceSource(**source) for source in sources)
+
+
+async def refresh_prices(bottle: Bottle, settings: Settings) -> str:
+    if not bottle.name or bottle.name == "Untitled bottle":
+        return "unavailable"
+    prices, sources, status = await search_bottle_prices(bottle.name, settings)
+    apply_price_search(bottle, prices, sources)
+    return status
 
 
 async def enrich_bottle_by_name(
@@ -296,6 +318,9 @@ def register_routes(app: FastAPI) -> None:
                 apply_analysis(bottle, enrichment)
                 if enrichment:
                     bottle.analysis_status = enrichment_status
+                price_status = await refresh_prices(bottle, app.state.settings)
+                if price_status == "complete":
+                    bottle.analysis_status = price_status
             bottle.purchase_price = parse_float(purchase_price)
             bottle.quantity = parse_int(quantity, 1, 1, 99)
             session.add(bottle)
@@ -338,7 +363,12 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            previous_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
             update_bottle_from_form(bottle, form)
+            current_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
+            for source in list(bottle.price_sources):
+                if previous_prices[source.kind] != current_prices[source.kind]:
+                    bottle.price_sources.remove(source)
             upload = form.get("photo")
             if isinstance(upload, StarletteUploadFile) and upload.filename:
                 old_photo = bottle.photo_name
@@ -373,7 +403,11 @@ def register_routes(app: FastAPI) -> None:
                 )
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
-            if mode == "name":
+            if mode == "price":
+                analysis, analysis_status = {}, await refresh_prices(
+                    bottle, app.state.settings
+                )
+            elif mode == "name":
                 analysis, analysis_status = await enrich_bottle_by_name(
                     bottle, app.state.settings
                 )
@@ -392,6 +426,10 @@ def register_routes(app: FastAPI) -> None:
                 apply_analysis(bottle, enrichment)
                 if enrichment:
                     analysis_status = enrichment_status
+            if mode in {"name", "photo"} and bottle.name:
+                price_status = await refresh_prices(bottle, app.state.settings)
+                if price_status == "complete":
+                    analysis_status = price_status
             bottle.analysis_status = analysis_status
             session.commit()
         return RedirectResponse(

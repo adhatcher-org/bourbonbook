@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,20 +18,35 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from bourbonbook.analysis import analyze_bottle, analyze_bottle_name, search_bottle_prices
 from bourbonbook.auth import (
+    authenticate_session,
     csrf_token,
     current_user,
     hash_password,
-    require_user,
+    normalize_email,
+    require_verified_user,
+    validate_password,
     verify_csrf,
     verify_password,
 )
 from bourbonbook.catalog import verified_product
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
-from bourbonbook.models import Bottle, PriceSource, User
+from bourbonbook.email import create_email_sender, security_message
+from bourbonbook.identity import bootstrap_admin, issue_reset, issue_verification
+from bourbonbook.migrations import bootstrap_database
+from bourbonbook.models import Bottle, PriceSource, User, UserToken
 from bourbonbook.photos import save_photo
+from bourbonbook.rate_limit import RateLimiter
+from bourbonbook.tokens import (
+    RESET_PASSWORD,
+    VERIFY_EMAIL,
+    consume_token,
+    find_valid_token,
+    revoke_tokens,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent
 templates = Jinja2Templates(directory=ROOT / "templates")
@@ -48,15 +65,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        database.create_all()
+        bootstrap_database(settings)
+        with database.session_factory() as session:
+            await bootstrap_admin(session, settings, app.state.email_sender)
         yield
         database.engine.dispose()
 
     app = FastAPI(title="Bourbon Book", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.database = database
+    app.state.email_sender = create_email_sender(settings)
+    app.state.rate_limiter = RateLimiter(
+        settings.rate_limit_secret or settings.session_secret,
+        limit=settings.rate_limit_attempts,
+        window=settings.rate_limit_window_seconds,
+        global_limit=settings.rate_limit_global_attempts,
+    )
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -70,8 +97,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def render(request: Request, name: str, **context: Any) -> HTMLResponse:
+    status_code = context.pop("status_code", 200)
     context.update(request=request, csrf_token=csrf_token(request))
-    return templates.TemplateResponse(request, name, context)
+    return templates.TemplateResponse(request, name, context, status_code=status_code)
 
 
 def parse_float(value: Any) -> float | None:
@@ -162,12 +190,23 @@ async def enrich_bottle_by_name(
 
 
 def owned_bottle(session: Session, user: User, bottle_id: int) -> Bottle | None:
-    return session.scalar(
-        select(Bottle).where(Bottle.id == bottle_id, Bottle.owner_id == user.id)
-    )
+    return session.scalar(select(Bottle).where(Bottle.id == bottle_id, Bottle.owner_id == user.id))
 
 
 def register_routes(app: FastAPI) -> None:
+    def limited(request: Request, operation: str, email: str) -> bool:
+        client_ip = request.client.host if request.client else "unknown"
+        return app.state.rate_limiter.allow(operation, email, client_ip)
+
+    def too_many(request: Request, mode: str) -> HTMLResponse:
+        return render(
+            request,
+            "login.html",
+            mode=mode,
+            error="Too many attempts. Please wait a few minutes and try again.",
+            status_code=429,
+        )
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -190,18 +229,34 @@ def register_routes(app: FastAPI) -> None:
     async def login(request: Request) -> Response:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
-        username = str(form.get("username", "")).strip().lower()
+        email_text = str(form.get("email", ""))
+        try:
+            email = normalize_email(email_text)
+        except ValueError:
+            email = email_text.strip().lower()
+        if not limited(request, "login", email):
+            return too_many(request, "login")
         with app.state.database.session_factory() as session:
-            user = session.scalar(select(User).where(User.username == username))
+            user = session.scalar(select(User).where(User.email == email))
             if not user or not verify_password(str(form.get("password", "")), user.password_hash):
                 return render(
                     request,
                     "login.html",
                     mode="login",
-                    error="Username or password is incorrect.",
+                    error="Email or password is incorrect.",
                 )
-            request.session.clear()
-            request.session["user_id"] = user.id
+            if not user.email:
+                return render(
+                    request,
+                    "login.html",
+                    mode="login",
+                    error="Contact an administrator to update this legacy account.",
+                )
+            if not user.email_verified_at:
+                request.session.clear()
+                request.session["unverified_user_id"] = user.id
+                return RedirectResponse("/check-email", 303)
+            authenticate_session(request, user)
         return RedirectResponse("/", 303)
 
     @app.get("/register", response_class=HTMLResponse)
@@ -212,33 +267,351 @@ def register_routes(app: FastAPI) -> None:
     async def register(request: Request) -> Response:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
-        username = str(form.get("username", "")).strip().lower()
-        display_name = str(form.get("display_name", "")).strip()
+        email_text = str(form.get("email", ""))
+        screen_name = str(form.get("screen_name", "")).strip()
         password = str(form.get("password", ""))
         error = None
-        if not (3 <= len(username) <= 40) or not username.replace("_", "").isalnum():
-            error = "Use 3–40 letters, numbers, or underscores for your username."
-        elif len(display_name) < 2:
-            error = "Please add your name."
-        elif len(password) < 10:
-            error = "Use a password with at least 10 characters."
+        try:
+            email = normalize_email(email_text)
+            validate_password(password)
+        except ValueError as exc:
+            email = email_text.strip().lower()
+            error = str(exc)
+        if len(screen_name) > 80:
+            error = "Screen name must be 80 characters or fewer."
+        if not limited(request, "register", email):
+            return too_many(request, "register")
         with app.state.database.session_factory() as session:
             if session.scalar(select(func.count(User.id))) >= app.state.settings.max_users:
                 error = "This Bourbon Book has reached its user limit."
-            elif session.scalar(select(User).where(User.username == username)):
-                error = "That username is already in use."
+            elif session.scalar(select(User).where(User.email == email)):
+                error = "That email is already in use."
             if error:
                 return render(request, "login.html", mode="register", error=error)
             user = User(
-                username=username,
-                display_name=display_name,
+                username=email,
+                display_name=screen_name or email.split("@", 1)[0],
+                email=email,
+                screen_name=screen_name or email.split("@", 1)[0],
                 password_hash=hash_password(password),
             )
             session.add(user)
+            session.flush()
+            request.session.clear()
+            request.session["unverified_user_id"] = user.id
+            try:
+                await issue_verification(session, user, app.state.settings, app.state.email_sender)
+            except Exception:
+                logger.exception("Verification email delivery failed user_id=%s", user.id)
+                return render(request, "check_email.html", delivery_error=True, status_code=503)
+        return RedirectResponse("/check-email", 303)
+
+    @app.get("/check-email", response_class=HTMLResponse)
+    def check_email(request: Request) -> Response:
+        return render(request, "check_email.html", delivery_error=False)
+
+    @app.post("/verification/resend")
+    async def resend_verification(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        email_text = str(form.get("email", "")).strip()
+        user_id = request.session.get("unverified_user_id")
+        with app.state.database.session_factory() as session:
+            user = session.get(User, user_id) if user_id else None
+            try:
+                email = user.email if user and user.email else normalize_email(email_text)
+            except ValueError:
+                email = email_text.lower()
+            if not limited(request, "resend", email):
+                return render(request, "check_email.html", delivery_error=False, status_code=429)
+            if not user and email:
+                user = session.scalar(select(User).where(User.email == email))
+            if user and user.email and not user.email_verified_at:
+                try:
+                    await issue_verification(
+                        session, user, app.state.settings, app.state.email_sender
+                    )
+                except Exception:
+                    logger.exception("Verification email delivery failed user_id=%s", user.id)
+                    return render(request, "check_email.html", delivery_error=True, status_code=503)
+        return render(request, "check_email.html", delivery_error=False, resent=True)
+
+    @app.get("/verify-email")
+    def stage_verification(request: Request, token: str) -> Response:
+        with app.state.database.session_factory() as session:
+            found = find_valid_token(session, token, VERIFY_EMAIL)
+            request.session.pop("pending_verification_id", None)
+            if found:
+                request.session["pending_verification_id"] = found.id
+                request.session["pending_verification_expires"] = int(time.time()) + 600
+        return RedirectResponse(
+            "/verify-email/confirm",
+            303,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
+    @app.get("/verify-email/confirm", response_class=HTMLResponse)
+    def verification_confirmation(request: Request) -> Response:
+        valid = False
+        token_id = request.session.get("pending_verification_id")
+        if request.session.get("pending_verification_expires", 0) < time.time():
+            request.session.pop("pending_verification_id", None)
+            token_id = None
+        with app.state.database.session_factory() as session:
+            token = session.get(UserToken, token_id) if token_id else None
+            valid = bool(token and token.purpose == VERIFY_EMAIL and token.used_at is None)
+        response = render(request, "verify_email.html", valid=valid)
+        response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        return response
+
+    @app.post("/verify-email/confirm")
+    async def confirm_verification(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        token_id = request.session.pop("pending_verification_id", None)
+        request.session.pop("pending_verification_expires", None)
+        if not limited(request, "verify", str(token_id or "missing")):
+            return render(request, "verify_email.html", valid=False, status_code=429)
+        with app.state.database.session_factory() as session:
+            token = consume_token(session, token_id, VERIFY_EMAIL) if token_id else None
+            user = session.get(User, token.user_id) if token else None
+            if not token or not user or not user.email or token.email_snapshot != user.email:
+                session.rollback()
+                return render(request, "verify_email.html", valid=False, status_code=400)
+            user.email_verified_at = datetime.now(UTC)
+            session.commit()
+            authenticate_session(request, user)
+        return RedirectResponse("/profile", 303)
+
+    @app.get("/forgot-password", response_class=HTMLResponse)
+    def forgot_password_page(request: Request) -> Response:
+        return render(request, "forgot_password.html", sent=False)
+
+    @app.post("/forgot-password")
+    async def forgot_password(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        email_text = str(form.get("email", "")).strip()
+        try:
+            email = normalize_email(email_text)
+        except ValueError:
+            email = email_text.lower()
+        if not limited(request, "forgot", email):
+            return render(request, "forgot_password.html", sent=True, status_code=429)
+        with app.state.database.session_factory() as session:
+            user = session.scalar(select(User).where(User.email == email)) if email else None
+            if user and user.email:
+                try:
+                    await issue_reset(session, user, app.state.settings, app.state.email_sender)
+                except Exception:
+                    logger.exception("Password reset email delivery failed user_id=%s", user.id)
+        return render(request, "forgot_password.html", sent=True)
+
+    @app.get("/reset-password")
+    def reset_password_page(request: Request, token: str | None = None) -> Response:
+        if token:
+            with app.state.database.session_factory() as session:
+                found = find_valid_token(session, token, RESET_PASSWORD)
+                request.session.pop("pending_reset_id", None)
+                if found:
+                    request.session["pending_reset_id"] = found.id
+                    request.session["pending_reset_expires"] = int(time.time()) + 600
+            return RedirectResponse(
+                "/reset-password",
+                303,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+        if request.session.get("pending_reset_expires", 0) < time.time():
+            request.session.pop("pending_reset_id", None)
+        response = render(
+            request,
+            "reset_password.html",
+            valid=bool(request.session.get("pending_reset_id")),
+            error=None,
+        )
+        response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        return response
+
+    @app.post("/reset-password")
+    async def reset_password(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        password = str(form.get("password", ""))
+        if password != str(form.get("password_confirmation", "")):
+            return render(
+                request, "reset_password.html", valid=True, error="Passwords do not match."
+            )
+        try:
+            validate_password(password)
+        except ValueError as exc:
+            return render(request, "reset_password.html", valid=True, error=str(exc))
+        token_id = request.session.pop("pending_reset_id", None)
+        request.session.pop("pending_reset_expires", None)
+        if not limited(request, "reset", str(token_id or "missing")):
+            return render(
+                request,
+                "reset_password.html",
+                valid=False,
+                error="Too many attempts.",
+                status_code=429,
+            )
+        with app.state.database.session_factory() as session:
+            token = consume_token(session, token_id, RESET_PASSWORD) if token_id else None
+            user = session.get(User, token.user_id) if token else None
+            if not token or not user or token.email_snapshot != user.email:
+                session.rollback()
+                return render(
+                    request,
+                    "reset_password.html",
+                    valid=False,
+                    error="This reset link is invalid or expired.",
+                    status_code=400,
+                )
+            user.password_hash = hash_password(password)
+            user.session_version += 1
+            revoke_tokens(session, user.id, RESET_PASSWORD)
             session.commit()
             request.session.clear()
-            request.session["user_id"] = user.id
-        return RedirectResponse("/", 303)
+            try:
+                await app.state.email_sender.send(security_message(user.email or ""))
+            except Exception:
+                logger.exception("Password change notification failed user_id=%s", user.id)
+        return RedirectResponse("/login", 303)
+
+    @app.get("/profile", response_class=HTMLResponse)
+    def profile(request: Request) -> Response:
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            return render(request, "profile.html", user=user, error=None, notice=None)
+
+    @app.post("/profile/name")
+    async def update_profile_name(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        screen_name = str(form.get("screen_name", "")).strip()
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            if not 1 <= len(screen_name) <= 80:
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="Screen name must be 1–80 characters.",
+                    notice=None,
+                )
+            user.screen_name = screen_name
+            user.display_name = screen_name
+            session.commit()
+            return render(
+                request, "profile.html", user=user, error=None, notice="Screen name updated."
+            )
+
+    @app.post("/profile/email")
+    async def update_profile_email(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            if not verify_password(str(form.get("current_password", "")), user.password_hash):
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="Current password is incorrect.",
+                    notice=None,
+                )
+            try:
+                email = normalize_email(str(form.get("email", "")))
+            except ValueError as exc:
+                return render(request, "profile.html", user=user, error=str(exc), notice=None)
+            duplicate = session.scalar(select(User).where(User.email == email, User.id != user.id))
+            if duplicate:
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="That email is already in use.",
+                    notice=None,
+                )
+            user.email = email
+            user.username = email
+            user.email_verified_at = None
+            user.session_version += 1
+            revoke_tokens(session, user.id)
+            session.commit()
+            authenticate_session(request, user)
+            request.session["unverified_user_id"] = user.id
+            try:
+                await issue_verification(session, user, app.state.settings, app.state.email_sender)
+            except Exception:
+                logger.exception("Verification email delivery failed user_id=%s", user.id)
+                return render(request, "check_email.html", delivery_error=True, status_code=503)
+        return RedirectResponse("/check-email", 303)
+
+    @app.post("/profile/password")
+    async def update_profile_password(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            new_password = str(form.get("new_password", ""))
+            if not verify_password(str(form.get("current_password", "")), user.password_hash):
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="Current password is incorrect.",
+                    notice=None,
+                )
+            if new_password != str(form.get("password_confirmation", "")):
+                return render(
+                    request, "profile.html", user=user, error="Passwords do not match.", notice=None
+                )
+            try:
+                validate_password(new_password)
+            except ValueError as exc:
+                return render(request, "profile.html", user=user, error=str(exc), notice=None)
+            user.password_hash = hash_password(new_password)
+            user.session_version += 1
+            revoke_tokens(session, user.id, RESET_PASSWORD)
+            session.commit()
+            request.session.clear()
+        return RedirectResponse("/login", 303)
+
+    @app.post("/profile/delete")
+    async def delete_profile(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            if (
+                not verify_password(str(form.get("current_password", "")), user.password_hash)
+                or str(form.get("confirmation", "")) != "DELETE MY ACCOUNT"
+            ):
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="Password and exact confirmation phrase are required.",
+                    notice=None,
+                )
+            upload_root = (app.state.settings.data_dir / "uploads").resolve()
+            photo_paths = []
+            for bottle in user.bottles:
+                if bottle.photo_name:
+                    candidate = (upload_root / bottle.photo_name).resolve()
+                    if candidate.parent == upload_root:
+                        photo_paths.append(candidate)
+            session.delete(user)
+            session.commit()
+            for path in photo_paths:
+                path.unlink(missing_ok=True)
+            request.session.clear()
+        return RedirectResponse("/account-deleted", 303)
+
+    @app.get("/account-deleted", response_class=HTMLResponse)
+    def account_deleted(request: Request) -> Response:
+        return render(request, "account_deleted.html")
 
     @app.post("/logout")
     async def logout(request: Request) -> Response:
@@ -250,7 +623,7 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/", response_class=HTMLResponse)
     def library(request: Request, q: str = "", sort: str = "newest") -> Response:
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             statement = select(Bottle).where(Bottle.owner_id == user.id)
             if q.strip():
                 term = f"%{q.strip()}%"
@@ -285,7 +658,7 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/bottles/new", response_class=HTMLResponse)
     def new_bottle(request: Request) -> Response:
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             return render(request, "new.html", user=user)
 
     @app.post("/bottles")
@@ -298,7 +671,7 @@ def register_routes(app: FastAPI) -> None:
     ) -> Response:
         verify_csrf(request, csrf)
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             photo_name = await save_photo(
                 photo, app.state.settings.data_dir / "uploads", app.state.settings.max_upload_mb
             )
@@ -330,18 +703,16 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/bottles/{bottle_id}", response_class=HTMLResponse)
     def bottle_detail(request: Request, bottle_id: int) -> Response:
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
             return render(request, "detail.html", user=user, bottle=bottle)
 
     @app.get("/bottles/{bottle_id}/edit", response_class=HTMLResponse)
-    def bottle_edit(
-        request: Request, bottle_id: int, new: int = 0, analysis: str = ""
-    ) -> Response:
+    def bottle_edit(request: Request, bottle_id: int, new: int = 0, analysis: str = "") -> Response:
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
@@ -359,7 +730,7 @@ def register_routes(app: FastAPI) -> None:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
@@ -388,7 +759,7 @@ def register_routes(app: FastAPI) -> None:
         verify_csrf(request, str(form.get("csrf_token", "")))
         mode = str(form.get("analysis_mode", "photo"))
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
@@ -404,13 +775,9 @@ def register_routes(app: FastAPI) -> None:
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
             if mode == "price":
-                analysis, analysis_status = {}, await refresh_prices(
-                    bottle, app.state.settings
-                )
+                analysis, analysis_status = {}, await refresh_prices(bottle, app.state.settings)
             elif mode == "name":
-                analysis, analysis_status = await enrich_bottle_by_name(
-                    bottle, app.state.settings
-                )
+                analysis, analysis_status = await enrich_bottle_by_name(bottle, app.state.settings)
             elif bottle.photo_name:
                 analysis, analysis_status = await analyze_bottle(
                     app.state.settings.data_dir / "uploads" / bottle.photo_name,
@@ -432,16 +799,14 @@ def register_routes(app: FastAPI) -> None:
                     analysis_status = price_status
             bottle.analysis_status = analysis_status
             session.commit()
-        return RedirectResponse(
-            f"/bottles/{bottle_id}/edit?analysis={analysis_status}", 303
-        )
+        return RedirectResponse(f"/bottles/{bottle_id}/edit?analysis={analysis_status}", 303)
 
     @app.post("/bottles/{bottle_id}/delete")
     async def delete_bottle(request: Request, bottle_id: int) -> Response:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if bottle:
                 if bottle.photo_name:
@@ -455,7 +820,7 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/media/{photo_name}")
     def photo(request: Request, photo_name: str) -> Response:
         with app.state.database.session_factory() as session:
-            user = require_user(request, session)
+            user = require_verified_user(request, session)
             bottle = session.scalar(
                 select(Bottle).where(Bottle.owner_id == user.id, Bottle.photo_name == photo_name)
             )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bourbonbook.database import Base
@@ -18,9 +18,32 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80))
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True)
+    screen_name: Mapped[str] = mapped_column(String(80), default="")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    session_version: Mapped[int] = mapped_column(Integer, default=1)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     bottles: Mapped[list[Bottle]] = relationship(back_populates="owner", cascade="all, delete")
+    tokens: Mapped[list[UserToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class UserToken(Base):
+    __tablename__ = "user_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    purpose: Mapped[str] = mapped_column(String(30), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    email_snapshot: Mapped[str] = mapped_column(String(254))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    requested_ip_hash: Mapped[str | None] = mapped_column(String(64))
+    user: Mapped[User] = relationship(back_populates="tokens")
 
 
 class Bottle(Base):

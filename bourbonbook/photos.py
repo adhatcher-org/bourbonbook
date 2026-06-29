@@ -24,4 +24,3 @@ async def save_photo(upload: UploadFile, upload_dir: Path, max_mb: int) -> str:
     name = f"{uuid.uuid4().hex}.jpg"
     image.save(upload_dir / name, "JPEG", quality=88, optimize=True)
     return name
-

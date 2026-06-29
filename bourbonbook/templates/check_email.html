@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Check your email · Bourbon Book{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block page %}
+<main id="main" class="auth-shell"><section class="auth-story"><p class="eyebrow">Almost there</p><h1>Check your<br>inbox.</h1></section>
+<section class="auth-panel"><h2>Verify your email</h2>
+{% if delivery_error %}<div class="form-alert" role="alert">We saved your account, but could not send the message. Please try again.</div>{% elif resent %}<div class="analysis-banner">If the address belongs to an account, a fresh link has been sent.</div>{% endif %}
+<p class="muted">Use the verification link we sent before opening your bottle library.</p>
+<form method="post" action="/verification/resend" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Email (if needed)<input name="email" type="email" autocomplete="email" maxlength="254"></label><button class="primary-button wide" type="submit">Resend verification</button></form>
+<p class="auth-switch"><a href="/login">Back to sign in</a></p></section></main>
+{% endblock %}

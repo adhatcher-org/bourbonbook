@@ -1,2 +1,1 @@
 """Bourbon Book application package."""
-

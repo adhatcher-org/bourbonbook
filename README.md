@@ -41,6 +41,13 @@ secondary-market evidence. Only prices tied to a URL actually consulted by OpenA
 The bottle detail page shows the source and lookup basis, and the edit page can refresh prices
 without re-analyzing the photo. Each refresh uses an additional OpenAI web-search tool call.
 
+Admins can open `/admin/users` to search users, correct an email address after out-of-band identity
+verification, and send verification or reset links. `/admin/usage` shows recent OpenAI/Ollama call
+counts, token-like counts, failures, and durations from the local usage ledger. The ledger stores
+provider, operation, model, bounded error type, duration, token counts, optional internal user ID,
+and timestamp only; it does not store prompts, responses, bottle names, email addresses, URLs, or
+API keys. Set `API_USAGE_RETENTION_DAYS` to control local ledger cleanup.
+
 ## Docker / Unraid
 
 ### Back up before the first migration-enabled release
@@ -84,10 +91,56 @@ Unraid settings:
 - Proxy trust: set `PROXY_HEADERS=true` and restrict `FORWARDED_ALLOW_IPS` to SWAG's fixed container
   IP or the smallest proxy-network CIDR. Production rejects a missing allowlist and `*`. Local runs
   keep proxy processing disabled, so spoofed forwarding headers are ignored.
+- Observability: leave `METRICS_ENABLED=true` for Prometheus, set `LOG_FORMAT=json` in production,
+  and tune `LOG_LEVEL` as needed. Logs are written only to stdout/stderr for Docker collection.
 - Keep one Uvicorn worker. Identity rate limits are bounded and process-local; use a shared limiter
   before adding workers or replicas.
 
-The SQLite database and normalized bottle photos live under `/data`. Logs go to stdout/stderr, and `/healthz` is used by the container health check.
+The SQLite database and normalized bottle photos live under `/data`. `/healthz` is used by the
+container health check.
+
+### Prometheus, SWAG, and Loki
+
+Prometheus should scrape Bourbon Book directly over an internal Docker network, not through the
+public HTTPS host. Example scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: bourbonbook
+    static_configs:
+      - targets: ["bourbonbook:8000"]
+```
+
+If Prometheus is not on the same network as SWAG/Bourbon Book, attach both containers to a dedicated
+internal monitoring network. Keep `/metrics`, `/healthz`, and `/readyz` off the public SWAG virtual
+host with exact-match denies, for example:
+
+```nginx
+location = /metrics { return 404; }
+location = /healthz { return 404; }
+location = /readyz { return 404; }
+```
+
+Useful starter PromQL:
+
+```promql
+sum(rate(bourbonbook_auth_events_total{event="login",result="failure"}[5m]))
+sum(rate(bourbonbook_http_requests_total{status_class="5xx"}[5m]))
+sum(rate(bourbonbook_ai_tokens_total{provider="openai"}[5m])) by (operation, direction)
+histogram_quantile(0.95, sum(rate(bourbonbook_ai_request_duration_seconds_bucket[5m])) by (le, provider, operation))
+sum(rate(bourbonbook_ai_requests_total{result="failure"}[5m])) by (provider, operation)
+```
+
+For Promtail/Loki, keep low-cardinality labels such as `app`, `container`, `level`, and optionally
+`event`. Parse each Docker stdout/stderr line as JSON when `LOG_FORMAT=json`; leave request IDs and
+user IDs as parsed fields, not labels. Useful Loki filters include:
+
+```logql
+{app="bourbonbook"} | json | event="login_failed"
+{app="bourbonbook"} | json | event="admin_action"
+{app="bourbonbook"} | json | event="ai_request_completed" | error_type!=""
+{app="bourbonbook"} | json | request_id="paste-request-id"
+```
 
 For interactive recovery of the sole administrator, open a container terminal and run
 `uv run python -m bourbonbook.admin_cli recover`. It prompts for secrets and does not accept a

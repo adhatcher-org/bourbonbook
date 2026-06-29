@@ -39,6 +39,10 @@ class Settings:
     rate_limit_attempts: int = 8
     rate_limit_window_seconds: int = 300
     rate_limit_global_attempts: int = 200
+    metrics_enabled: bool = True
+    api_usage_retention_days: int = 90
+    log_level: str = "INFO"
+    log_format: str = "text"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -75,6 +79,13 @@ class Settings:
             rate_limit_attempts=int(os.getenv("RATE_LIMIT_ATTEMPTS", "8")),
             rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "300")),
             rate_limit_global_attempts=int(os.getenv("RATE_LIMIT_GLOBAL_ATTEMPTS", "200")),
+            metrics_enabled=os.getenv("METRICS_ENABLED", "true").lower() == "true",
+            api_usage_retention_days=int(os.getenv("API_USAGE_RETENTION_DAYS", "90")),
+            log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            log_format=os.getenv(
+                "LOG_FORMAT",
+                "json" if os.getenv("APP_ENV", "development").lower() == "production" else "text",
+            ).lower(),
         )
 
     def validate_identity(self) -> None:
@@ -94,3 +105,5 @@ class Settings:
             raise ValueError(
                 "Production requires PROXY_HEADERS=true and a restricted FORWARDED_ALLOW_IPS"
             )
+        if self.log_format not in {"json", "text"}:
+            raise ValueError("LOG_FORMAT must be json or text")

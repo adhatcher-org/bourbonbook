@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}API Usage · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>API usage</strong><span></span></header>
+<main id="main" class="app-shell edit-page admin-page">
+  <section class="collection-head">
+    <div><p class="eyebrow">Observability</p><h1>API usage</h1><p class="muted">Last {{ days }} day{{ "" if days == 1 else "s" }}</p></div>
+  </section>
+  <form class="catalog-tools" method="get" action="/admin/usage">
+    <label class="sort-field"><span class="sr-only">Window</span><select name="days" onchange="this.form.submit()">
+      {% for option in [1, 7, 30, 90, 365] %}<option value="{{ option }}" {{ "selected" if days == option }}>{{ option }} days</option>{% endfor %}
+    </select></label>
+  </form>
+  <section class="form-section admin-table-wrap">
+    <h2>Totals</h2>
+    <table class="admin-table">
+      <thead><tr><th>Provider</th><th>Operation</th><th>Model</th><th>Result</th><th>Calls</th><th>Tokens</th><th>Avg ms</th></tr></thead>
+      <tbody>
+      {% for row in totals %}
+      <tr><td>{{ row.provider }}</td><td>{{ row.operation }}</td><td>{{ row.model }}</td><td>{{ "Success" if row.success else "Failure" }}</td><td>{{ row.calls }}</td><td>{{ row.total_tokens }}</td><td>{{ row.avg_duration_ms|round|int }}</td></tr>
+      {% else %}<tr><td colspan="7">No API calls in this window.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="form-section admin-table-wrap">
+    <h2>Recent calls</h2>
+    <table class="admin-table">
+      <thead><tr><th>Time</th><th>Provider</th><th>Operation</th><th>Model</th><th>Result</th><th>Tokens</th><th>Duration</th></tr></thead>
+      <tbody>
+      {% for call in recent %}
+      <tr><td>{{ call.created_at.strftime("%Y-%m-%d %H:%M") }}</td><td>{{ call.provider }}</td><td>{{ call.operation }}</td><td>{{ call.model }}</td><td>{{ "Success" if call.success else call.error_type or "Failure" }}</td><td>{{ call.total_tokens or 0 }}</td><td>{{ call.duration_ms }} ms</td></tr>
+      {% else %}<tr><td colspan="7">No recent API calls.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <nav class="admin-pager" aria-label="Usage pages">
+    {% if page > 1 %}<a class="secondary-button" href="/admin/usage?days={{ days }}&page={{ page - 1 }}">Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ max_page }}</span>
+    {% if page < max_page %}<a class="secondary-button" href="/admin/usage?days={{ days }}&page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+</main>
+{% endblock %}

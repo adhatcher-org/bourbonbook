@@ -105,3 +105,27 @@ class PriceSource(Base):
     basis: Mapped[str] = mapped_column(Text, default="")
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     bottle: Mapped[Bottle] = relationship(back_populates="price_sources")
+
+
+class ApiUsage(Base):
+    __tablename__ = "api_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    operation: Mapped[str] = mapped_column(String(40), index=True)
+    model: Mapped[str] = mapped_column(String(120), index=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    error_type: Mapped[str | None] = mapped_column(String(40))
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer)
+    web_search_calls: Mapped[int | None] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Users · Bourbon Book{% endblock %}
+{% block page %}
+<header class="editor-bar"><a class="back-button" href="/" aria-label="Back">←</a><strong>Admin users</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+<main id="main" class="app-shell edit-page admin-page">
+  <section class="collection-head">
+    <div><p class="eyebrow">Administration</p><h1>Users</h1><p class="muted">{{ total }} account{{ "" if total == 1 else "s" }}</p></div>
+  </section>
+  <form class="catalog-tools" method="get" action="/admin/users">
+    <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search users</span><input name="q" value="{{ q }}" placeholder="Search email or screen name" autocomplete="off"></label>
+    <button class="secondary-button" type="submit">Search</button>
+  </form>
+  <section class="form-section admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>User</th><th>Email</th><th>State</th><th>Bottles</th><th>Created</th></tr></thead>
+      <tbody>
+      {% for row in users %}
+      {% set account = row[0] %}{% set bottle_count = row[1] %}
+      <tr>
+        <td><a href="/admin/users/{{ account.id }}">{{ account.screen_name }}</a>{% if account.is_admin %}<small>Admin</small>{% endif %}</td>
+        <td>{{ account.email or "Needs email" }}</td>
+        <td>{{ "Verified" if account.email_verified_at else "Unverified" }}</td>
+        <td>{{ bottle_count }}</td>
+        <td>{{ account.created_at.strftime("%Y-%m-%d") }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">No matching users.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <nav class="admin-pager" aria-label="User pages">
+    {% if page > 1 %}<a class="secondary-button" href="/admin/users?q={{ q }}&page={{ page - 1 }}">Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ max_page }}</span>
+    {% if page < max_page %}<a class="secondary-button" href="/admin/users?q={{ q }}&page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+</main>
+{% endblock %}

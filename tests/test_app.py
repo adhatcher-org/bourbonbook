@@ -152,6 +152,8 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     with client:
         register(client)
         new_page = client.get("/bottles/new")
+        assert 'name="photo" accept="image/*" required data-photo-input' in new_page.text
+        assert 'name="photo" accept="image/*" capture=' not in new_page.text
         image_bytes = BytesIO()
         Image.new("RGB", (120, 200), "#7a3f1c").save(image_bytes, "PNG")
         response = client.post(
@@ -170,9 +172,15 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         edit_page = client.get(response.headers["location"])
         assert "Label analysis complete" in edit_page.text
         assert "Eagle Rare 10 Year" in edit_page.text
+        assert '<input type="file" name="photo" accept="image/*">' in edit_page.text
+        assert 'name="photo" accept="image/*" capture=' not in edit_page.text
         assert 'name="quantity" type="number" min="1" max="99" value="3"' in edit_page.text
+        initial_photo = re.search(r'/media/([^"?]+)', edit_page.text)
+        assert initial_photo
         bottle_id = int(response.headers["location"].split("/")[2])
 
+        replacement_bytes = BytesIO()
+        Image.new("RGB", (100, 180), "#582a72").save(replacement_bytes, "JPEG")
         refresh_photo = client.post(
             f"/bottles/{bottle_id}/analyze",
             data={
@@ -187,12 +195,17 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
                 "quantity": "3",
                 "purchase_price": "45",
             },
+            files={"photo": ("replacement.jpg", replacement_bytes.getvalue(), "image/jpeg")},
             follow_redirects=False,
         )
         assert refresh_photo.status_code == 303
         assert refresh_photo.headers["location"].endswith("?analysis=complete")
         refreshed_page = client.get(refresh_photo.headers["location"])
         assert "Bottle details updated" in refreshed_page.text
+        refreshed_photo = re.search(r'/media/([^"?]+)', refreshed_page.text)
+        assert refreshed_photo
+        assert refreshed_photo.group(1) != initial_photo.group(1)
+        assert client.get(f"/media/{initial_photo.group(1)}").status_code == 404
 
         async def fake_name_analysis(name, settings):
             assert name == "Eagle Rare Kentucky Straight Bourbon"
@@ -219,6 +232,8 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         name_page = client.get(refresh_name.headers["location"])
         assert "Buffalo Trace Distillery" in name_page.text
 
+        final_photo_bytes = BytesIO()
+        Image.new("RGB", (140, 220), "#264653").save(final_photo_bytes, "PNG")
         save = client.post(
             f"/bottles/{bottle_id}/edit",
             data={
@@ -238,6 +253,7 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
                 "rating": "5",
                 "tasting_notes": "Oak and orange peel",
             },
+            files={"photo": ("final.png", final_photo_bytes.getvalue(), "image/png")},
             follow_redirects=False,
         )
         assert save.status_code == 303
@@ -247,4 +263,6 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert "$200.00" in detail.text
         photo_match = re.search(r"/media/([^\"]+)", detail.text)
         assert photo_match
+        assert photo_match.group(1) != refreshed_photo.group(1)
+        assert client.get(f"/media/{refreshed_photo.group(1)}").status_code == 404
         assert client.get("/media/" + photo_match.group(1)).status_code == 200

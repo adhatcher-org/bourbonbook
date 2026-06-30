@@ -11,7 +11,7 @@
   <form method="post" action="/bottles" enctype="multipart/form-data" class="capture-form" data-upload-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="photo-drop" data-photo-drop>
-      <input type="file" name="photo" accept="image/*" capture="environment" required data-photo-input>
+      <input type="file" name="photo" accept="image/*" required data-photo-input>
       <img alt="Bottle preview" data-photo-preview hidden>
       <span class="camera-glyph" aria-hidden="true">⌾</span>
       <strong>Take or choose a photo</strong>

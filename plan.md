@@ -39,7 +39,7 @@ context before Bourbon Book falls back to OpenAI.
 
 | ID | Action | Status | Branch | Pull request / completion evidence |
 | --- | --- | --- | --- | --- |
-| A01 | Restore iPhone Photo Library selection | In Progress | `codex/iphone-photo-picker` | Implementation and validation underway. |
+| A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
 | A02 | Apply Atkinson Hyperlegible Next to edit controls | Incomplete | `codex/readable-edit-font` | — |
 | A03 | Reconcile and extend the pricing evaluation fixtures | Incomplete | `codex/pricing-evaluation-fixtures` | — |
 | A04 | Add the pricing evidence schema and separate provider roles | Incomplete | `codex/pricing-evidence-foundation` | — |
@@ -620,6 +620,10 @@ PR and status update succeed, create a new Codex session for the next Incomplete
 
 ## Current Work
 
-A01 is active on `codex/iphone-photo-picker`. GitHub authentication was verified before branch
-creation. The unrelated local `.env.example` edit and untracked `docs/` directory are explicitly
-outside this action and must not be staged.
+A01 is complete in draft PR #11. Its implementation, focused tests, independent sub-agent review,
+rendered browser check, and `make pr-review` passed. Physical iPhone Safari/PWA picker and HEIC
+behavior remain an explicit device acceptance check in the PR because desktop automation cannot
+faithfully emulate the native iOS picker.
+
+The next session should take A02 after PR #11 merges. The unrelated local `.env.example` edit and
+untracked `docs/` directory remain outside these actions and must not be staged.

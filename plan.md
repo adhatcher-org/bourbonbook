@@ -40,7 +40,7 @@ context before Bourbon Book falls back to OpenAI.
 | ID | Action | Status | Branch | Pull request / completion evidence |
 | --- | --- | --- | --- | --- |
 | A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
-| A02 | Apply Atkinson Hyperlegible Next to edit controls | Incomplete | `codex/readable-edit-font` | — |
+| A02 | Apply Atkinson Hyperlegible Next to edit controls | Complete | `codex/readable-edit-font` | [PR #12](https://github.com/adhatcher-org/bourbonbook/pull/12); desktop/iPhone and missing-font fallback verified; sub-agent clean; `make pr-review` passed. |
 | A03 | Reconcile and extend the pricing evaluation fixtures | Incomplete | `codex/pricing-evaluation-fixtures` | — |
 | A04 | Add the pricing evidence schema and separate provider roles | Incomplete | `codex/pricing-evidence-foundation` | — |
 | A05 | Add governed source administration and user preferences | Incomplete | `codex/pricing-source-registry` | — |

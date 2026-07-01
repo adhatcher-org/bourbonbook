@@ -2,25 +2,26 @@
 
 ## Purpose
 
-This plan implements the open work in `docs/todo.md` as a sequence of independently reviewable
+This plan records the remaining Bourbon Book roadmap as a sequence of independently reviewable
 actions. Only one action is implemented in a branch and Codex session at a time. Every action must
 finish with tests, an independent sub-agent review, `make pr-review`, a pushed branch, and a draft
 pull request before its status changes from **Incomplete** to **Complete**.
 
-The pricing work is intentionally pricing-evidence-first. Structured SQL records are the source of
-truth for prices and provenance. Qdrant provides semantic retrieval, while Ollama consumes retrieved
-context before Bourbon Book falls back to OpenAI.
+The remaining work is intentionally RAG-infrastructure-first. A disposable prototype will prove
+Ollama embeddings, Qdrant collection management, fixture loading, metadata filtering, and raw
+vector search before the application commits to production pricing sources or recommendation
+rules. After that prototype is measured, the downstream pricing roadmap must be reviewed again.
 
 ## Confirmed Decisions
 
 1. Removing the HTML `capture="environment"` hint will restore the normal iPhone image chooser;
    actual camera, Photo Library, PWA, and HEIC behavior must be verified.
-2. Edit-form values will use self-hosted **Atkinson Hyperlegible Next**. Existing control sizes and
-   button typography remain unchanged.
-3. Pricing evidence is the initial ingestion scope. Ratings, reviews, and broader product content
-   are deferred until the pricing pipeline is working and measured.
-4. SQL is authoritative for exact product identities, prices, source records, dates, and history.
-   Qdrant stores embeddings and searchable summaries keyed back to SQL records.
+2. Form, search, select, price, and quantity values use self-hosted **Atkinson Hyperlegible Next**
+   at `1.05rem` with a `1.45` line height for readability. Button typography remains unchanged.
+3. A versioned JSON fixture is authoritative only for the disposable RAG prototype. It contains
+   current bottle identities plus clearly labeled synthetic price documents and can rebuild Qdrant.
+4. Production SQL schemas, price sources, evidence policies, and recommendation rules are deferred
+   until the RAG infrastructure has been configured, loaded, queried, and reviewed.
 5. A manual MSRP or suggested secondary-price edit creates a durable, prioritized refresh job.
 6. A successful source-backed refresh automatically replaces the displayed manual price. The
    superseded manual value remains in price history with `user_reported` provenance.
@@ -30,10 +31,16 @@ context before Bourbon Book falls back to OpenAI.
    administrator approval before the server accesses them.
 9. Sources requiring an authenticated human session use an explicit manual-import workflow. The
    system must not bypass a paywall, firewall, access control, or site terms.
-10. The existing `tests/images` set will be reused for evaluation after its missing and unvalidated
-    fixtures are reconciled. Pricing expectations will gain source and `as_of` metadata.
+10. The existing `tests/images` identities seed the prototype corpus. Synthetic prototype prices
+    must never populate bottle fields or be represented as sourced production evidence.
 11. Bourbon Book continues to run as one Uvicorn worker in Docker on Unraid. The durable pricing
     worker runs in that process until the application adopts a database suited to multiple writers.
+12. Development environments always capture email locally and expose the generated verification
+    link on the check-email page. SMTP delivery is restricted to production.
+13. The prototype stops at raw filtered vector search. Ollama synthesis, OpenAI fallback, source
+    discovery, crawling, production ingestion, and user-visible recommendations remain deferred.
+14. Development supports Aaron's external Unraid Qdrant by URL plus an optional local Compose
+    service. Qdrant must not be exposed through the public Bourbon Book route.
 
 ## Action Tracker
 
@@ -41,19 +48,23 @@ context before Bourbon Book falls back to OpenAI.
 | --- | --- | --- | --- | --- |
 | A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
 | A02 | Apply Atkinson Hyperlegible Next to edit controls | Complete | `codex/readable-edit-font` | [PR #12](https://github.com/adhatcher-org/bourbonbook/pull/12); desktop/iPhone and missing-font fallback verified; sub-agent clean; `make pr-review` passed. |
-| A03 | Reconcile and extend the pricing evaluation fixtures | Incomplete | `codex/pricing-evaluation-fixtures` | — |
-| A04 | Add the pricing evidence schema and separate provider roles | Incomplete | `codex/pricing-evidence-foundation` | — |
-| A05 | Add governed source administration and user preferences | Incomplete | `codex/pricing-source-registry` | — |
-| A06 | Add durable refresh jobs and automatic manual-price replacement | Incomplete | `codex/pricing-refresh-jobs` | — |
-| A07 | Add OpenAI-assisted source discovery | Incomplete | `codex/pricing-source-discovery` | — |
-| A08 | Add scheduled fetching and OpenAI evidence extraction | Incomplete | `codex/pricing-evidence-ingestion` | — |
-| A09 | Add Qdrant indexing and Ollama-first price retrieval | Incomplete | `codex/qdrant-ollama-pricing` | — |
-| A10 | Add user-authorized manual and browser-assisted imports | Incomplete | `codex/manual-source-import` | — |
-| A11 | Complete end-to-end evaluation and Unraid operations | Incomplete | `codex/pricing-pipeline-validation` | — |
+| A03 | Configure prototype RAG infrastructure | Incomplete | `codex/rag-infrastructure` | — |
+| A04 | Load and search the prototype corpus | Incomplete | `codex/rag-prototype-index` | — |
+| A05 | Reconcile and extend the pricing evaluation fixtures | Deferred | `codex/pricing-evaluation-fixtures` | Pending post-RAG design checkpoint. |
+| A06 | Add the pricing evidence schema and separate provider roles | Deferred | `codex/pricing-evidence-foundation` | Pending post-RAG design checkpoint. |
+| A07 | Add governed source administration and user preferences | Deferred | `codex/pricing-source-registry` | Pending post-RAG design checkpoint. |
+| A08 | Add durable refresh jobs and automatic manual-price replacement | Deferred | `codex/pricing-refresh-jobs` | Pending post-RAG design checkpoint. |
+| A09 | Add OpenAI-assisted source discovery | Deferred | `codex/pricing-source-discovery` | Pending post-RAG design checkpoint. |
+| A10 | Add scheduled fetching and OpenAI evidence extraction | Deferred | `codex/pricing-evidence-ingestion` | Pending post-RAG design checkpoint. |
+| A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Pending post-RAG design checkpoint. |
+| A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | Pending post-RAG design checkpoint. |
+| A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Pending post-RAG design checkpoint. |
 
 ## Required Lifecycle for Every Action
 
-Each action must use this lifecycle without combining the next action into the same branch:
+Each `Incomplete` or `In Progress` action must use this lifecycle without combining the next action
+into the same branch. A `Deferred` action cannot begin until its named checkpoint is completed and
+the tracker is updated with an approved scope.
 
 1. Start from the current remote default branch after all required predecessor PRs have merged.
 2. Confirm `git status --short`; preserve and do not stage unrelated user work.
@@ -97,7 +108,8 @@ Each action must use this lifecycle without combining the next action into the s
   observation date on every price record.
 - Structured Outputs constrain OpenAI response shape but do not prove factual correctness. Validate
   values and provenance in application code before persistence.
-- Keep SQL and Qdrant records linked by stable SQL IDs. SQL must remain usable if Qdrant is down.
+- In the production design, keep SQL and Qdrant records linked by stable SQL IDs and keep SQL usable
+  if Qdrant is down. The disposable A03/A04 prototype instead uses stable fixture document IDs.
 - Make migrations forward-only and test both a fresh database and an upgraded copy-shaped legacy
   database.
 - Update `.env.example`, admin configuration, README, Docker/Unraid instructions, metrics, and
@@ -152,8 +164,8 @@ None.
 
 ### Goal
 
-Improve edit-field readability by changing the typeface without increasing control sizes or
-changing button typography.
+Improve form-value readability with a self-hosted typeface and a modest text-size increase without
+changing button typography or the surrounding layout.
 
 ### Dependencies
 
@@ -173,22 +185,172 @@ None; may proceed after A01 merges to keep the default branch linear.
 2. Add only the regular and weight variants actually used by edit controls; prefer WOFF2 and avoid
    a runtime dependency on Google Fonts or another CDN.
 3. Define a dedicated `@font-face` name with `font-display: swap` and sensible system fallbacks.
-4. Apply the family to `.field-grid input`, `.field-grid select`, and `.field-grid textarea`. Include
-   any edit-only value control currently outside `.field-grid`; do not change labels or buttons.
-5. Preserve current font sizes, spacing, colors, focus styles, and mobile layout.
+4. Apply the family to form fields, library search and sort controls, authentication fields, and the
+   compact price and quantity value controls; do not change labels or buttons.
+5. Set value text to `1.05rem` with a `1.45` line height while preserving spacing, colors, focus
+   styles, control dimensions, and the mobile layout.
 6. Verify representative text, decimal values, punctuation, placeholders, selects, and multiline
    notes on iPhone and desktop. Check that missing-font fallback remains readable.
 
 ### Completion Evidence
 
 - Font assets and license are tracked and served by the application.
+- Form, search, sort, price, and quantity values use the new font and readable sizing while button
+  typography remains unchanged.
 - Visual verification is documented with desktop and iPhone screenshots.
 - Sub-agent review and `make pr-review` pass.
 - Draft PR exists and the A02 tracker row is updated.
 
 ---
 
-## A03 — Reconcile and Extend the Pricing Evaluation Fixtures
+## A03 — Configure Prototype RAG Infrastructure
+
+### Goal
+
+Prove that Bourbon Book can connect to Ollama and Qdrant, discover the embedding shape, and create a
+compatible filtered-search collection without committing to a production pricing schema.
+
+### Dependencies
+
+A01 and A02 are complete. Begin from the current remote default branch and preserve the user-added
+image fixtures and unrelated working-tree changes.
+
+### Expected Files
+
+- Qdrant/Ollama embedding client and CLI modules
+- `bourbonbook/config.py` and `bourbonbook/admin_config.py`
+- `pyproject.toml`, `uv.lock`, `.env.example`, and `compose.yaml`
+- focused configuration, client, collection, and CLI tests
+- README and Unraid deployment notes
+
+### Public Configuration and Commands
+
+- `QDRANT_URL`: required by RAG commands; external Unraid URL or Compose service URL.
+- `QDRANT_API_KEY`: optional secret and never logged or rendered back to administrators.
+- `QDRANT_COLLECTION`: defaults to `bourbonbook-prototype-v1`.
+- `QDRANT_TIMEOUT_SECONDS`: bounded positive timeout.
+- `OLLAMA_EMBEDDING_MODEL`: defaults to `qwen3-embedding:0.6b`.
+- Provide `check` and `init` CLI commands under one RAG command module. `check` is read-only; `init`
+  may create missing collection/index resources but must never delete or recreate an existing one.
+
+### Individual Implementation Instructions
+
+1. Add the maintained Python Qdrant client and reuse the existing `httpx`-based Ollama boundary.
+   Call Ollama's current `/api/embed` endpoint rather than the legacy embeddings endpoint.
+2. Validate and expose the new settings through managed admin configuration. The API key remains an
+   optional masked secret; URL, timeout, collection, and model use the existing typed validation.
+3. Make `check` verify Qdrant connectivity and request a probe embedding from Ollama. Report bounded
+   actionable failures without logging URLs containing credentials, API keys, response bodies, or
+   embedded fixture text.
+4. Make `init` derive vector dimensions from the probe response and create a cosine collection with
+   metadata recording collection schema version, embedding model, and vector dimension.
+5. If the collection exists, verify model, dimension, distance, and schema compatibility. Fail with
+   migration/reindex guidance on mismatch; never silently delete, resize, or overwrite it.
+6. Before loading any points, create keyword/integer payload indexes for `document_id`,
+   `document_type`, `product_key`, `synthetic`, `price_kind`, `currency`, `bottle_size_ml`, and
+   `schema_version`.
+7. Add an optional Compose `rag` profile with a pinned Qdrant image, named persistent volume,
+   internal service networking, health check, and loopback-only host port for local tooling. Keep
+   the external URL path supported for Aaron's existing Unraid Qdrant.
+8. Document how to pull `qwen3-embedding:0.6b`, connect to external and Compose Qdrant instances,
+   initialize the collection, protect Qdrant from public ingress, persist its data, and diagnose
+   model/collection incompatibility.
+
+### Completion Evidence
+
+- Fake-client tests cover validation, secret handling, connectivity failures, dimension discovery,
+  collection creation, compatibility checks, and idempotent payload-index creation.
+- An opt-in Compose smoke check proves the collection can be created and survives Qdrant restart.
+- No production price schema, fixture ingestion, vector query, or user-visible behavior is added.
+- Sub-agent review and `make pr-review` pass; draft PR exists and A03 is updated.
+
+---
+
+## A04 — Load and Search the Prototype Corpus
+
+### Goal
+
+Load a rebuildable development corpus containing bottle identities and unmistakably synthetic price
+evidence, then prove raw semantic search and structured Qdrant filtering without generating a price
+recommendation.
+
+### Dependencies
+
+A03 must be merged and its collection initialization must work against either external or Compose
+Qdrant.
+
+### Expected Files
+
+- versioned prototype corpus JSON and schema validation
+- RAG fixture loader and raw search service/CLI
+- deterministic loader, query, filter, and failure tests
+- Compose smoke workflow and prototype operating documentation
+
+### Prototype Corpus Interface
+
+1. Use a reviewed JSON document with a top-level schema version and stable document records.
+2. Each record contains `document_id`, `document_type`, `product_key`, `title`, searchable `content`,
+   normalized identity metadata, `schema_version`, and `synthetic`.
+3. Identity records derive from the nine image fixtures representing eight unique products and set
+   `synthetic=false`.
+4. Synthetic price records additionally contain `price_kind`, `amount`, `currency`, and
+   `bottle_size_ml`; set `synthetic=true` and source label `development_fixture`.
+5. Synthetic prices are test data only. They must not be persisted in application SQL, applied to
+   bottles, exposed as sourced evidence, or described as accurate market values.
+
+### Public Commands
+
+- `load --fixture <path>` validates, embeds, and idempotently upserts the prototype documents.
+- `search --query <text> [--limit N]` returns raw score, document ID, title, and payload metadata.
+- Search supports optional filters for product key, document type, synthetic flag, price kind,
+  currency, and bottle size.
+- `status` reports compatibility, point count, embedding model, dimensions, and fixture schema.
+- Fixture-scoped pruning may remove obsolete points owned by the same fixture/schema. No command may
+  delete unrelated points or recreate the collection automatically.
+
+### Individual Implementation Instructions
+
+1. Validate the complete fixture before embedding anything. Reject duplicate IDs, malformed product
+   keys, missing identity metadata, nonpositive synthetic amounts/sizes, invalid currencies, or
+   synthetic price records lacking the development source label.
+2. Use deterministic point IDs and store the embedding model/schema in every point so repeated loads
+   update rather than duplicate data.
+3. Embed document text and query text with the same configured model. Keep query construction in one
+   testable function so later retrieval evaluation can revise it without rewriting storage code.
+4. Apply Qdrant payload filters as part of vector search. Return an explicit unavailable result for
+   Ollama/Qdrant failures and never fall back to OpenAI in this action.
+5. Keep output diagnostic and raw. Do not add Ollama synthesis, application routes, bottle-price
+   changes, source crawling, scheduled ingestion, or production recommendation logic.
+6. Add an opt-in smoke flow that initializes Qdrant, loads the fixture, runs representative identity
+   and synthetic-price searches, verifies filters, reloads idempotently, and confirms persistence.
+
+### Completion Evidence
+
+- Exact-product queries retrieve the corresponding identity document and distinguish releases.
+- `synthetic=false` searches never return synthetic price records.
+- Product, type, price-kind, currency, and size filters are covered with fake clients.
+- Repeated loads do not duplicate points; outages and incompatible collections fail safely.
+- Sub-agent review and `make pr-review` pass; draft PR exists and A04 is updated.
+
+---
+
+## Post-RAG Design Checkpoint
+
+After A04, stop implementation and open a new planning session. Review retrieval relevance,
+metadata filters, model resource usage on Unraid, collection operations, networking, restart
+behavior, and the limits of the synthetic corpus. Then decide production data sources, evidence
+types, freshness/provenance rules, SQL schema, ingestion methods, quality baselines, grounded
+synthesis, fallback behavior, and user-visible price semantics. Rewrite and reactivate A05 onward
+from those decisions; do not implement the deferred text unchanged.
+
+---
+
+## A05 — Reconcile and Extend the Pricing Evaluation Fixtures
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint. The instructions below are historical candidate
+scope and must be rewritten before implementation.
 
 ### Goal
 
@@ -197,7 +359,7 @@ before changing pricing behavior.
 
 ### Dependencies
 
-None technically; complete before A08 and A09.
+A04 and the post-RAG design checkpoint.
 
 ### Expected Files
 
@@ -209,29 +371,27 @@ None technically; complete before A08 and A09.
 
 ### Individual Implementation Instructions
 
-1. Reconcile the current inventory: `WellerSpecialReserve.jpeg` is referenced but absent, while
-   `BuffaloTrace.jpeg` and `EHTaylorSmallBatch.jpeg` currently lack expected records. Preserve user
-   assets and ask for the missing image if it cannot be recovered from repository history.
+1. Reconcile the image inventory while preserving user assets.
 2. Separate image-derived identity expectations from pricing expectations. A photograph must not be
    treated as evidence of a current price.
-3. Add `as_of`, currency, bottle size, evidence type, source identity, and an explicit tolerance to
-   every pricing expectation.
-4. Extend the evaluation parser and tests so missing images, unvalidated images, stale expectations,
-   exact-release mismatches, and prices outside tolerance are reported separately.
-5. Preserve the existing Ollama identity evaluation and add a provider-independent pricing report
-   that can consume fake/local evidence during CI.
-6. Document how a maintainer refreshes baselines without silently accepting new model output.
+3. Define pricing provenance, freshness, currency, size, evidence type, and acceptance rules at the
+   checkpoint before adding production expectations.
+4. Extend evaluation only after the production retrieval and evidence interfaces are approved.
 
 ### Completion Evidence
 
-- Every present test image is intentionally validated or explicitly excluded.
-- Pricing baselines have provenance and dates.
+- Completion evidence must be rewritten at the checkpoint.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A03 tracker row is updated.
+- Draft PR exists and the A05 tracker row is updated.
 
 ---
 
-## A04 — Add the Pricing Evidence Schema and Separate Provider Roles
+## A06 — Add the Pricing Evidence Schema and Separate Provider Roles
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint. The instructions below are historical candidate
+scope and must be rewritten before implementation.
 
 ### Goal
 
@@ -240,7 +400,7 @@ retrieval, and OpenAI fallback.
 
 ### Dependencies
 
-A03 should be merged so the architecture has a stable evaluation target.
+A05 and an approved post-RAG production-data design.
 
 ### Expected Files
 
@@ -254,32 +414,24 @@ A03 should be merged so the architecture has a stable evaluation target.
 
 ### Individual Implementation Instructions
 
-1. Add a canonical catalog-product table with normalized identity fields and aliases. Link bottles
-   to it with a nullable foreign key so existing records migrate safely.
-2. Add immutable price-observation records containing product, bottle size, evidence type, amount,
-   currency, source, source URL, observed/sale date, extraction method, confidence, checked time,
-   and optional owning user for private `user_reported` evidence.
-3. Add a durable refresh-job table with product/bottle identity generation, priority, reason,
-   pending/running/completed/failed state, attempts, lease timestamps, and bounded failure type.
-4. Preserve existing `PriceSource` behavior during migration or provide an explicit data migration;
-   do not drop historical URLs or displayed prices.
-5. Replace the single `ANALYSIS_PROVIDER` decision with explicit roles: identity analyzer, local
-   pricing enabled state, and OpenAI fallback enabled state. Maintain backward-compatible defaults.
-6. Add indexes and uniqueness constraints needed for idempotent evidence ingestion and one active
-   refresh request per product/generation.
-7. Test fresh creation, recognized legacy migration, settings validation, relationships, deletion,
-   and idempotent upserts.
+1. Define the catalog, production evidence, refresh-job, and provider-role interfaces only after the
+   checkpoint resolves sources, provenance, freshness, and price semantics.
+2. Preserve existing `PriceSource` URLs, displayed values, and legacy database compatibility.
+3. Keep SQL authoritative and Qdrant rebuildable once the production schema is approved.
 
 ### Completion Evidence
 
-- Fresh and legacy-shaped database migration tests pass.
-- Existing bottle creation and price display remain functional.
+- Completion evidence must be rewritten at the checkpoint.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A04 tracker row is updated.
+- Draft PR exists and the A06 tracker row is updated.
 
 ---
 
-## A05 — Add Governed Source Administration and User Preferences
+## A07 — Add Governed Source Administration and User Preferences
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -287,7 +439,7 @@ Let administrators govern crawl sources while users can blacklist sources and su
 
 ### Dependencies
 
-A04.
+A06.
 
 ### Expected Files
 
@@ -317,11 +469,15 @@ A04.
 - Permission tests prove ordinary users cannot activate sources.
 - Source blocks affect selection without erasing history.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A05 tracker row is updated.
+- Draft PR exists and the A07 tracker row is updated.
 
 ---
 
-## A06 — Add Durable Refresh Jobs and Automatic Manual-Price Replacement
+## A08 — Add Durable Refresh Jobs and Automatic Manual-Price Replacement
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -330,7 +486,7 @@ replace displayed manual prices when fresh grounded evidence becomes available.
 
 ### Dependencies
 
-A04 and A05.
+A06 and A07.
 
 ### Expected Files
 
@@ -364,11 +520,15 @@ A04 and A05.
 - Tests cover deduplication, priority, restart recovery, stale generations, automatic replacement,
   fallback preservation, and history retention.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A06 tracker row is updated.
+- Draft PR exists and the A08 tracker row is updated.
 
 ---
 
-## A07 — Add OpenAI-Assisted Source Discovery
+## A09 — Add OpenAI-Assisted Source Discovery
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -377,7 +537,7 @@ automatic crawl instruction.
 
 ### Dependencies
 
-A05 and A06.
+A07 and A08.
 
 ### Expected Files
 
@@ -407,11 +567,15 @@ A05 and A06.
 - Tests prove discovered sites remain pending until administrator approval.
 - Global blacklist and rejected-source behavior is covered.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A07 tracker row is updated.
+- Draft PR exists and the A09 tracker row is updated.
 
 ---
 
-## A08 — Add Scheduled Fetching and OpenAI Evidence Extraction
+## A10 — Add Scheduled Fetching and OpenAI Evidence Extraction
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -420,7 +584,7 @@ validated, idempotent pricing observations.
 
 ### Dependencies
 
-A05–A07.
+A07–A09.
 
 ### Expected Files
 
@@ -456,11 +620,16 @@ A05–A07.
   deduplication, source blocks, and provenance.
 - No deterministic test accesses the internet or OpenAI.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A08 tracker row is updated.
+- Draft PR exists and the A10 tracker row is updated.
 
 ---
 
-## A09 — Add Qdrant Indexing and Ollama-First Price Retrieval
+## A11 — Add Qdrant Indexing and Ollama-First Price Retrieval
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation. Reuse
+the proven A03/A04 infrastructure instead of creating a parallel Qdrant path.
 
 ### Goal
 
@@ -469,7 +638,7 @@ OpenAI grounded-price fallback.
 
 ### Dependencies
 
-A04 and A08.
+A06 and A10.
 
 ### Expected Files
 
@@ -506,11 +675,15 @@ A04 and A08.
   hallucination rejection, and OpenAI fallback thresholds.
 - Docker/Unraid networking keeps Qdrant internal.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A09 tracker row is updated.
+- Draft PR exists and the A11 tracker row is updated.
 
 ---
 
-## A10 — Add User-Authorized Manual and Browser-Assisted Imports
+## A12 — Add User-Authorized Manual and Browser-Assisted Imports
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -519,7 +692,7 @@ storing site credentials in Bourbon Book or circumventing access controls.
 
 ### Dependencies
 
-A05, A08, and A09.
+A07, A10, and A11.
 
 ### Expected Files
 
@@ -554,11 +727,15 @@ A05, A08, and A09.
   blocked sources, and normal ingestion.
 - A manual browser-assisted smoke test is documented without exposing credentials or page content.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A10 tracker row is updated.
+- Draft PR exists and the A12 tracker row is updated.
 
 ---
 
-## A11 — Complete End-to-End Evaluation and Unraid Operations
+## A13 — Complete End-to-End Evaluation and Unraid Operations
+
+### Status Gate
+
+Deferred pending the post-RAG design checkpoint; rewrite this action before implementation.
 
 ### Goal
 
@@ -567,7 +744,7 @@ deployment and rollback on Unraid.
 
 ### Dependencies
 
-A01–A10.
+A01–A12.
 
 ### Expected Files
 
@@ -601,9 +778,22 @@ A01–A10.
 - Evaluation results and known limitations are documented.
 - Deployment, health, backup, restore, and rollback runbooks are complete.
 - Sub-agent review and `make pr-review` pass.
-- Draft PR exists and the A11 tracker row is updated.
+- Draft PR exists and the A13 tracker row is updated.
 
-## Next-Session Prompt Template
+## Plan-Review Prompt
+
+Use this prompt in a fresh context window before implementation:
+
+```text
+Review the Bourbon Book implementation plan at <absolute path>/plan.md, focusing on the new
+RAG-first sequence in A03 and A04. Verify that the plan cleanly proves Ollama embeddings, Qdrant
+configuration, fixture loading, metadata filtering, and raw vector search without prematurely
+choosing production price sources, schemas, or recommendation behavior. Check dependencies,
+interfaces, failure handling, tests, Docker/Unraid operations, and the post-RAG checkpoint. Do not
+implement the plan or reactivate A05–A13 during this review.
+```
+
+## Next-Session Implementation Prompt Template
 
 Use this template after completing an action and pushing its plan-status update:
 
@@ -620,10 +810,15 @@ PR and status update succeed, create a new Codex session for the next Incomplete
 
 ## Current Work
 
-A01 is complete in draft PR #11. Its implementation, focused tests, independent sub-agent review,
-rendered browser check, and `make pr-review` passed. Physical iPhone Safari/PWA picker and HEIC
-behavior remain an explicit device acceptance check in the PR because desktop automation cannot
+A01 and A02 are complete and merged through PRs #11 and #12. Physical iPhone Safari/PWA picker and
+HEIC behavior remain an explicit device acceptance check because desktop automation cannot
 faithfully emulate the native iOS picker.
 
-The next session should take A02 after PR #11 merges. The unrelated local `.env.example` edit and
-untracked `docs/` directory remain outside these actions and must not be staged.
+Follow-up commit `dbfe20d` broadened Atkinson Hyperlegible Next to the remaining form-value,
+search, sort, price, and quantity controls, standardized readable value text at `1.05rem`/`1.45`,
+and made local account verification easier by capturing email and displaying the verification link
+outside production. Production remains the only environment that sends through SMTP.
+
+The next implementation action is A03 on `codex/rag-infrastructure`. A04 follows only after A03 is
+merged. After A04, stop for the post-RAG design checkpoint; A05–A13 remain deferred until their
+production data, evidence, and recommendation assumptions are reviewed and rewritten.

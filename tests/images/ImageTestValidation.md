@@ -126,3 +126,36 @@ status: Opened
 fill_level: 50%
 msrp: $49.99
 secondary_price: $100
+
+## EH Taylor Small Batch
+
+image: ![EH Taylor Small Batch](EHTaylorSmallBatch.jpeg)
+name: Colonel E.H. Taylor Jr.
+brand: Colonel E.H. Taylor Jr.
+release: Small Batch
+spirit_type: Bourbon
+distilled_by: Buffalo Trace Distillery
+mash_bill: Buffalo Trace Mash Bill #1 "low rye" 75% corn, 10% rye, and 15% malted barley
+proof: 100.0
+abv: 50.0
+size: 750ml
+status: Opened
+fill_level: 80%
+msrp: $54.99
+secondary_price: $110
+
+## Buffalo Trace
+
+image: ![Buffalo Trace](BuffaloTrace.jpeg)
+name: Buffalo Trace
+brand: Buffalo Trace
+spirit_type: Bourbon
+distilled_by: Buffalo Trace Distillery
+mash_bill: Low Rye
+proof: 90.0
+abv: 45.0
+size: 750ml
+status: Unopened
+fill_level: 100%
+msrp: $24.99
+secondary_price: $30

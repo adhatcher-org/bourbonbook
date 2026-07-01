@@ -76,6 +76,31 @@ def test_health_and_auth_redirect(tmp_path: Path) -> None:
         assert response.headers["location"] == "/login"
 
 
+def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
+    client, _ = make_client(tmp_path)
+    with client:
+        css_response = client.get("/static/app.css")
+        regular_response = client.get("/static/fonts/AtkinsonHyperlegibleNext-Regular.woff2")
+        bold_response = client.get("/static/fonts/AtkinsonHyperlegibleNext-Bold.woff2")
+        license_response = client.get("/static/fonts/OFL.txt")
+
+    assert css_response.status_code == 200
+    assert regular_response.status_code == 200
+    assert bold_response.status_code == 200
+    assert license_response.status_code == 200
+    assert regular_response.content.startswith(b"wOF2")
+    assert bold_response.content.startswith(b"wOF2")
+    assert "Atkinson Hyperlegible Next Project Authors" in license_response.text
+    assert 'font-family:AtkinsonEdit;src:url("/static/fonts/' in css_response.text
+    assert "font-display:swap" in css_response.text
+    assert (
+        ".field-grid input,.field-grid select,.field-grid textarea,.status-picker label "
+        "span,.range-field output{font-family:AtkinsonEdit,Arial,-apple-system,"
+        'BlinkMacSystemFont,"Segoe UI",sans-serif}'
+    ) in css_response.text
+    assert ".primary-button{font-family:AtkinsonEdit" not in css_response.text
+
+
 def test_readyz_reports_unready_when_database_is_not_at_head(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:

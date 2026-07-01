@@ -1,5 +1,0 @@
-Atkinson Hyperlegible Next
-Source: Google Fonts / fonts.gstatic.com
-Font files downloaded and self-hosted for Bourbon Book form input controls.
-Font display uses font-display: swap.
-License should be verified before redistribution; Google Fonts generally offers open-use licenses such as SIL Open Font License or Apache.

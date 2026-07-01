@@ -40,7 +40,10 @@ class CaptureEmailSender(MemoryEmailSender):
     async def send(self, message: OutgoingEmail) -> None:
         await super().send(message)
         logger.info(
-            "Captured email delivery recipient_domain=%s", message.recipient.rpartition("@")[2]
+            "Captured email delivery recipient=%s subject=%s content=%s",
+            message.recipient,
+            message.subject,
+            message.text,
         )
 
 
@@ -69,11 +72,9 @@ class SMTPEmailSender:
 
 
 def create_email_sender(settings: Settings) -> EmailSender:
-    return (
-        SMTPEmailSender(settings)
-        if settings.email_delivery_mode == "smtp"
-        else CaptureEmailSender()
-    )
+    if settings.email_delivery_mode == "smtp" and settings.app_env == "production":
+        return SMTPEmailSender(settings)
+    return CaptureEmailSender()
 
 
 def link_message(recipient: str, purpose: str, url: str, expiry: str) -> OutgoingEmail:

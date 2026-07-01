@@ -467,7 +467,11 @@ def register_routes(app: FastAPI) -> None:
             request.session.clear()
             request.session["unverified_user_id"] = user.id
             try:
-                await issue_verification(session, user, app.state.settings, app.state.email_sender)
+                verification_url = await issue_verification(
+                    session, user, app.state.settings, app.state.email_sender
+                )
+                if app.state.settings.app_env != "production":
+                    request.session["verification_url"] = verification_url
             except Exception:
                 logger.exception("Verification email delivery failed user_id=%s", user.id)
                 return render(request, "check_email.html", delivery_error=True, status_code=503)
@@ -483,7 +487,13 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/check-email", response_class=HTMLResponse)
     def check_email(request: Request) -> Response:
-        return render(request, "check_email.html", delivery_error=False)
+        verification_url = request.session.get("verification_url")
+        return render(
+            request,
+            "check_email.html",
+            delivery_error=False,
+            verification_url=verification_url,
+        )
 
     @app.post("/verification/resend")
     async def resend_verification(request: Request) -> Response:

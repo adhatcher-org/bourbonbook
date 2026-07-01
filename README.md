@@ -13,6 +13,8 @@ uv run --env-file .env uvicorn bourbonbook.main:app --reload
 
 Open `http://localhost:8000`, create an account, and add a bottle. Local development uses `https://ollama.aaronhatcher.com` by default. If the selected analyzer is not reachable, the photo is still saved and the review form opens for manual entry.
 
+Form input and select values now use a self-hosted Atkinson Hyperlegible Next font for improved readability. The WOFF2 assets are stored under `bourbonbook/static/fonts/` with a local attribution note.
+
 Development defaults to captured email delivery. Verification and reset messages are retained only
 in the running process. To exercise real delivery, set `EMAIL_DELIVERY_MODE=smtp` and configure the
 SMTP settings shown in `.env.example`. Links are always built from `PUBLIC_BASE_URL`, never the

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def issue_verification(
     session: Session, user: User, settings: Settings, sender: EmailSender
-) -> None:
+) -> str:
     _, raw = issue_token(
         session, user, VERIFY_EMAIL, timedelta(hours=settings.verification_ttl_hours)
     )
@@ -28,6 +28,7 @@ async def issue_verification(
             user.email or "", VERIFY_EMAIL, url, f"{settings.verification_ttl_hours} hours"
         )
     )
+    return url
 
 
 async def issue_reset(

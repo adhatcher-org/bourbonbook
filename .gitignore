@@ -9,3 +9,4 @@ htmlcov/
 data/
 *.py[cod]
 .DS_Store
+.continue/.env

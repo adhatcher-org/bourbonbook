@@ -12,7 +12,13 @@ from bourbonbook import admin_cli, entrypoint
 from bourbonbook.auth import hash_password, verify_password
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
-from bourbonbook.email import OutgoingEmail, SMTPEmailSender, create_email_sender, link_message
+from bourbonbook.email import (
+    CaptureEmailSender,
+    OutgoingEmail,
+    SMTPEmailSender,
+    create_email_sender,
+    link_message,
+)
 from bourbonbook.models import User
 from bourbonbook.photos import save_photo
 
@@ -126,6 +132,7 @@ def test_smtp_sender_builds_message_and_uses_tls(monkeypatch, tmp_path: Path) ->
     settings = settings_for(
         tmp_path,
         email_delivery_mode="smtp",
+        app_env="production",
         smtp_host="smtp.example.com",
         smtp_username="sender",
         smtp_password="secret",
@@ -141,6 +148,19 @@ def test_smtp_sender_builds_message_and_uses_tls(monkeypatch, tmp_path: Path) ->
     assert smtp.started_tls
     assert smtp.credentials == ("sender", "secret")
     assert smtp.message["To"] == "reader@example.com"
+
+
+def test_local_development_uses_capture_sender_when_smtp_is_requested(tmp_path: Path) -> None:
+    settings = settings_for(
+        tmp_path,
+        email_delivery_mode="smtp",
+        app_env="development",
+        public_base_url="http://localhost:8000",
+    )
+
+    sender = create_email_sender(settings)
+
+    assert isinstance(sender, CaptureEmailSender)
 
 
 def test_link_messages_escape_html_and_choose_reset_template() -> None:

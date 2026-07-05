@@ -1,7 +1,29 @@
-.git
-.github
-.venv
-data
-tests
-*.pyc
-.env
+# Ignore everything by default
+*
+
+# Build definition
+!Dockerfile
+
+# Dependency metadata
+!pyproject.toml
+!uv.lock
+
+# Runtime application
+!bourbonbook/
+!bourbonbook/**
+
+# Runtime image assets
+!images/
+!images/**
+
+# Database migrations
+!alembic.ini
+!migrations/
+!migrations/**
+
+# Explicit runtime documentation
+!README.md
+
+# Exclude generated Python files within allowed directories
+**/__pycache__/
+**/*.py[cod]

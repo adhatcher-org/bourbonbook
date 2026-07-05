@@ -336,6 +336,10 @@ def shared_collection_user(session: Session, raw_token: str) -> User | None:
     )
 
 
+def is_shopping_item(bottle: Bottle) -> bool:
+    return bottle.on_shopping_list or bottle.status == "Empty"
+
+
 def protect_shared_response(response: Response) -> Response:
     response.headers.update(
         {
@@ -1315,7 +1319,10 @@ def register_routes(app: FastAPI) -> None:
             bottles = list(
                 session.scalars(
                     select(Bottle)
-                    .where(Bottle.owner_id == user.id, Bottle.on_shopping_list.is_(True))
+                    .where(
+                        Bottle.owner_id == user.id,
+                        or_(Bottle.on_shopping_list.is_(True), Bottle.status == "Empty"),
+                    )
                     .order_by(func.lower(Bottle.name), Bottle.created_at.desc())
                 )
             )
@@ -1358,7 +1365,7 @@ def register_routes(app: FastAPI) -> None:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             upload = selected_upload(form, "photo")
-            if bottle and bottle.on_shopping_list and upload:
+            if bottle and is_shopping_item(bottle) and upload:
                 old_photo = bottle.photo_name
                 bottle.photo_name = await save_photo(
                     upload,
@@ -1377,7 +1384,7 @@ def register_routes(app: FastAPI) -> None:
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
-            if bottle and bottle.on_shopping_list:
+            if bottle and is_shopping_item(bottle):
                 bottle.on_shopping_list = False
                 bottle.status = "Unopened"
                 bottle.fill_level = 100
@@ -1391,7 +1398,7 @@ def register_routes(app: FastAPI) -> None:
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
-            if bottle and bottle.on_shopping_list:
+            if bottle and is_shopping_item(bottle):
                 remove_bottle_photo(bottle, app.state.settings.data_dir / "uploads")
                 session.delete(bottle)
                 session.commit()

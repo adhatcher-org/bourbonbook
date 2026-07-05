@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}User · Bourbon Book{% endblock %}
 {% block page %}
-<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>User detail</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+{% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page profile-page admin-page">
   <section class="collection-head">
     <div>

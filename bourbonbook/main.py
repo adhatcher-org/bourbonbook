@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -65,7 +65,7 @@ from bourbonbook.observability import (
     route_template,
     usage_context,
 )
-from bourbonbook.photos import save_photo
+from bourbonbook.photos import save_avatar, save_photo
 from bourbonbook.rate_limit import RateLimiter
 from bourbonbook.tokens import (
     RESET_PASSWORD,
@@ -143,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_age=60 * 60 * 24 * 30,
     )
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    app.mount("/images", StaticFiles(directory=ROOT.parent / "images"), name="images")
     register_observability(app)
     register_routes(app)
     return app
@@ -784,6 +785,65 @@ def register_routes(app: FastAPI) -> None:
                 request, "profile.html", user=user, error=None, notice="Screen name updated."
             )
 
+    @app.post("/profile/avatar")
+    async def update_profile_avatar(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            upload = selected_upload(form, "avatar")
+            if not upload:
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error="Choose an image to upload.",
+                    notice=None,
+                )
+            avatar_dir = app.state.settings.data_dir / "avatars"
+            try:
+                avatar_name = await save_avatar(upload, avatar_dir)
+            except HTTPException as exc:
+                return render(
+                    request,
+                    "profile.html",
+                    user=user,
+                    error=str(exc.detail),
+                    notice=None,
+                    status_code=exc.status_code,
+                )
+            previous_name = user.avatar_name
+            user.avatar_name = avatar_name
+            session.commit()
+            if previous_name:
+                (avatar_dir / previous_name).unlink(missing_ok=True)
+            return render(
+                request,
+                "profile.html",
+                user=user,
+                error=None,
+                notice="Avatar updated.",
+            )
+
+    @app.post("/profile/avatar/remove")
+    async def remove_profile_avatar(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            previous_name = user.avatar_name
+            user.avatar_name = None
+            session.commit()
+            if previous_name:
+                (app.state.settings.data_dir / "avatars" / previous_name).unlink(missing_ok=True)
+            return render(
+                request,
+                "profile.html",
+                user=user,
+                error=None,
+                notice="Avatar removed.",
+            )
+
     @app.post("/profile/email")
     async def update_profile_email(request: Request) -> Response:
         form = await request.form()
@@ -889,16 +949,24 @@ def register_routes(app: FastAPI) -> None:
                     notice=None,
                 )
             upload_root = (app.state.settings.data_dir / "uploads").resolve()
+            avatar_root = (app.state.settings.data_dir / "avatars").resolve()
             photo_paths = []
             for bottle in user.bottles:
                 if bottle.photo_name:
                     candidate = (upload_root / bottle.photo_name).resolve()
                     if candidate.parent == upload_root:
                         photo_paths.append(candidate)
+            avatar_path = None
+            if user.avatar_name:
+                candidate = (avatar_root / user.avatar_name).resolve()
+                if candidate.parent == avatar_root:
+                    avatar_path = candidate
             session.delete(user)
             session.commit()
             for path in photo_paths:
                 path.unlink(missing_ok=True)
+            if avatar_path:
+                avatar_path.unlink(missing_ok=True)
             request.session.clear()
             observe_auth_event("account_deleted", "success")
             log_event(
@@ -1622,6 +1690,20 @@ def register_routes(app: FastAPI) -> None:
             )
             path = app.state.settings.data_dir / "uploads" / photo_name
             if not bottle or not path.is_file():
+                return Response(status_code=404)
+            return FileResponse(
+                path,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
+
+    @app.get("/avatars/{avatar_name}")
+    def avatar(request: Request, avatar_name: str) -> Response:
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            avatar_root = (app.state.settings.data_dir / "avatars").resolve()
+            path = (avatar_root / avatar_name).resolve()
+            if user.avatar_name != avatar_name or path.parent != avatar_root or not path.is_file():
                 return Response(status_code=404)
             return FileResponse(
                 path,

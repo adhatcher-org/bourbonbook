@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException, UploadFile
+from PIL import Image
 from sqlalchemy import select
 
 from bourbonbook import admin_cli, entrypoint
@@ -20,7 +22,7 @@ from bourbonbook.email import (
     link_message,
 )
 from bourbonbook.models import User
-from bourbonbook.photos import save_photo
+from bourbonbook.photos import AVATAR_MAX_MB, AVATAR_SIZE, save_avatar, save_photo
 
 
 def settings_for(tmp_path: Path, **changes) -> Settings:
@@ -253,3 +255,24 @@ def test_invalid_and_oversized_photos_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(HTTPException) as size_error:
         asyncio.run(save_photo(oversized, tmp_path, 0))
     assert size_error.value.status_code == 413
+
+
+def test_avatars_are_resized_and_limited_to_ten_megabytes(tmp_path: Path) -> None:
+    source = BytesIO()
+    Image.new("RGB", (900, 600), "#8b4513").save(source, "PNG")
+    upload = UploadFile(filename="avatar.png", file=BytesIO(source.getvalue()))
+
+    name = asyncio.run(save_avatar(upload, tmp_path))
+
+    with Image.open(tmp_path / name) as avatar:
+        assert avatar.size == AVATAR_SIZE
+        assert avatar.format == "JPEG"
+
+    oversized = UploadFile(
+        filename="huge.jpg",
+        file=BytesIO(b"x" * (AVATAR_MAX_MB * 1024 * 1024 + 1)),
+    )
+    with pytest.raises(HTTPException) as size_error:
+        asyncio.run(save_avatar(oversized, tmp_path))
+    assert size_error.value.status_code == 413
+    assert "10 MB" in str(size_error.value.detail)

@@ -12,6 +12,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY bourbonbook ./bourbonbook
+COPY images ./images
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY README.md ./

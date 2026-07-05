@@ -1,4 +1,4 @@
-const CACHE = 'bourbon-book-v1';
+const CACHE = 'bourbon-book-v3';
 const SHELL = ['/static/app.css', '/static/app.js', '/static/icon.svg', '/manifest.webmanifest'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL))));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));

@@ -112,6 +112,37 @@ document.querySelector('[data-copy-share-link]')?.addEventListener('click', asyn
   event.currentTarget.textContent = 'Copied';
 });
 
+const dropdowns = [...document.querySelectorAll('[data-dropdown]')];
+dropdowns.forEach((dropdown) => {
+  dropdown.addEventListener('toggle', () => {
+    if (!dropdown.open) return;
+    dropdowns.forEach((other) => {
+      if (other !== dropdown) other.removeAttribute('open');
+    });
+  });
+});
+document.addEventListener('click', (event) => {
+  dropdowns.forEach((dropdown) => {
+    if (dropdown.open && !dropdown.contains(event.target)) dropdown.removeAttribute('open');
+  });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const openDropdown = dropdowns.find((dropdown) => dropdown.open);
+  if (!openDropdown) return;
+  openDropdown.removeAttribute('open');
+  openDropdown.querySelector('summary')?.focus();
+});
+
+document.querySelector('[data-avatar-input]')?.addEventListener('change', (event) => {
+  const file = event.currentTarget.files?.[0];
+  const preview = document.querySelector('[data-avatar-preview]');
+  if (!file || !(preview instanceof HTMLImageElement)) return;
+  preview.src = URL.createObjectURL(file);
+  preview.hidden = false;
+  document.querySelector('[data-avatar-fallback]')?.setAttribute('hidden', '');
+});
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/static/sw.js'));
 }

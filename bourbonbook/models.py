@@ -20,6 +20,7 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(80))
     email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True)
     screen_name: Mapped[str] = mapped_column(String(80), default="")
+    avatar_name: Mapped[str | None] = mapped_column(String(80))
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     session_version: Mapped[int] = mapped_column(Integer, default=1)

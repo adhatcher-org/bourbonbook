@@ -15,22 +15,29 @@ Use the available skill that matches the work:
 Use multiple skills when a change crosses these boundaries. Follow each selected skill's workflow
 in addition to the review and validation sequence below.
 
-## Pre-PR review and validation
+## PR review, validation, and approval
 
 Before opening or updating a pull request for implementation changes:
 
 1. Complete the implementation and focused tests in the primary session.
-2. Spawn the project-scoped `bourbonbook_reviewer` agent in a separate subagent session. Give it the
-   intended change scope and base branch, and ask it to independently review the complete diff.
-3. Resolve every actionable reviewer finding in the primary session and ask
-   `bourbonbook_reviewer` to review again until it returns `PASS`.
-4. Spawn the project-scoped `pr_validator` agent in a separate subagent session with the same scope
-   and base branch. The validator must run `make pr-review` and must not modify implementation files
-   or Git state.
-5. Treat validator `FAIL` findings as actionable work for the primary session. If a fix changes the
-   implementation, repeat the reviewer pass before asking `pr_validator` to validate again.
-6. Do not open or update the pull request until the latest runs of both agents return `PASS`.
-7. Include both agent verdicts and the `make pr-review` result in the pull-request description.
+2. Use `bourbonbook_reviewer` for preliminary review while iterating, and resolve every actionable
+   finding in the primary session.
+3. Create the final candidate commit in the primary session.
+4. Spawn `bourbonbook_reviewer` against that exact commit. A final `PASS` must include
+   `reviewed_commit: <sha>` matching the candidate commit, with no intended scope left uncommitted.
+5. Spawn `pr_validator` in local validation mode against the same commit. It must run
+   `make pr-review` and a final `PASS` must include `validated_commit: <sha>` matching the candidate.
+6. Treat reviewer or validator `FAIL` findings as actionable work for the primary session. Any fix
+   requires a new candidate commit and fresh commit-bound runs of both agents.
+7. Open or update the pull request as a draft only after both final agents return `PASS` for the
+   same candidate commit. Include both verdicts, commit SHAs, and `make pr-review` in the description.
+8. After that commit is pushed, invoke `pr_validator` again in remote approval mode with the
+   repository, pull-request number, expected head SHA, and both commit-bound verdicts. It must wait
+   for the complete expected GitHub check set and bind any approval to that exact head commit.
+9. The remote validator may approve only when every requirement passes and the authenticated
+   GitHub identity is allowed to approve. It must return `BLOCKED` rather than claim success when
+   GitHub forbids self-approval or the credential lacks review permission.
+10. Approval is not authorization to merge the pull request.
 
 Preserve unrelated user changes throughout validation. Never stage files merely because test or
 build tooling generated them.

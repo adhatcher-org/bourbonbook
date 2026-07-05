@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_compact_grid.html" import compact_grid %}
+{% block title %}{{ owner.screen_name }}’s Collection · Bourbon Book{% endblock %}
+{% block body_class %}shared-collection-body{% endblock %}
+{% block page %}
+<header class="shared-header"><a class="wordmark" href="/login" aria-label="Bourbon Book"><span>BB</span><b>Bourbon Book</b></a><p>Shared cabinet <i></i> View only</p></header>
+<main id="main" class="app-shell compact-page shared-collection-page">
+  <section class="compact-heading shared-heading"><div><p class="eyebrow">A private collection, shared with you</p><h1>{{ owner.screen_name }}’s Collection</h1></div><p><strong>{{ bottle_count }}</strong> {{ 'bottle' if bottle_count == 1 else 'bottles' }}, arranged by name</p></section>
+  <form class="catalog-tools compact-tools" method="get" action="/shared/{{ share_token }}">
+    <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search shared collection</span><input name="q" value="{{ q }}" placeholder="Find a bottle…" autocomplete="off"></label>
+  </form>
+  {% if bottles %}{{ compact_grid(bottles, '/shared/' ~ share_token ~ '/media') }}{% else %}<section class="empty-state"><div class="empty-bottle" aria-hidden="true"><span></span></div><p class="eyebrow">Nothing on this shelf</p><h2>{{ 'No matching bottles' if q else 'This cabinet is waiting for its first bottle.' }}</h2>{% if q %}<a class="secondary-button" href="/shared/{{ share_token }}">Clear search</a>{% endif %}</section>{% endif %}
+</main>
+<footer class="shared-footer"><span class="brand-mark">BB</span><p>Catalogued with Bourbon Book</p></footer>
+{% endblock %}

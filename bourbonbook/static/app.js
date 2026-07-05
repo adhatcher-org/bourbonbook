@@ -29,15 +29,69 @@ if (fillRange) {
   updateFill();
 }
 
-document.querySelector('[data-delete-form]')?.addEventListener('submit', (event) => {
-  if (!window.confirm('Delete this bottle permanently?')) event.preventDefault();
+document.querySelectorAll('[data-delete-form]').forEach((form) => {
+  form.addEventListener('submit', (event) => {
+    if (!window.confirm('Remove this bottle permanently?')) event.preventDefault();
+  });
 });
 
-document.querySelector('.edit-form')?.addEventListener('submit', (event) => {
+const editForm = document.querySelector('.edit-form');
+const emptyDialog = document.querySelector('[data-empty-dialog]');
+let pendingSubmitter = null;
+editForm?.addEventListener('submit', (event) => {
   if (event.submitter?.hasAttribute('data-analysis-action')) {
     const overlay = document.querySelector('[data-analysis-overlay]');
     if (overlay) overlay.hidden = false;
+    return;
   }
+  const status = editForm.querySelector('input[name="status"]:checked')?.value;
+  const originalStatus = editForm.querySelector('input[name="original_status"]')?.value;
+  const emptyAction = editForm.querySelector('input[name="empty_action"]');
+  if (status === 'Empty' && originalStatus !== 'Empty' && !emptyAction?.value && emptyDialog) {
+    event.preventDefault();
+    pendingSubmitter = event.submitter;
+    emptyDialog.showModal();
+  }
+});
+
+emptyDialog?.querySelectorAll('[data-empty-choice]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const action = editForm?.querySelector('input[name="empty_action"]');
+    if (action) action.value = button.dataset.emptyChoice;
+  });
+});
+
+emptyDialog?.addEventListener('close', () => {
+  if (['shopping', 'remove'].includes(emptyDialog.returnValue)) {
+    editForm?.requestSubmit(pendingSubmitter || undefined);
+  }
+});
+
+if (emptyDialog?.hasAttribute('data-open-on-load')) emptyDialog.showModal();
+
+document.querySelectorAll('input[name="status"]').forEach((input) => {
+  input.addEventListener('change', () => {
+    if (input.checked && input.value === 'Empty' && fillRange) {
+      fillRange.value = '0';
+      fillRange.dispatchEvent(new Event('input'));
+    }
+  });
+});
+
+document.querySelector('[data-share-form]')?.addEventListener('submit', (event) => {
+  if (
+    event.currentTarget.dataset.sharingActive === 'true' &&
+    !window.confirm('Replace the current share link? The old link will stop working.')
+  ) {
+    event.preventDefault();
+  }
+});
+
+document.querySelector('[data-copy-share-link]')?.addEventListener('click', async (event) => {
+  const link = document.querySelector('[data-share-link]');
+  if (!link) return;
+  await navigator.clipboard.writeText(link.value);
+  event.currentTarget.textContent = 'Copied';
 });
 
 if ('serviceWorker' in navigator) {

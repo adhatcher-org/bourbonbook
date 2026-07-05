@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_compact_grid.html" import compact_grid %}
+{% block title %}Compact Collection · Bourbon Book{% endblock %}
+{% block page %}
+{% set active_page = 'compact' %}{% include '_collection_header.html' %}
+<main id="main" class="app-shell library-page compact-page">
+  <section class="compact-heading">
+    <div><p class="eyebrow">At-a-glance cabinet</p><h1>Compact Collection</h1></div>
+    <p><strong>{{ bottle_count }}</strong> {{ 'bottle' if bottle_count == 1 else 'bottles' }}, arranged by name</p>
+  </section>
+  <form class="catalog-tools compact-tools compact-owner-tools" method="get" action="/collection/compact">
+    <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search collection</span><input name="q" value="{{ q }}" placeholder="Find a bottle…" autocomplete="off"></label>
+    <a class="view-switch" href="/" aria-label="Switch to detailed collection view">Detailed view</a>
+    <button class="share-button" type="submit" form="share-collection-form">{{ 'Replace share link' if user.collection_share_token_hash else 'Share collection' }}</button>
+  </form>
+  <form id="share-collection-form" method="post" action="/collection/share" data-share-form data-sharing-active="{{ 'true' if user.collection_share_token_hash else 'false' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"></form>
+  {% if share_url %}<section class="share-link-panel" aria-live="polite"><div><p class="eyebrow">View-only link ready</p><h2>Pass the cabinet around.</h2><p>Anyone with this link can see your compact collection. Copy it now; Bourbon Book stores only its secure fingerprint.</p></div><div class="share-link-control"><input value="{{ share_url }}" readonly aria-label="Collection share link" data-share-link><button type="button" data-copy-share-link>Copy link</button></div></section>{% elif user.collection_share_token_hash %}<section class="sharing-status"><span aria-hidden="true"></span><p><strong>Sharing is active.</strong> Your existing link still works.</p><form method="post" action="/collection/share/disable"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Disable sharing</button></form></section>{% endif %}
+  {% if bottles %}{{ compact_grid(bottles, '/media', true) }}{% else %}<section class="empty-state"><div class="empty-bottle" aria-hidden="true"><span></span></div><p class="eyebrow">Nothing on this shelf</p><h2>{{ 'No matching bottles' if q else 'Your collection is ready for its first bottle.' }}</h2>{% if q %}<a class="secondary-button" href="/collection/compact">Clear search</a>{% else %}<a class="primary-button" href="/bottles/new">Add bottle</a>{% endif %}</section>{% endif %}
+</main>
+{% include '_mobile_nav.html' %}
+{% endblock %}

@@ -23,6 +23,10 @@ class User(Base):
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     session_version: Mapped[int] = mapped_column(Integer, default=1)
+    collection_share_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
+    collection_shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     bottles: Mapped[list[Bottle]] = relationship(back_populates="owner", cascade="all, delete")
@@ -68,6 +72,7 @@ class Bottle(Base):
     warehouse: Mapped[str] = mapped_column(String(80), default="")
     floor: Mapped[str] = mapped_column(String(80), default="")
     status: Mapped[str] = mapped_column(String(20), default="Unopened")
+    on_shopping_list: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     fill_level: Mapped[int] = mapped_column(Integer, default=100)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     storage_location: Mapped[str] = mapped_column(String(180), default="")

@@ -53,6 +53,12 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             "user_tokens",
             "users",
         }
+        bottle_columns = {
+            column["name"] for column in inspect(database.engine).get_columns("bottles")
+        }
+        assert "on_shopping_list" in bottle_columns
+        user_columns = {column["name"] for column in inspect(database.engine).get_columns("users")}
+        assert {"collection_share_token_hash", "collection_shared_at"} <= user_columns
         assert current_revision(database) == HEAD_REVISION
     finally:
         database.engine.dispose()

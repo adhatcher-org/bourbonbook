@@ -1,0 +1,13 @@
+<header class="topbar">
+  <a class="wordmark" href="/" aria-label="Bourbon Book home"><span>BB</span><b>Bourbon Book</b></a>
+  <nav class="desktop-nav" aria-label="Primary navigation">
+    <a class="{{ 'active' if active_page == 'collection' }}" href="/">Collection</a>
+    <a class="{{ 'active' if active_page == 'compact' }}" href="/collection/compact">Compact view</a>
+    <a class="{{ 'active' if active_page == 'shopping' }}" href="/shopping-list">Shopping list</a>
+  </nav>
+  <div class="profile-cluster">
+    {% if user.is_admin %}<a class="profile-name" href="/admin/users">Admin</a>{% endif %}
+    <a class="profile-name" href="/profile">{{ user.screen_name }}</a>
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Sign out</button></form>
+  </div>
+</header>

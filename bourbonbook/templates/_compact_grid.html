@@ -1,0 +1,10 @@
+{% macro compact_grid(bottles, media_prefix, link_bottles=false) %}
+<section class="compact-grid" aria-label="Compact bottle collection">
+  {% for bottle in bottles %}
+  {% if link_bottles %}<a class="compact-bottle reveal" href="/bottles/{{ bottle.id }}" style="--delay: {{ [loop.index0 * 20, 300]|min }}ms">{% else %}<article class="compact-bottle reveal" style="--delay: {{ [loop.index0 * 20, 300]|min }}ms">{% endif %}
+    <div class="compact-photo">{% if bottle.photo_name %}<img src="{{ media_prefix }}/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle" loading="lazy">{% else %}<div class="bottle-placeholder" aria-hidden="true">BB</div>{% endif %}{% if bottle.quantity > 1 %}<span>×{{ bottle.quantity }}</span>{% endif %}</div>
+    <h2>{{ bottle.name }}</h2><p>{{ bottle.brand or bottle.spirit_type }}</p>
+  {% if link_bottles %}</a>{% else %}</article>{% endif %}
+  {% endfor %}
+</section>
+{% endmacro %}

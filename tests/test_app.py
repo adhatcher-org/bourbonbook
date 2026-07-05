@@ -13,6 +13,7 @@ from bourbonbook.config import Settings
 from bourbonbook.main import create_app
 from bourbonbook.migrations import bootstrap_database
 from bourbonbook.models import Bottle, User
+from bourbonbook.tokens import token_digest
 
 
 def make_client(tmp_path: Path) -> tuple[TestClient, object]:
@@ -291,3 +292,221 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert photo_match.group(1) != refreshed_photo.group(1)
         assert client.get(f"/media/{refreshed_photo.group(1)}").status_code == 404
         assert client.get("/media/" + photo_match.group(1)).status_code == 200
+
+
+def test_collection_defaults_to_name_and_hides_empty_bottles(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            session.add_all(
+                [
+                    Bottle(owner_id=owner.id, name="Woodford Reserve"),
+                    Bottle(owner_id=owner.id, name="Angel's Envy"),
+                    Bottle(owner_id=owner.id, name="Empty Eagle Rare", status="Empty"),
+                ]
+            )
+            session.commit()
+
+        library = client.get("/")
+        assert library.text.index("Angel&#39;s Envy") < library.text.index("Woodford Reserve")
+        assert "Empty Eagle Rare" not in library.text
+        assert '<option value="name" selected>Name</option>' in library.text
+
+        compact = client.get("/collection/compact")
+        assert compact.status_code == 200
+        assert compact.text.index("Angel&#39;s Envy") < compact.text.index("Woodford Reserve")
+        assert "Empty Eagle Rare" not in compact.text
+
+
+def test_marking_empty_requires_a_choice_and_can_move_to_shopping_list(
+    tmp_path: Path,
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            bottle = Bottle(owner_id=owner.id, name="Eagle Rare", status="Opened")
+            session.add(bottle)
+            session.commit()
+            bottle_id = bottle.id
+
+        edit = client.get(f"/bottles/{bottle_id}/edit")
+        no_choice = client.post(
+            f"/bottles/{bottle_id}/edit",
+            data={
+                "csrf_token": csrf(edit),
+                "name": "Eagle Rare",
+                "status": "Empty",
+                "fill_level": "0",
+                "quantity": "1",
+            },
+            follow_redirects=False,
+        )
+        assert no_choice.headers["location"].endswith("/edit?empty=1")
+
+        decision_page = client.get(no_choice.headers["location"])
+        assert "What should happen to this bottle?" in decision_page.text
+        moved = client.post(
+            f"/bottles/{bottle_id}/edit",
+            data={
+                "csrf_token": csrf(decision_page),
+                "name": "Eagle Rare",
+                "status": "Empty",
+                "fill_level": "0",
+                "quantity": "1",
+                "empty_action": "shopping",
+            },
+            follow_redirects=False,
+        )
+        assert moved.headers["location"] == "/shopping-list"
+        assert "Eagle Rare" not in client.get("/").text
+        assert "Eagle Rare" in client.get("/shopping-list").text
+
+        with app.state.database.session_factory() as session:
+            bottle = session.get(Bottle, bottle_id)
+            assert bottle.status == "Empty"
+            assert bottle.on_shopping_list is True
+
+            removable = Bottle(owner_id=bottle.owner_id, name="Finished Bottle", status="Opened")
+            session.add(removable)
+            session.commit()
+            removable_id = removable.id
+
+        removable_edit = client.get(f"/bottles/{removable_id}/edit")
+        removed = client.post(
+            f"/bottles/{removable_id}/edit",
+            data={
+                "csrf_token": csrf(removable_edit),
+                "name": "Finished Bottle",
+                "status": "Empty",
+                "fill_level": "0",
+                "quantity": "1",
+                "empty_action": "remove",
+            },
+            follow_redirects=False,
+        )
+        assert removed.headers["location"] == "/"
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, removable_id) is None
+
+
+def test_shopping_list_supports_photos_and_found_items_return_to_collection(
+    tmp_path: Path,
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        page = client.get("/shopping-list")
+        image_bytes = BytesIO()
+        Image.new("RGB", (90, 160), "#a65321").save(image_bytes, "PNG")
+        added = client.post(
+            "/shopping-list",
+            data={"csrf_token": csrf(page), "name": "Russell's Reserve 13", "brand": "Wild Turkey"},
+            files={"photo": ("label.png", image_bytes.getvalue(), "image/png")},
+            follow_redirects=False,
+        )
+        assert added.headers["location"] == "/shopping-list"
+        shopping = client.get("/shopping-list")
+        assert "Russell&#39;s Reserve 13" in shopping.text
+        photo_name = re.search(r'/media/([^"?]+)', shopping.text).group(1)
+        assert client.get(f"/media/{photo_name}").status_code == 200
+
+        with app.state.database.session_factory() as session:
+            item = session.scalar(select(Bottle).where(Bottle.name == "Russell's Reserve 13"))
+            item_id = item.id
+
+        found = client.post(
+            f"/shopping-list/{item_id}/purchased",
+            data={"csrf_token": csrf(shopping)},
+            follow_redirects=False,
+        )
+        assert found.headers["location"] == "/"
+        assert "Russell&#39;s Reserve 13" in client.get("/").text
+        with app.state.database.session_factory() as session:
+            item = session.get(Bottle, item_id)
+            assert item.status == "Unopened"
+            assert item.fill_level == 100
+            assert item.on_shopping_list is False
+
+
+def test_collection_share_link_is_anonymous_view_only_and_revocable(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        uploads = app.state.settings.data_dir / "uploads"
+        Image.new("RGB", (90, 160), "#8f4d22").save(uploads / "shared.jpg", "JPEG")
+        Image.new("RGB", (90, 160), "#333333").save(uploads / "empty.jpg", "JPEG")
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            session.add_all(
+                [
+                    Bottle(
+                        owner_id=owner.id,
+                        name="Shared Eagle Rare",
+                        brand="Eagle Rare",
+                        photo_name="shared.jpg",
+                    ),
+                    Bottle(
+                        owner_id=owner.id,
+                        name="Private Empty Bottle",
+                        status="Empty",
+                        on_shopping_list=True,
+                        photo_name="empty.jpg",
+                    ),
+                ]
+            )
+            session.commit()
+
+        compact = client.get("/collection/compact")
+        created = client.post(
+            "/collection/share",
+            data={"csrf_token": csrf(compact)},
+            follow_redirects=False,
+        )
+        assert created.headers["location"] == "/collection/compact"
+        owner_page = client.get(created.headers["location"])
+        match = re.search(r"http://localhost:8000/shared/([^\" ]+)", owner_page.text)
+        assert match
+        first_token = match.group(1)
+        first_path = f"/shared/{first_token}"
+
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner.collection_share_token_hash == token_digest(first_token)
+            assert owner.collection_share_token_hash != first_token
+
+        anonymous = TestClient(app)
+        shared = anonymous.get(first_path)
+        assert shared.status_code == 200
+        assert "Shared Eagle Rare" in shared.text
+        assert "Private Empty Bottle" not in shared.text
+        assert "/bottles/" not in shared.text
+        assert shared.headers["x-robots-tag"] == "noindex, nofollow"
+        assert shared.headers["cache-control"] == "private, no-store"
+        assert anonymous.get(f"{first_path}/media/shared.jpg").status_code == 200
+        assert anonymous.get(f"{first_path}/media/empty.jpg").status_code == 404
+
+        rotated = client.post(
+            "/collection/share",
+            data={"csrf_token": csrf(owner_page)},
+            follow_redirects=False,
+        )
+        rotated_page = client.get(rotated.headers["location"])
+        match = re.search(r"http://localhost:8000/shared/([^\" ]+)", rotated_page.text)
+        assert match
+        second_token = match.group(1)
+        second_path = f"/shared/{second_token}"
+        assert second_token != first_token
+        assert anonymous.get(first_path).status_code == 404
+        assert anonymous.get(second_path).status_code == 200
+
+        disabled = client.post(
+            "/collection/share/disable",
+            data={"csrf_token": csrf(rotated_page)},
+            follow_redirects=False,
+        )
+        assert disabled.headers["location"] == "/collection/compact"
+        assert anonymous.get(second_path).status_code == 404

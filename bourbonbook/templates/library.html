@@ -1,14 +1,7 @@
 {% extends "base.html" %}
 {% block title %}My Collection · Bourbon Book{% endblock %}
 {% block page %}
-<header class="topbar">
-  <a class="wordmark" href="/" aria-label="Bourbon Book home"><span>BB</span><b>Bourbon Book</b></a>
-  <div class="profile-cluster">
-    {% if user.is_admin %}<a class="profile-name" href="/admin/users">Admin</a>{% endif %}
-    <a class="profile-name" href="/profile">{{ user.screen_name }}</a>
-    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Sign out</button></form>
-  </div>
-</header>
+{% set active_page = 'collection' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell library-page">
   <section class="collection-head">
     <div>
@@ -22,9 +15,9 @@
   <form class="catalog-tools" method="get" action="/">
     <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search collection</span><input name="q" value="{{ q }}" placeholder="Search bottles…" autocomplete="off"></label>
     <label class="sort-field"><span class="sr-only">Sort collection</span><select name="sort" onchange="this.form.submit()">
+      <option value="name" {{ 'selected' if sort == 'name' }}>Name</option>
       <option value="newest" {{ 'selected' if sort == 'newest' }}>Newest</option>
       <option value="oldest" {{ 'selected' if sort == 'oldest' }}>Oldest</option>
-      <option value="name" {{ 'selected' if sort == 'name' }}>Name</option>
       <option value="value" {{ 'selected' if sort == 'value' }}>Value</option>
     </select></label>
   </form>
@@ -57,9 +50,5 @@
   </section>
   {% endif %}
 </main>
-<nav class="mobile-nav" aria-label="Primary navigation">
-  <a class="active" href="/"><span aria-hidden="true">▦</span>Collection</a>
-  <a class="nav-add" href="/bottles/new" aria-label="Add bottle"><span>＋</span></a>
-  <span class="nav-spacer" aria-hidden="true"></span>
-</nav>
+{% include '_mobile_nav.html' %}
 {% endblock %}

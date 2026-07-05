@@ -59,8 +59,11 @@ def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) ->
 
     openai_settings = settings_for(tmp_path, "openai")
 
-    async def fake_prices(name, settings):
+    async def fake_prices(name, settings, *, size=None):
+        assert size == "750ml"
         return {"msrp": 50.0}, [], "complete"
 
     monkeypatch.setattr("bourbonbook.openai_provider.search_prices", fake_prices)
-    assert asyncio.run(search_bottle_prices("Bottle", openai_settings))[0] == {"msrp": 50.0}
+    assert asyncio.run(search_bottle_prices("Bottle", openai_settings, size="750ml"))[0] == {
+        "msrp": 50.0
+    }

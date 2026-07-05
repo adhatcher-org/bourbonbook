@@ -50,7 +50,6 @@ VERIFIED_PRODUCTS: dict[str, dict[str, Any]] = {
             "size": "750ml",
             "age_statement": "",
             "msrp": 60.0,
-            "secondary_price": 156.0,
         },
     },
 }

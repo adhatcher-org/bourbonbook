@@ -24,7 +24,6 @@ FIELDS = (
     "status",
     "fill_level",
     "msrp",
-    "secondary_price",
 )
 
 PHOTO_PROMPT = """You are a meticulous American-whiskey bottle archivist. Inspect the entire image,
@@ -54,7 +53,7 @@ Field rules:
   50%.
 - If the exact product identity is unambiguous, established product knowledge may supply
   distilled_by and a general mash_bill such as "wheated bourbon". Never invent exact percentages.
-- MSRP and secondary_price must always be null; a photograph cannot establish current prices.
+- MSRP must always be null; a photograph cannot establish current pricing.
 - Use null for every uncertain or unreadable value. Numeric proof, ABV, and fill_level must not
   include symbols or units."""
 
@@ -63,7 +62,7 @@ def name_prompt(name: str) -> str:
     return f"""Identify the whiskey product named {name!r}. Use null when a value is unknown or
 varies by bottle. Numeric proof and ABV must not include symbols or units. Do not invent
 barrel-specific information, mash-bill percentages, or facts you are not highly confident about.
-This is an ungrounded lookup, so MSRP and secondary_price must always be null."""
+This is an ungrounded lookup, so MSRP must always be null."""
 
 
 def normalize_analysis(values: dict[str, Any]) -> dict[str, Any]:
@@ -111,10 +110,10 @@ async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, 
 
 
 async def search_bottle_prices(
-    name: str, settings: Settings
+    name: str, settings: Settings, *, size: str | None = None
 ) -> tuple[dict[str, float], list[dict[str, str]], str]:
     if settings.analysis_provider != "openai":
         return {}, [], "unavailable"
     from bourbonbook.openai_provider import search_prices
 
-    return await search_prices(name, settings)
+    return await search_prices(name, settings, size=size)

@@ -96,7 +96,7 @@ class Bottle(Base):
 
     @property
     def estimated_value(self) -> float:
-        unit_value = self.secondary_price or self.msrp or self.purchase_price or 0
+        unit_value = self.msrp or self.purchase_price or 0
         return unit_value * self.quantity
 
 

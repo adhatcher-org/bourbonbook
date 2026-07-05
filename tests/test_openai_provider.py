@@ -56,7 +56,6 @@ def test_openai_image_analysis_uses_structured_output(tmp_path, monkeypatch) -> 
                     status="Unopened",
                     fill_level=45,
                     msrp=None,
-                    secondary_price=None,
                 )
             )
 
@@ -121,13 +120,9 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
             return SimpleNamespace(
                 output_parsed=PriceAnalysis(
                     msrp=59.99,
-                    secondary_price=125,
                     msrp_source_title="Official price book",
                     msrp_source_url="https://example.com/msrp",
                     msrp_basis="Current official listing.",
-                    secondary_source_title="Completed auction",
-                    secondary_source_url="https://example.com/not-consulted",
-                    secondary_basis="Recent completed sale.",
                 ),
                 output=[FakeWebCall()],
             )
@@ -145,7 +140,7 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
     monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
 
     prices, sources, status = asyncio.run(
-        search_prices("Weller Antique 107", settings_for(tmp_path))
+        search_prices("Weller Antique 107", settings_for(tmp_path), size="750ml")
     )
 
     assert status == "complete"
@@ -160,6 +155,12 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
     ]
     assert captured["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
     assert captured["include"] == ["web_search_call.action.sources"]
+    assert "Search OHLQ.com first" in captured["input"]
+    assert "'750ml' bottle size" in captured["input"]
+    assert "reject prices for every other size" in captured["input"]
+    assert "If OHLQ is inaccessible" in captured["input"]
+    assert "broaden the web search" in captured["input"]
+    assert "secondary-market prices" in captured["input"]
 
 
 def test_missing_parsed_openai_outputs_are_unavailable(tmp_path, monkeypatch) -> None:

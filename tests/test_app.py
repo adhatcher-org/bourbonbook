@@ -432,6 +432,39 @@ def test_shopping_list_supports_photos_and_found_items_return_to_collection(
             assert item.on_shopping_list is False
 
 
+def test_preexisting_empty_bottles_appear_on_shopping_list(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            legacy_empty = Bottle(
+                owner_id=owner.id,
+                name="Legacy Empty Bottle",
+                status="Empty",
+                on_shopping_list=False,
+                fill_level=0,
+            )
+            session.add(legacy_empty)
+            session.commit()
+            bottle_id = legacy_empty.id
+
+        shopping = client.get("/shopping-list")
+        assert "Legacy Empty Bottle" in shopping.text
+
+        found = client.post(
+            f"/shopping-list/{bottle_id}/purchased",
+            data={"csrf_token": csrf(shopping)},
+            follow_redirects=False,
+        )
+        assert found.headers["location"] == "/"
+        assert "Legacy Empty Bottle" in client.get("/").text
+        with app.state.database.session_factory() as session:
+            bottle = session.get(Bottle, bottle_id)
+            assert bottle.status == "Unopened"
+            assert bottle.fill_level == 100
+
+
 def test_collection_share_link_is_anonymous_view_only_and_revocable(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}API Usage · Bourbon Book{% endblock %}
 {% block page %}
-<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>API usage</strong><span></span></header>
+{% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page admin-page">
   <section class="collection-head">
     <div><p class="eyebrow">Observability</p><h1>API usage</h1><p class="muted">Last {{ days }} day{{ "" if days == 1 else "s" }}</p></div>

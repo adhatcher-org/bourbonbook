@@ -1,13 +1,39 @@
 <header class="topbar">
-  <a class="wordmark" href="/" aria-label="Bourbon Book home"><span>BB</span><b>Bourbon Book</b></a>
-  <nav class="desktop-nav" aria-label="Primary navigation">
-    <a class="{{ 'active' if active_page == 'collection' }}" href="/">Collection</a>
-    <a class="{{ 'active' if active_page == 'compact' }}" href="/collection/compact">Compact view</a>
-    <a class="{{ 'active' if active_page == 'shopping' }}" href="/shopping-list">Shopping list</a>
-  </nav>
-  <div class="profile-cluster">
-    {% if user.is_admin %}<a class="profile-name" href="/admin/users">Admin</a>{% endif %}
-    <a class="profile-name" href="/profile">{{ user.screen_name }}</a>
-    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="ghost-button" type="submit">Sign out</button></form>
-  </div>
+  <details class="brand-menu" data-dropdown>
+    <summary class="brand-trigger" aria-label="Open navigation menu">
+      <img src="/images/bourbonbook.png" alt="" width="42" height="42">
+      <b>Bourbon Book</b>
+      <span aria-hidden="true"></span>
+    </summary>
+    <nav class="brand-menu-panel" aria-label="Primary navigation">
+      <a class="{{ 'active' if active_page == 'collection' }}" href="/"{% if active_page == 'collection' %} aria-current="page"{% endif %}>Collection</a>
+      <a class="{{ 'active' if active_page == 'compact' }}" href="/collection/compact"{% if active_page == 'compact' %} aria-current="page"{% endif %}>Compact view</a>
+      <a class="{{ 'active' if active_page == 'shopping' }}" href="/shopping-list"{% if active_page == 'shopping' %} aria-current="page"{% endif %}>Shopping list</a>
+    </nav>
+  </details>
+  <details class="account-menu" data-dropdown>
+    <summary class="account-trigger" aria-label="Open account menu">
+      <span>{{ user.screen_name }}</span>
+      {% if user.avatar_name %}
+      <img src="/avatars/{{ user.avatar_name }}" alt="" width="40" height="40">
+      {% else %}
+      <i aria-hidden="true">{{ user.screen_name[:1]|upper }}</i>
+      {% endif %}
+    </summary>
+    <nav class="account-menu-panel" aria-label="Account navigation">
+      <a href="/profile">Profile</a>
+      {% if user.is_admin %}
+      <div class="account-menu-divider" role="separator"></div>
+      <p>Administration</p>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/usage">API usage</a>
+      <a href="/admin/config">Configuration</a>
+      {% endif %}
+      <div class="account-menu-divider" role="separator"></div>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Sign out</button>
+      </form>
+    </nav>
+  </details>
 </header>

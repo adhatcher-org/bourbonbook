@@ -2,8 +2,6 @@
 .github
 .venv
 data
-images
 tests
 *.pyc
 .env
-

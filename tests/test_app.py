@@ -122,6 +122,14 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         assert library.status_code == 200
         assert "My Collection" in library.text
         assert "Your shelf is waiting" in library.text
+        assert 'src="/images/bourbonbook.png"' in library.text
+        assert '<details class="brand-menu"' in library.text
+        assert '<details class="account-menu"' in library.text
+        assert 'action="/logout"' in library.text
+        assert 'href="/admin/users"' not in library.text
+        assert 'href="/collection/compact"' in library.text
+        assert 'href="/shopping-list"' in library.text
+        assert client.get("/images/bourbonbook.png").status_code == 200
         response = client.post(
             "/logout", data={"csrf_token": csrf(library)}, follow_redirects=False
         )

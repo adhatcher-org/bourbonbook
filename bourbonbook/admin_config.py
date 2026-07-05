@@ -52,7 +52,6 @@ CONFIG_FIELDS = (
         minimum=1,
         maximum=100,
     ),
-    ConfigField("DATA_DIR", "data_dir", "Data directory", "Storage", "path"),
     ConfigField(
         "APP_ENV", "app_env", "Environment", "Application", "choice", ("development", "production")
     ),
@@ -276,8 +275,6 @@ def _parse_field(field: ConfigField, raw: str) -> tuple[Any, str]:
         raise ValueError("SESSION_SECRET must be at least 32 characters.")
     if field.key == "DEFAULT_ADMIN_PASSWORD" and raw and len(raw) < 10:
         raise ValueError("DEFAULT_ADMIN_PASSWORD must be at least 10 characters.")
-    if field.kind == "path":
-        return Path(raw).expanduser().resolve(), raw
     return raw, raw
 
 

@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">Bourbon Book</title>
+  <desc id="desc">A dark brown leather-bound bourbon journal with gold lettering, a barrel emblem, and a glass of amber bourbon.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#f7ead6"/>
+    </linearGradient>
+    <radialGradient id="book" cx="50%" cy="32%" r="78%">
+      <stop stop-color="#542310"/>
+      <stop offset=".62" stop-color="#2a1008"/>
+      <stop offset="1" stop-color="#130805"/>
+    </radialGradient>
+    <linearGradient id="spine" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#2a1008"/>
+      <stop offset=".35" stop-color="#6b2b12"/>
+      <stop offset=".63" stop-color="#351207"/>
+      <stop offset="1" stop-color="#160805"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#fff0a8"/>
+      <stop offset=".22" stop-color="#d9912e"/>
+      <stop offset=".5" stop-color="#fff1a0"/>
+      <stop offset=".76" stop-color="#b96716"/>
+      <stop offset="1" stop-color="#ffca63"/>
+    </linearGradient>
+    <linearGradient id="pages" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#d89a4e"/>
+      <stop offset=".45" stop-color="#9b5628"/>
+      <stop offset="1" stop-color="#e7b66c"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#fff" stop-opacity=".55"/>
+      <stop offset=".18" stop-color="#fff" stop-opacity=".08"/>
+      <stop offset=".72" stop-color="#ffd5b4" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".48"/>
+    </linearGradient>
+    <linearGradient id="whiskey" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#ffb016"/>
+      <stop offset=".16" stop-color="#b94303"/>
+      <stop offset=".64" stop-color="#6f1601"/>
+      <stop offset="1" stop-color="#e86f05"/>
+    </linearGradient>
+    <radialGradient id="liquidGlow" cx="60%" cy="15%" r="75%">
+      <stop stop-color="#ffd64c" stop-opacity=".9"/>
+      <stop offset=".35" stop-color="#bd3f00" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#340700" stop-opacity=".8"/>
+    </radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur stdDeviation="23"/>
+    </filter>
+    <filter id="leather" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency=".045 .18" numOctaves="3" seed="17" result="noise"/>
+      <feColorMatrix in="noise" values="1 0 0 0 0  0 .52 0 0 0  0 0 .25 0 0  0 0 0 .3 0" result="grain"/>
+      <feComposite in="grain" in2="SourceAlpha" operator="in" result="texture"/>
+      <feBlend in="SourceGraphic" in2="texture" mode="soft-light"/>
+    </filter>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <clipPath id="glassBowl">
+      <path d="M489 555 C489 626 465 680 473 746 C480 815 529 870 625 875 C721 870 770 815 777 746 C785 680 761 626 761 555 Z"/>
+    </clipPath>
+    <g id="barrel">
+      <path d="M-42-55 C-25-66 25-66 42-55 L49-38 C55-9 53 20 42 52 C20 63-20 63-42 52 C-53 20-55-9-49-38Z" fill="#3b1809" stroke="url(#gold)" stroke-width="4"/>
+      <ellipse cy="-53" rx="41" ry="10" fill="#7d3a14" stroke="url(#gold)" stroke-width="4"/>
+      <ellipse cy="-53" rx="29" ry="5" fill="#2d1007" stroke="#d58a32" stroke-width="2"/>
+      <path d="M-43-35 Q0-25 43-35M-48-2 Q0 8 48-2M-46 30 Q0 40 46 30" fill="none" stroke="url(#gold)" stroke-width="5"/>
+      <path d="M-25-48 Q-31 0-23 53M0-48V57M25-48Q31 0 23 53" fill="none" stroke="#b56825" stroke-width="3"/>
+    </g>
+  </defs>
+
+  <rect width="1254" height="1254" fill="url(#bg)"/>
+  <rect x="133" y="91" width="988" height="1060" rx="240" fill="#70401f" opacity=".24" filter="url(#shadow)"/>
+  <rect x="131" y="76" width="992" height="1072" rx="248" fill="#37150b"/>
+  <rect x="169" y="112" width="842" height="981" rx="115" fill="#130805" opacity=".7"/>
+
+  <!-- page block -->
+  <path d="M244 953 H985 V1038 Q980 1077 931 1082 H274 Q230 1074 230 1034Z" fill="url(#pages)" stroke="#170905" stroke-width="13"/>
+  <path d="M258 984 H970M251 1002H970M249 1020H966M252 1041H956M269 1059H938" stroke="#5c2814" stroke-width="3" opacity=".75"/>
+
+  <!-- front cover -->
+  <path d="M315 121 H918 Q1009 122 1017 218 V890 Q1017 985 928 997 H319 Q229 994 226 926 V213 Q228 135 315 121Z" fill="url(#book)" stroke="#130704" stroke-width="12"/>
+  <path d="M352 151 H905 Q970 151 980 214 V882 Q979 956 913 966 H352Z" fill="none" stroke="#7a3215" stroke-width="5" opacity=".65"/>
+
+  <!-- spine -->
+  <path d="M318 121 Q337 125 335 164 V929 Q338 976 305 990 Q226 981 226 919 V214 Q229 145 300 123Z" fill="url(#spine)" stroke="#180805" stroke-width="8"/>
+  <path d="M334 130 V970" stroke="#a95821" stroke-opacity=".3" stroke-width="5"/>
+  <g fill="none" stroke="url(#gold)" stroke-width="7">
+    <path d="M234 244 Q274 205 330 212M232 267 Q273 229 331 233"/>
+    <path d="M231 462 Q273 423 332 432M231 486 Q273 446 332 454"/>
+    <path d="M231 731 Q274 693 333 701M231 755 Q274 716 333 724"/>
+    <path d="M231 909 Q274 870 334 880M234 933 Q276 893 334 902"/>
+  </g>
+  <use href="#barrel" transform="translate(273 598) rotate(-7) scale(.58)"/>
+
+  <!-- gold border -->
+  <path d="M402 155 H939 Q943 177 968 183 V892 Q945 898 939 923 H374 V183 Q395 177 402 155Z" fill="none" stroke="#52220e" stroke-width="8"/>
+  <path d="M403 156 H938 Q942 177 968 183 V891 Q945 896 939 922 H375 V183 Q396 177 403 156Z" fill="none" stroke="url(#gold)" stroke-width="3"/>
+
+  <!-- top emblem -->
+  <use href="#barrel" transform="translate(657 258) scale(.74)"/>
+
+  <!-- title -->
+  <text x="677" y="439" fill="#170905" stroke="#170905" stroke-width="8" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="8">BOURBON</text>
+  <text x="677" y="439" fill="url(#gold)" stroke="#ffdc7a" stroke-width="1.2" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="8">BOURBON</text>
+  <path d="M454 486 H536M795 486H879" stroke="url(#gold)" stroke-width="4"/>
+  <text x="665" y="502" fill="url(#gold)" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-size="49" letter-spacing="18">BOOK</text>
+
+  <!-- warm cast behind glass -->
+  <ellipse cx="633" cy="895" rx="173" ry="42" fill="#d84b00" opacity=".34" filter="url(#softGlow)"/>
+
+  <!-- whiskey clipped into bowl -->
+  <g clip-path="url(#glassBowl)">
+    <rect x="464" y="726" width="325" height="170" fill="url(#whiskey)"/>
+    <ellipse cx="626" cy="738" rx="154" ry="40" fill="#ff8a06" stroke="#ffbd35" stroke-width="5"/>
+    <ellipse cx="626" cy="745" rx="136" ry="28" fill="#6c1601"/>
+    <ellipse cx="626" cy="774" rx="150" ry="127" fill="url(#liquidGlow)" opacity=".78"/>
+    <path d="M505 760 Q625 805 754 760" fill="none" stroke="#ff980d" stroke-width="5" opacity=".75"/>
+    <ellipse cx="626" cy="847" rx="113" ry="28" fill="#ff8a00" opacity=".5"/>
+  </g>
+
+  <!-- glass outline and reflections -->
+  <path d="M489 555 C489 626 465 680 473 746 C480 815 529 870 625 875 C721 870 770 815 777 746 C785 680 761 626 761 555" fill="url(#glass)" stroke="#f9d1b5" stroke-width="6"/>
+  <ellipse cx="625" cy="555" rx="136" ry="29" fill="#160904" fill-opacity=".35" stroke="#ffe0c2" stroke-width="6"/>
+  <ellipse cx="625" cy="557" rx="121" ry="20" fill="#341309" fill-opacity=".66" stroke="#7d3d24" stroke-width="3"/>
+  <path d="M537 569 Q529 646 504 724 Q495 761 516 800" fill="none" stroke="#fff8ef" stroke-width="19" stroke-linecap="round" opacity=".73"/>
+  <path d="M548 570 Q542 638 528 683" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".85"/>
+  <path d="M737 580 Q746 655 763 709" fill="none" stroke="#ffc9a3" stroke-width="8" stroke-linecap="round" opacity=".32"/>
+
+  <!-- glass foot -->
+  <path d="M555 849 Q559 891 541 906 Q520 920 531 936 Q557 958 625 958 Q693 958 719 936 Q730 920 709 906 Q691 891 695 849" fill="url(#glass)" stroke="#f7d6c2" stroke-width="6"/>
+  <ellipse cx="625" cy="935" rx="92" ry="25" fill="#371106" fill-opacity=".45" stroke="#ffe5cc" stroke-width="6"/>
+  <ellipse cx="625" cy="935" rx="59" ry="13" fill="#ff8600" fill-opacity=".5" stroke="#8c3b12" stroke-width="3"/>
+  <path d="M570 874 Q625 894 682 874" fill="none" stroke="#fff3e7" stroke-width="9" opacity=".7"/>
+
+  <!-- bookmark -->
+  <path d="M357 1050 H433 V1148 L395 1121 L357 1148Z" fill="#391307" stroke="#170805" stroke-width="4"/>
+</svg>

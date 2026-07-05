@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Configuration · Bourbon Book{% endblock %}
 {% block page %}
-<header class="editor-bar"><a class="back-button" href="/admin/users" aria-label="Back">←</a><strong>Configuration</strong><a class="edit-button" href="/admin/usage">Usage</a></header>
+{% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page admin-page config-page">
   <section class="collection-head">
     <div><p class="eyebrow">Administration</p><h1>Configuration</h1><p class="muted">Saved to {{ config_path }}. Changes apply after restart.</p></div>

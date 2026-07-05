@@ -43,6 +43,35 @@ def test_admin_routes_require_admin(tmp_path: Path) -> None:
         assert client.get("/admin/config").status_code == 403
 
 
+def test_admin_account_menu_lists_all_admin_screens_in_order(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        target_id = add_verified_user(app)
+
+        page = client.get("/")
+
+        profile = page.text.index('href="/profile"')
+        divider = page.text.index('class="account-menu-divider"', profile)
+        users = page.text.index('href="/admin/users"', divider)
+        usage = page.text.index('href="/admin/usage"', users)
+        config = page.text.index('href="/admin/config"', usage)
+        signout = page.text.index('action="/logout"', config)
+        assert profile < divider < users < usage < config < signout
+
+        for path in (
+            "/admin/users",
+            "/admin/usage",
+            "/admin/config",
+            f"/admin/users/{target_id}",
+        ):
+            admin_page = client.get(path)
+            assert '<details class="brand-menu"' in admin_page.text
+            assert '<details class="account-menu"' in admin_page.text
+            assert 'class="editor-bar"' not in admin_page.text
+
+
 def config_form(app, **changes: str) -> dict[str, str]:
     values = settings_values(app.state.settings)
     for field in CONFIG_FIELDS:

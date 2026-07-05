@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import select
 
 from bourbonbook.auth import hash_password
@@ -188,7 +190,63 @@ def test_profile_validation_and_updates(tmp_path: Path) -> None:
         assert "at least 10 characters" in short.text
 
 
-def test_profile_deletion_removes_catalog_and_photo(tmp_path: Path) -> None:
+def test_profile_avatar_upload_render_and_remove(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    source = BytesIO()
+    Image.new("RGB", (900, 600), "#8b4513").save(source, "PNG")
+    with client:
+        register(client, "avatarowner")
+        profile = client.get("/profile")
+        uploaded = client.post(
+            "/profile/avatar",
+            data={"csrf_token": csrf(profile)},
+            files={"avatar": ("portrait.png", source.getvalue(), "image/png")},
+        )
+        assert uploaded.status_code == 200
+        assert "Avatar updated" in uploaded.text
+
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "avatarowner@example.com"))
+            avatar_name = owner.avatar_name
+        assert avatar_name
+        avatar_path = tmp_path / "avatars" / avatar_name
+        with Image.open(avatar_path) as avatar:
+            assert avatar.size == (512, 512)
+
+        library = client.get("/")
+        assert f'src="/avatars/{avatar_name}"' in library.text
+        avatar_response = client.get(f"/avatars/{avatar_name}")
+        assert avatar_response.status_code == 200
+        assert avatar_response.headers["content-type"] == "image/jpeg"
+
+        removed = client.post(
+            "/profile/avatar/remove",
+            data={"csrf_token": csrf(uploaded)},
+        )
+        assert "Avatar removed" in removed.text
+        assert not avatar_path.exists()
+
+
+def test_profile_avatar_rejects_missing_and_invalid_uploads(tmp_path: Path) -> None:
+    client, _ = make_client(tmp_path)
+    with client:
+        register(client, "badavatar")
+        profile = client.get("/profile")
+        missing = client.post(
+            "/profile/avatar",
+            data={"csrf_token": csrf(profile)},
+        )
+        assert "Choose an image" in missing.text
+        invalid = client.post(
+            "/profile/avatar",
+            data={"csrf_token": csrf(profile)},
+            files={"avatar": ("avatar.jpg", b"not an image", "image/jpeg")},
+        )
+        assert invalid.status_code == 400
+        assert "valid image" in invalid.text
+
+
+def test_profile_deletion_removes_catalog_photo_and_avatar(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:
         register(client, "deleteowner")
@@ -196,8 +254,13 @@ def test_profile_deletion_removes_catalog_and_photo(tmp_path: Path) -> None:
         upload_dir.mkdir(exist_ok=True)
         photo = upload_dir / "owned.jpg"
         photo.write_bytes(b"photo")
+        avatar_dir = tmp_path / "avatars"
+        avatar_dir.mkdir(exist_ok=True)
+        avatar = avatar_dir / "avatar.jpg"
+        avatar.write_bytes(b"avatar")
         with app.state.database.session_factory() as session:
             owner = session.scalar(select(User).where(User.email == "deleteowner@example.com"))
+            owner.avatar_name = avatar.name
             session.add(Bottle(owner_id=owner.id, name="Owned", photo_name=photo.name))
             session.commit()
 
@@ -219,6 +282,7 @@ def test_profile_deletion_removes_catalog_and_photo(tmp_path: Path) -> None:
         )
         assert deleted.headers["location"] == "/account-deleted"
         assert not photo.exists()
+        assert not avatar.exists()
         assert "Account deleted" in client.get("/account-deleted").text
 
 

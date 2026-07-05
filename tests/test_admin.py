@@ -107,6 +107,26 @@ def test_admin_config_rejects_invalid_choices_without_writing(tmp_path: Path) ->
         assert not (tmp_path / ".env").exists()
 
 
+def test_admin_config_cannot_override_deployment_data_directory(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/config")
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(app),
+                "csrf_token": csrf(page),
+                "DATA_DIR": "/etc",
+            },
+        )
+
+        assert response.status_code == 200
+        assert app.state.settings.data_dir == tmp_path
+        assert "DATA_DIR=" not in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
 def test_admin_can_request_process_restart(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     restarted = []

@@ -290,6 +290,22 @@ async def enrich_bottle_by_name(
     return await analyze_bottle_name(bottle.name, settings)
 
 
+def normalized_analysis_status(status: str) -> str:
+    if status == "complete":
+        return "complete"
+    if status == "verified":
+        return "verified"
+    return "unavailable"
+
+
+def analysis_redirect_query(status: str) -> str:
+    if status == "complete":
+        return "?analysis=complete"
+    if status == "verified":
+        return "?analysis=verified"
+    return "?analysis=unavailable"
+
+
 def owned_bottle(session: Session, user: User, bottle_id: int) -> Bottle | None:
     return session.scalar(select(Bottle).where(Bottle.id == bottle_id, Bottle.owner_id == user.id))
 
@@ -1428,6 +1444,7 @@ def register_routes(app: FastAPI) -> None:
                 analysis, analysis_status = await analyze_bottle(
                     app.state.settings.data_dir / "uploads" / photo_name, app.state.settings
                 )
+            analysis_status = normalized_analysis_status(analysis_status)
             bottle = Bottle(
                 owner_id=user.id,
                 photo_name=photo_name,
@@ -1440,7 +1457,7 @@ def register_routes(app: FastAPI) -> None:
                 )
                 apply_analysis(bottle, enrichment)
                 if enrichment:
-                    bottle.analysis_status = enrichment_status
+                    bottle.analysis_status = normalized_analysis_status(enrichment_status)
                 with usage_context(app.state.usage_recorder, user.id):
                     price_status = await refresh_prices(bottle, app.state.settings)
                 if price_status == "complete":
@@ -1485,6 +1502,7 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            saved_bottle_id = bottle.id
             previous_status = bottle.status
             previous_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
             update_bottle_from_form(bottle, form)
@@ -1500,7 +1518,8 @@ def register_routes(app: FastAPI) -> None:
                     bottle.fill_level = 0
                 else:
                     session.rollback()
-                    return RedirectResponse(f"/bottles/{bottle_id}/edit?empty=1", 303)
+                    edit_path = app.url_path_for("bottle_edit", bottle_id=str(saved_bottle_id))
+                    return RedirectResponse(f"{edit_path}?empty=1", 303)
             elif bottle.status != "Empty":
                 bottle.on_shopping_list = False
             current_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
@@ -1517,9 +1536,12 @@ def register_routes(app: FastAPI) -> None:
                 )
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
+            on_shopping_list = bottle.on_shopping_list
             session.commit()
-        destination = "/shopping-list" if bottle.on_shopping_list else f"/bottles/{bottle_id}"
-        return RedirectResponse(destination, 303)
+        if on_shopping_list:
+            return RedirectResponse("/shopping-list", 303)
+        detail_path = app.url_path_for("bottle_detail", bottle_id=str(saved_bottle_id))
+        return RedirectResponse(detail_path, 303)
 
     @app.post("/bottles/{bottle_id}/analyze")
     async def refresh_bottle_analysis(request: Request, bottle_id: int) -> Response:
@@ -1531,6 +1553,7 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            saved_bottle_id = bottle.id
             update_bottle_from_form(bottle, form)
             upload = form.get("photo")
             if isinstance(upload, StarletteUploadFile) and upload.filename:
@@ -1571,9 +1594,11 @@ def register_routes(app: FastAPI) -> None:
                     price_status = await refresh_prices(bottle, app.state.settings)
                 if price_status == "complete":
                     analysis_status = price_status
+            analysis_status = normalized_analysis_status(analysis_status)
             bottle.analysis_status = analysis_status
             session.commit()
-        return RedirectResponse(f"/bottles/{bottle_id}/edit?analysis={analysis_status}", 303)
+        edit_path = app.url_path_for("bottle_edit", bottle_id=str(saved_bottle_id))
+        return RedirectResponse(f"{edit_path}{analysis_redirect_query(analysis_status)}", 303)
 
     @app.post("/bottles/{bottle_id}/delete")
     async def delete_bottle(request: Request, bottle_id: int) -> Response:

@@ -178,7 +178,10 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     with client:
         register(client)
         new_page = client.get("/bottles/new")
-        assert 'name="photo" accept="image/*" required data-photo-input' in new_page.text
+        assert (
+            'name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" '
+            "required data-photo-input" in new_page.text
+        )
         assert 'name="photo" accept="image/*" capture=' not in new_page.text
         image_bytes = BytesIO()
         Image.new("RGB", (120, 200), "#7a3f1c").save(image_bytes, "PNG")
@@ -292,6 +295,37 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert photo_match.group(1) != refreshed_photo.group(1)
         assert client.get(f"/media/{refreshed_photo.group(1)}").status_code == 404
         assert client.get("/media/" + photo_match.group(1)).status_code == 200
+
+
+def test_analysis_redirect_rejects_untrusted_provider_status(tmp_path: Path, monkeypatch) -> None:
+    async def fake_name_analysis(name, settings):
+        return {}, "https://attacker.example/phish"
+
+    monkeypatch.setattr("bourbonbook.main.analyze_bottle_name", fake_name_analysis)
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            bottle = Bottle(owner_id=owner.id, name="Uncatalogued Bottle")
+            session.add(bottle)
+            session.commit()
+            bottle_id = bottle.id
+
+        edit = client.get(f"/bottles/{bottle_id}/edit")
+        response = client.post(
+            f"/bottles/{bottle_id}/analyze",
+            data={
+                "csrf_token": csrf(edit),
+                "analysis_mode": "name",
+                "name": "Uncatalogued Bottle",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.headers["location"] == (f"/bottles/{bottle_id}/edit?analysis=unavailable")
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, bottle_id).analysis_status == "unavailable"
 
 
 def test_collection_defaults_to_name_and_hides_empty_bottles(tmp_path: Path) -> None:

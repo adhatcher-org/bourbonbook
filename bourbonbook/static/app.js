@@ -1,12 +1,30 @@
 const photoInput = document.querySelector('[data-photo-input]');
 if (photoInput) {
-  photoInput.addEventListener('change', () => {
+  photoInput.addEventListener('change', async () => {
     const file = photoInput.files?.[0];
     if (!file) return;
-    const preview = document.querySelector('[data-photo-preview]');
-    preview.src = URL.createObjectURL(file);
-    preview.hidden = false;
-    document.querySelector('[data-photo-drop]').classList.add('has-photo');
+    const preview = document.querySelector('img[data-photo-preview]');
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+    if (!(preview instanceof HTMLImageElement) || !allowedTypes.has(file.type)) return;
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      try {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        preview.src = canvas.toDataURL('image/jpeg', 0.9);
+      } finally {
+        bitmap.close();
+      }
+      preview.hidden = false;
+      document.querySelector('[data-photo-drop]').classList.add('has-photo');
+    } catch {
+      preview.removeAttribute('src');
+      preview.hidden = true;
+      document.querySelector('[data-photo-drop]').classList.remove('has-photo');
+    }
   });
 }
 

@@ -3,6 +3,8 @@
 {% block page %}
 <form method="post" action="/bottles/{{ bottle.id }}/edit" enctype="multipart/form-data" class="edit-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="original_status" value="{{ bottle.status }}">
+  <input type="hidden" name="empty_action" value="">
   <header class="editor-bar"><a class="cancel-button" href="{{ '/' if is_new else '/bottles/' ~ bottle.id }}">{{ "Later" if is_new else "Cancel" }}</a><strong>{{ "Review details" if is_new else "Edit bottle" }}</strong><button class="save-button" type="submit">Save</button></header>
   <main id="main" class="app-shell edit-page">
     {% if is_new or analysis_result %}{% set analysis_ok = bottle.analysis_status in ['complete', 'verified'] %}<div class="analysis-banner analysis-{{ bottle.analysis_status }}" role="status"><span aria-hidden="true">{{ "✦" if analysis_ok else "!" }}</span><div><strong>{{ "Verified bottle details applied" if bottle.analysis_status == "verified" else "Bottle details updated" if analysis_result and analysis_ok else "Label analysis complete" if analysis_ok else "Bottle lookup unavailable" }}</strong><p>{{ "Specifications were matched against the verified catalog. Review them before saving." if bottle.analysis_status == "verified" else "Review the refreshed fields before saving." if analysis_result and analysis_ok else "Review what the model found, then save your bottle." if analysis_ok else "Your existing details are unchanged. You can edit them manually or try again." }}</p></div></div>{% endif %}
@@ -33,6 +35,9 @@
     <button class="primary-button wide mobile-save" type="submit">Save bottle</button>
   </main>
 </form>
+<dialog class="empty-dialog" data-empty-dialog {{ 'data-open-on-load' if request.query_params.get('empty') }}>
+  <form method="dialog"><button class="dialog-close" value="cancel" aria-label="Cancel">×</button><p class="eyebrow">The last pour</p><h2>What should happen to this bottle?</h2><p>Remove it from your collection, or keep the label and add it to your shopping list.</p><div class="dialog-actions"><button class="primary-button" value="shopping" data-empty-choice="shopping">Add to shopping list</button><button class="secondary-button danger-button" value="remove" data-empty-choice="remove">Remove from collection</button><button class="text-button" value="cancel">Cancel</button></div></form>
+</dialog>
 <div class="analyzing" data-analysis-overlay hidden role="status" aria-live="polite"><span class="spinner"></span><strong>Refreshing bottle details…</strong><small>Existing values are preserved when the analyzer cannot verify a field.</small></div>
 {% if not is_new %}<form method="post" action="/bottles/{{ bottle.id }}/delete" class="delete-form" data-delete-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Delete bottle</button></form>{% endif %}
 {% endblock %}

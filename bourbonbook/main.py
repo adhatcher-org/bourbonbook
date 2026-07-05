@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import signal
 import time
 from contextlib import asynccontextmanager
@@ -72,6 +73,7 @@ from bourbonbook.tokens import (
     consume_token,
     find_valid_token,
     revoke_tokens,
+    token_digest,
 )
 
 logger = logging.getLogger(__name__)
@@ -290,6 +292,59 @@ async def enrich_bottle_by_name(
 
 def owned_bottle(session: Session, user: User, bottle_id: int) -> Bottle | None:
     return session.scalar(select(Bottle).where(Bottle.id == bottle_id, Bottle.owner_id == user.id))
+
+
+def collection_statement(user: User, q: str = "", sort: str = "name"):
+    statement = select(Bottle).where(
+        Bottle.owner_id == user.id,
+        Bottle.status != "Empty",
+        Bottle.on_shopping_list.is_(False),
+    )
+    if q.strip():
+        term = f"%{q.strip()}%"
+        statement = statement.where(
+            or_(Bottle.name.ilike(term), Bottle.brand.ilike(term), Bottle.release.ilike(term))
+        )
+    orders = {
+        "name": (func.lower(Bottle.name).asc(), Bottle.created_at.desc()),
+        "value": (Bottle.secondary_price.desc().nullslast(), func.lower(Bottle.name).asc()),
+        "oldest": (Bottle.created_at.asc(),),
+        "newest": (Bottle.created_at.desc(),),
+    }
+    selected_sort = sort if sort in orders else "name"
+    return statement.order_by(*orders[selected_sort]), selected_sort
+
+
+def remove_bottle_photo(bottle: Bottle, upload_dir: Path) -> None:
+    if bottle.photo_name:
+        (upload_dir / bottle.photo_name).unlink(missing_ok=True)
+
+
+def selected_upload(form: Any, *field_names: str) -> StarletteUploadFile | None:
+    for field_name in field_names:
+        upload = form.get(field_name)
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            return upload
+    return None
+
+
+def shared_collection_user(session: Session, raw_token: str) -> User | None:
+    if not raw_token or len(raw_token) > 128:
+        return None
+    return session.scalar(
+        select(User).where(User.collection_share_token_hash == token_digest(raw_token))
+    )
+
+
+def protect_shared_response(response: Response) -> Response:
+    response.headers.update(
+        {
+            "Cache-Control": "private, no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow",
+        }
+    )
+    return response
 
 
 def render_admin_user(
@@ -1154,27 +1209,12 @@ def register_routes(app: FastAPI) -> None:
         return RedirectResponse("/login", 303)
 
     @app.get("/", response_class=HTMLResponse)
-    def library(request: Request, q: str = "", sort: str = "newest") -> Response:
+    def library(request: Request, q: str = "", sort: str = "name") -> Response:
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
-            statement = select(Bottle).where(Bottle.owner_id == user.id)
-            if q.strip():
-                term = f"%{q.strip()}%"
-                statement = statement.where(
-                    or_(
-                        Bottle.name.ilike(term),
-                        Bottle.brand.ilike(term),
-                        Bottle.release.ilike(term),
-                    )
-                )
-            orders = {
-                "name": Bottle.name.asc(),
-                "value": Bottle.secondary_price.desc().nullslast(),
-                "oldest": Bottle.created_at.asc(),
-                "newest": Bottle.created_at.desc(),
-            }
-            bottles = list(session.scalars(statement.order_by(orders.get(sort, orders["newest"]))))
-            all_bottles = list(session.scalars(select(Bottle).where(Bottle.owner_id == user.id)))
+            statement, selected_sort = collection_statement(user, q, sort)
+            bottles = list(session.scalars(statement))
+            all_bottles = list(session.scalars(collection_statement(user)[0]))
             bottle_count = sum(bottle.quantity for bottle in all_bottles)
             total_value = sum(bottle.estimated_value for bottle in all_bottles)
             return render(
@@ -1185,8 +1225,177 @@ def register_routes(app: FastAPI) -> None:
                 bottle_count=bottle_count,
                 total_value=total_value,
                 q=q,
-                sort=sort,
+                sort=selected_sort,
             )
+
+    @app.get("/collection/compact", response_class=HTMLResponse)
+    def compact_collection(request: Request, q: str = "") -> Response:
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottles = list(session.scalars(collection_statement(user, q)[0]))
+            share_url = request.session.pop("new_collection_share_url", None)
+            return render(
+                request,
+                "compact.html",
+                user=user,
+                bottles=bottles,
+                bottle_count=sum(bottle.quantity for bottle in bottles),
+                q=q,
+                share_url=share_url,
+            )
+
+    @app.post("/collection/share")
+    async def share_collection(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            raw_token = secrets.token_urlsafe(32)
+            user.collection_share_token_hash = token_digest(raw_token)
+            user.collection_shared_at = datetime.now(UTC)
+            session.commit()
+        request.session["new_collection_share_url"] = (
+            f"{app.state.settings.public_base_url}/shared/{raw_token}"
+        )
+        return RedirectResponse("/collection/compact", 303)
+
+    @app.post("/collection/share/disable")
+    async def disable_collection_share(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            user.collection_share_token_hash = None
+            user.collection_shared_at = None
+            session.commit()
+        request.session.pop("new_collection_share_url", None)
+        return RedirectResponse("/collection/compact", 303)
+
+    @app.get("/shared/{share_token}", response_class=HTMLResponse)
+    def shared_collection(request: Request, share_token: str, q: str = "") -> Response:
+        with app.state.database.session_factory() as session:
+            owner = shared_collection_user(session, share_token)
+            if not owner:
+                return protect_shared_response(Response(status_code=404))
+            bottles = list(session.scalars(collection_statement(owner, q)[0]))
+            response = render(
+                request,
+                "shared_collection.html",
+                owner=owner,
+                bottles=bottles,
+                bottle_count=sum(bottle.quantity for bottle in bottles),
+                q=q,
+                share_token=share_token,
+            )
+            return protect_shared_response(response)
+
+    @app.get("/shared/{share_token}/media/{photo_name}")
+    def shared_collection_photo(share_token: str, photo_name: str) -> Response:
+        with app.state.database.session_factory() as session:
+            owner = shared_collection_user(session, share_token)
+            if not owner:
+                return protect_shared_response(Response(status_code=404))
+            bottle = session.scalar(
+                select(Bottle).where(
+                    Bottle.owner_id == owner.id,
+                    Bottle.photo_name == photo_name,
+                    Bottle.status != "Empty",
+                    Bottle.on_shopping_list.is_(False),
+                )
+            )
+            path = app.state.settings.data_dir / "uploads" / photo_name
+            if not bottle or not path.is_file():
+                return protect_shared_response(Response(status_code=404))
+            return protect_shared_response(FileResponse(path, media_type="image/jpeg"))
+
+    @app.get("/shopping-list", response_class=HTMLResponse)
+    def shopping_list(request: Request) -> Response:
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottles = list(
+                session.scalars(
+                    select(Bottle)
+                    .where(Bottle.owner_id == user.id, Bottle.on_shopping_list.is_(True))
+                    .order_by(func.lower(Bottle.name), Bottle.created_at.desc())
+                )
+            )
+            return render(request, "shopping_list.html", user=user, bottles=bottles)
+
+    @app.post("/shopping-list")
+    async def add_shopping_item(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        name = str(form.get("name", "")).strip()
+        if not name:
+            return RedirectResponse("/shopping-list?error=name", 303)
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottle = Bottle(
+                owner_id=user.id,
+                name=name,
+                brand=str(form.get("brand", "")).strip(),
+                notes=str(form.get("notes", "")).strip(),
+                status="Empty",
+                fill_level=0,
+                on_shopping_list=True,
+            )
+            upload = selected_upload(form, "camera_photo", "photo")
+            if upload:
+                bottle.photo_name = await save_photo(
+                    upload,
+                    app.state.settings.data_dir / "uploads",
+                    app.state.settings.max_upload_mb,
+                )
+            session.add(bottle)
+            session.commit()
+        return RedirectResponse("/shopping-list", 303)
+
+    @app.post("/shopping-list/{bottle_id}/photo")
+    async def update_shopping_photo(request: Request, bottle_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottle = owned_bottle(session, user, bottle_id)
+            upload = selected_upload(form, "photo")
+            if bottle and bottle.on_shopping_list and upload:
+                old_photo = bottle.photo_name
+                bottle.photo_name = await save_photo(
+                    upload,
+                    app.state.settings.data_dir / "uploads",
+                    app.state.settings.max_upload_mb,
+                )
+                if old_photo:
+                    (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
+                session.commit()
+        return RedirectResponse("/shopping-list", 303)
+
+    @app.post("/shopping-list/{bottle_id}/purchased")
+    async def purchase_shopping_item(request: Request, bottle_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottle = owned_bottle(session, user, bottle_id)
+            if bottle and bottle.on_shopping_list:
+                bottle.on_shopping_list = False
+                bottle.status = "Unopened"
+                bottle.fill_level = 100
+                session.commit()
+        return RedirectResponse("/", 303)
+
+    @app.post("/shopping-list/{bottle_id}/delete")
+    async def delete_shopping_item(request: Request, bottle_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottle = owned_bottle(session, user, bottle_id)
+            if bottle and bottle.on_shopping_list:
+                remove_bottle_photo(bottle, app.state.settings.data_dir / "uploads")
+                session.delete(bottle)
+                session.commit()
+        return RedirectResponse("/shopping-list", 303)
 
     @app.get("/bottles/new", response_class=HTMLResponse)
     def new_bottle(request: Request) -> Response:
@@ -1269,8 +1478,24 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            previous_status = bottle.status
             previous_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
             update_bottle_from_form(bottle, form)
+            if previous_status != "Empty" and bottle.status == "Empty":
+                empty_action = str(form.get("empty_action", ""))
+                if empty_action == "remove":
+                    remove_bottle_photo(bottle, app.state.settings.data_dir / "uploads")
+                    session.delete(bottle)
+                    session.commit()
+                    return RedirectResponse("/", 303)
+                if empty_action == "shopping":
+                    bottle.on_shopping_list = True
+                    bottle.fill_level = 0
+                else:
+                    session.rollback()
+                    return RedirectResponse(f"/bottles/{bottle_id}/edit?empty=1", 303)
+            elif bottle.status != "Empty":
+                bottle.on_shopping_list = False
             current_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
             for source in list(bottle.price_sources):
                 if previous_prices[source.kind] != current_prices[source.kind]:
@@ -1286,7 +1511,8 @@ def register_routes(app: FastAPI) -> None:
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
             session.commit()
-        return RedirectResponse(f"/bottles/{bottle_id}", 303)
+        destination = "/shopping-list" if bottle.on_shopping_list else f"/bottles/{bottle_id}"
+        return RedirectResponse(destination, 303)
 
     @app.post("/bottles/{bottle_id}/analyze")
     async def refresh_bottle_analysis(request: Request, bottle_id: int) -> Response:
@@ -1350,10 +1576,7 @@ def register_routes(app: FastAPI) -> None:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
             if bottle:
-                if bottle.photo_name:
-                    (app.state.settings.data_dir / "uploads" / bottle.photo_name).unlink(
-                        missing_ok=True
-                    )
+                remove_bottle_photo(bottle, app.state.settings.data_dir / "uploads")
                 session.delete(bottle)
                 session.commit()
         return RedirectResponse("/", 303)

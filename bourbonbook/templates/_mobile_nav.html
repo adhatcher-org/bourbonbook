@@ -1,0 +1,6 @@
+<nav class="mobile-nav" aria-label="Primary navigation">
+  <a class="{{ 'active' if active_page in ['collection', 'compact'] }}" href="/"><span aria-hidden="true">▦</span>Collection</a>
+  <a class="nav-add" href="/bottles/new" aria-label="Add bottle"><span>＋</span></a>
+  <span class="nav-spacer" aria-hidden="true"></span>
+  <a class="{{ 'active' if active_page == 'shopping' }}" href="/shopping-list"><span aria-hidden="true">☷</span>Shopping</a>
+</nav>

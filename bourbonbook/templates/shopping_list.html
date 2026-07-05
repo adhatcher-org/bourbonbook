@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Shopping List · Bourbon Book{% endblock %}
+{% block page %}
+{% set active_page = 'shopping' %}{% include '_collection_header.html' %}
+<main id="main" class="app-shell shopping-page">
+  <section class="shopping-hero"><div><p class="eyebrow">The next pour</p><h1>Shopping List</h1><p>Keep the label close. You’ll know the bottle when you see it.</p></div><span class="shopping-count">{{ bottles|length }}<small>to find</small></span></section>
+  <section class="shopping-layout">
+    <form class="wish-form" method="post" action="/shopping-list" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div><p class="eyebrow">Add a bottle</p><h2>What are you hunting?</h2></div>
+      <label>Name<input name="name" required placeholder="e.g. Wild Turkey 12 Year"></label>
+      <label>Brand <span>optional</span><input name="brand" placeholder="Distillery or brand"></label>
+      <label>Notes <span>optional</span><textarea name="notes" rows="3" placeholder="Store, vintage, target price…"></textarea></label>
+      <div class="shopping-photo-actions">
+        <label class="photo-choice"><input type="file" name="camera_photo" accept="image/*" capture="environment"><span aria-hidden="true">⌾</span> Take photo</label>
+        <label class="photo-choice"><input type="file" name="photo" accept="image/*"><span aria-hidden="true">▧</span> Choose photo</label>
+      </div>
+      <button class="primary-button wide" type="submit">Add to shopping list <span aria-hidden="true">→</span></button>
+    </form>
+    <div class="wish-list">
+      {% if bottles %}{% for bottle in bottles %}<article class="wish-card reveal" style="--delay: {{ loop.index0 * 45 }}ms">
+        <div class="wish-photo">{% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle" loading="lazy">{% else %}<div class="wish-placeholder" aria-hidden="true"><span>?</span><small>Add a label photo</small></div>{% endif %}</div>
+        <div class="wish-copy"><p>{{ bottle.brand or 'Bottle hunt' }}</p><h2>{{ bottle.name }}</h2>{% if bottle.notes %}<small>{{ bottle.notes }}</small>{% endif %}
+          <div class="wish-actions"><form method="post" action="/shopping-list/{{ bottle.id }}/purchased"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="found-button" type="submit">Found it</button></form><form method="post" action="/shopping-list/{{ bottle.id }}/delete" data-delete-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-button" type="submit" aria-label="Remove {{ bottle.name }} from shopping list">×</button></form></div>
+        </div>
+        <form class="wish-photo-form" method="post" action="/shopping-list/{{ bottle.id }}/photo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label><input type="file" name="photo" accept="image/*" required onchange="this.form.submit()">{{ 'Change photo' if bottle.photo_name else 'Add photo' }}</label></form>
+      </article>{% endfor %}{% else %}<section class="empty-state shopping-empty"><div class="empty-bottle" aria-hidden="true"><span></span></div><p class="eyebrow">The list is clear</p><h2>No bottles to hunt down.</h2><p>Empty bottles you choose to replace will show up here too.</p></section>{% endif %}
+    </div>
+  </section>
+</main>
+{% include '_mobile_nav.html' %}
+{% endblock %}

@@ -304,7 +304,9 @@ def test_bottle_missing_edit_sources_delete_and_media(tmp_path: Path) -> None:
                 owner_id=owner.id,
                 name="Before",
                 photo_name=photo.name,
+                purchase_price=55,
                 msrp=50,
+                quantity=2,
                 secondary_price=80,
             )
             bottle.price_sources.extend(
@@ -319,9 +321,25 @@ def test_bottle_missing_edit_sources_delete_and_media(tmp_path: Path) -> None:
 
         detail = client.get(f"/bottles/{bottle_id}")
         assert detail.status_code == 200
+        assert "Secondary" not in detail.text
+        assert "Stored at" not in detail.text
+        assert "Grounded price source" not in detail.text
+        assert "https://example.com/msrp" not in detail.text
+        assert detail.text.index("Basic information") < detail.text.index("Valuation &amp; status")
+        assert "Barrel information" not in detail.text
         assert "Before" in client.get("/?q=Before&sort=name").text
         assert client.get(f"/media/{photo.name}").status_code == 200
         edit = client.get(f"/bottles/{bottle_id}/edit?new=1&analysis=complete")
+        assert 'name="secondary_price"' not in edit.text
+        assert 'name="storage_location"' not in edit.text
+        assert "Look up internet pricing" in edit.text
+        assert "OHLQ" in edit.text
+        assert edit.text.index('name="purchase_price"') < edit.text.index('name="quantity"')
+        assert 'value="$110.00" readonly data-total-spent' in edit.text
+        assert 'value="$100.00" readonly data-total-value' in edit.text
+        assert 'class="msrp-field"' in edit.text
+        assert 'class="price-refresh price-refresh-inline"' in edit.text
+        assert "Barrel information" not in edit.text
         saved = client.post(
             f"/bottles/{bottle_id}/edit",
             data={
@@ -341,6 +359,12 @@ def test_bottle_missing_edit_sources_delete_and_media(tmp_path: Path) -> None:
             assert bottle.status == "Unopened"
             assert bottle.quantity == 99
             assert {source.kind for source in bottle.price_sources} == {"secondary"}
+            bottle.barrel_number = "A-107"
+            session.commit()
+
+        barrel_edit = client.get(f"/bottles/{bottle_id}/edit")
+        assert "Barrel information" in barrel_edit.text
+        assert 'class="form-section collapsible-section" open' in barrel_edit.text
 
         deleted = client.post(
             f"/bottles/{bottle_id}/delete",

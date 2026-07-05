@@ -232,7 +232,6 @@ TEXT_FIELDS = (
     "bottle_number",
     "warehouse",
     "floor",
-    "storage_location",
     "tasting_notes",
     "notes",
 )
@@ -246,7 +245,7 @@ def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
     bottle.fill_level = parse_int(form.get("fill_level"), 100, 0, 100)
     bottle.quantity = parse_int(form.get("quantity"), 1, 1, 99)
     bottle.rating = parse_int(form.get("rating"), 0, 0, 5)
-    for field in ("proof", "abv", "purchase_price", "msrp", "secondary_price"):
+    for field in ("proof", "abv", "purchase_price", "msrp"):
         setattr(bottle, field, parse_float(form.get(field)))
 
 
@@ -261,7 +260,7 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any]) -> None:
 def apply_price_search(
     bottle: Bottle, prices: dict[str, float], sources: list[dict[str, str]]
 ) -> None:
-    for field in ("msrp", "secondary_price"):
+    for field in ("msrp",):
         if field in prices:
             setattr(bottle, field, prices[field])
     if sources:
@@ -275,7 +274,7 @@ def apply_price_search(
 async def refresh_prices(bottle: Bottle, settings: Settings) -> str:
     if not bottle.name or bottle.name == "Untitled bottle":
         return "unavailable"
-    prices, sources, status = await search_bottle_prices(bottle.name, settings)
+    prices, sources, status = await search_bottle_prices(bottle.name, settings, size=bottle.size)
     apply_price_search(bottle, prices, sources)
     return status
 
@@ -324,7 +323,10 @@ def collection_statement(user: User, q: str = "", sort: str = "name"):
         )
     orders = {
         "name": (func.lower(Bottle.name).asc(), Bottle.created_at.desc()),
-        "value": (Bottle.secondary_price.desc().nullslast(), func.lower(Bottle.name).asc()),
+        "value": (
+            func.coalesce(Bottle.msrp, Bottle.purchase_price, 0).desc(),
+            func.lower(Bottle.name).asc(),
+        ),
         "oldest": (Bottle.created_at.asc(),),
         "newest": (Bottle.created_at.desc(),),
     }
@@ -1572,7 +1574,7 @@ def register_routes(app: FastAPI) -> None:
                 return RedirectResponse("/", 303)
             saved_bottle_id = bottle.id
             previous_status = bottle.status
-            previous_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
+            previous_prices = {"msrp": bottle.msrp}
             update_bottle_from_form(bottle, form)
             if previous_status != "Empty" and bottle.status == "Empty":
                 empty_action = str(form.get("empty_action", ""))
@@ -1590,9 +1592,9 @@ def register_routes(app: FastAPI) -> None:
                     return RedirectResponse(f"{edit_path}?empty=1", 303)
             elif bottle.status != "Empty":
                 bottle.on_shopping_list = False
-            current_prices = {"msrp": bottle.msrp, "secondary": bottle.secondary_price}
+            current_prices = {"msrp": bottle.msrp}
             for source in list(bottle.price_sources):
-                if previous_prices[source.kind] != current_prices[source.kind]:
+                if source.kind == "msrp" and previous_prices["msrp"] != current_prices["msrp"]:
                     bottle.price_sources.remove(source)
             upload = form.get("photo")
             if isinstance(upload, StarletteUploadFile) and upload.filename:

@@ -9,7 +9,7 @@ def test_weller_full_proof_verified_values() -> None:
     assert product["proof"] == 114.0
     assert product["abv"] == 57.0
     assert product["distilled_by"] == "Buffalo Trace Distillery"
-    assert product["secondary_price"] == 156.0
+    assert "secondary_price" not in product
 
 
 def test_unknown_product_has_no_verified_override() -> None:

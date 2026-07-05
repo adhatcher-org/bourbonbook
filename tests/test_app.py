@@ -297,7 +297,9 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         detail = client.get(save.headers["location"])
         assert detail.status_code == 200
         assert "Oak and orange peel" in detail.text
-        assert "$200.00" in detail.text
+        assert "$99.98" in detail.text
+        assert "Secondary" not in detail.text
+        assert "Stored at" not in detail.text
         photo_match = re.search(r"/media/([^\"]+)", detail.text)
         assert photo_match
         assert photo_match.group(1) != refreshed_photo.group(1)

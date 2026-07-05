@@ -12,6 +12,7 @@
       {% if bottle.photo_name %}<img class="edit-photo" src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle">{% endif %}
       <div class="photo-actions"><label class="replace-photo"><input type="file" name="photo" accept="image/*">⌾ Replace photo</label><button class="reanalyze-button" type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="photo" data-analysis-action>✦ Re-analyze photo</button></div>
     </section>
+    <div class="edit-primary-grid">
     <section class="form-section"><div class="section-heading"><span>01</span><h2>Basic information</h2></div><div class="field-grid">
       <div class="field-span name-refresh"><label for="bottle-name">Name</label><div><input id="bottle-name" name="name" value="{{ bottle.name }}" required><button type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="name" data-analysis-action>Update fields from name <span aria-hidden="true">✦</span></button></div><small>Correct or expand the name, then ask the configured analyzer to refresh known product details.</small></div>
       <label>Brand<input name="brand" value="{{ bottle.brand }}"></label><label>Release<input name="release" value="{{ bottle.release }}"></label>
@@ -20,14 +21,24 @@
       <label>Proof<input name="proof" type="number" step="0.1" min="0" value="{{ bottle.proof if bottle.proof is not none else '' }}" inputmode="decimal"></label><label>ABV %<input name="abv" type="number" step="0.1" min="0" max="100" value="{{ bottle.abv if bottle.abv is not none else '' }}" inputmode="decimal"></label>
       <label>Size<input name="size" value="{{ bottle.size }}" placeholder="750ml"></label><label>Age statement<input name="age_statement" value="{{ bottle.age_statement }}" placeholder="e.g. 10 Year"></label>
     </div></section>
-    <section class="form-section"><div class="section-heading"><span>02</span><h2>Barrel information</h2></div><div class="field-grid">
-      <label>Barrel number<input name="barrel_number" value="{{ bottle.barrel_number }}"></label><label>Bottle number<input name="bottle_number" value="{{ bottle.bottle_number }}"></label><label>Warehouse<input name="warehouse" value="{{ bottle.warehouse }}"></label><label>Floor<input name="floor" value="{{ bottle.floor }}"></label>
-    </div></section>
-    <section class="form-section"><div class="section-heading"><span>03</span><h2>Valuation &amp; status</h2></div>
+    <section class="form-section"><div class="section-heading"><span>02</span><h2>Valuation &amp; status</h2></div>
       <fieldset class="status-picker"><legend>Status</legend>{% for option in ['Empty','Opened','Unopened'] %}<label><input type="radio" name="status" value="{{ option }}" {{ 'checked' if bottle.status == option }}><span>{{ option }}</span></label>{% endfor %}</fieldset>
       <label class="range-field"><span>Fill level <output data-fill-output>{{ bottle.fill_level }}%</output></span><input name="fill_level" type="range" min="0" max="100" step="5" value="{{ bottle.fill_level }}" data-fill-range></label>
-      <div class="field-grid"><label>Quantity<input name="quantity" type="number" min="1" max="99" value="{{ bottle.quantity }}"></label><label>Storage location<input name="storage_location" value="{{ bottle.storage_location }}" placeholder="Cabinet A, shelf 3"></label><label>Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="{{ bottle.purchase_price if bottle.purchase_price is not none else '' }}" inputmode="decimal"></label><label>MSRP<input name="msrp" type="number" min="0" step="0.01" value="{{ bottle.msrp if bottle.msrp is not none else '' }}" inputmode="decimal"></label><label>Secondary price<input name="secondary_price" type="number" min="0" step="0.01" value="{{ bottle.secondary_price if bottle.secondary_price is not none else '' }}" inputmode="decimal"></label><div class="field-span price-refresh"><button type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="price" data-analysis-action>Search current MSRP &amp; secondary value <span aria-hidden="true">↗</span></button><small>OpenAI searches current producer, publication, and completed-sale evidence. Existing prices remain when reliable sources are unavailable.</small></div></div>
+      <div class="field-grid valuation-fields">
+        <label class="purchase-price-field">Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="{{ bottle.purchase_price if bottle.purchase_price is not none else '' }}" inputmode="decimal"></label>
+        <label class="quantity-field">Quantity<input name="quantity" type="number" min="1" max="99" value="{{ bottle.quantity }}"></label>
+        <label class="calculated-field total-spent-field">Total spent<input type="text" value="{{ ('$%.2f'|format(bottle.purchase_price * bottle.quantity)) if bottle.purchase_price is not none else '' }}" readonly data-total-spent></label>
+        <label class="calculated-field total-value-field">Total value<input type="text" value="{{ ('$%.2f'|format(bottle.msrp * bottle.quantity)) if bottle.msrp is not none else '' }}" readonly data-total-value></label>
+        <label class="msrp-field">MSRP<input name="msrp" type="number" min="0" step="0.01" value="{{ bottle.msrp if bottle.msrp is not none else '' }}" inputmode="decimal"></label>
+        <div class="price-refresh price-refresh-inline"><button type="submit" formaction="/bottles/{{ bottle.id }}/analyze" name="analysis_mode" value="price" data-analysis-action>Look up internet pricing <span aria-hidden="true">↗</span></button></div>
+        <small class="field-span price-refresh-note">The search checks OHLQ first for the matching bottle and size, then broadens to the web if OHLQ is unavailable or has no exact match.</small>
+      </div>
     </section>
+    </div>
+    {% set has_barrel_info = bottle.barrel_number or bottle.bottle_number or bottle.warehouse or bottle.floor %}
+    {% if has_barrel_info %}<details class="form-section collapsible-section" open><summary><div class="section-heading"><span>03</span><h2>Barrel information</h2></div><small>Details added</small></summary><div class="field-grid">
+      <label>Barrel number<input name="barrel_number" value="{{ bottle.barrel_number }}"></label><label>Bottle number<input name="bottle_number" value="{{ bottle.bottle_number }}"></label><label>Warehouse<input name="warehouse" value="{{ bottle.warehouse }}"></label><label>Floor<input name="floor" value="{{ bottle.floor }}"></label>
+    </div></details>{% endif %}
     <section class="form-section"><div class="section-heading"><span>04</span><h2>Tasting &amp; notes</h2></div>
       <fieldset class="rating-picker"><legend>Your rating</legend>{% for option in range(5,0,-1) %}<input id="rating-{{ option }}" type="radio" name="rating" value="{{ option }}" {{ 'checked' if bottle.rating == option }}><label for="rating-{{ option }}" aria-label="{{ option }} stars">★</label>{% endfor %}</fieldset>
       <div class="field-grid"><label class="field-span">Tasting notes<textarea name="tasting_notes" rows="3" placeholder="Caramel, oak, orange peel…">{{ bottle.tasting_notes }}</textarea></label><label class="field-span">Private notes<textarea name="notes" rows="4" placeholder="Where you found it, who shared it, what to remember…">{{ bottle.notes }}</textarea></label></div>

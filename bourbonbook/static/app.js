@@ -47,6 +47,32 @@ if (fillRange) {
   updateFill();
 }
 
+const purchasePrice = document.querySelector('input[name="purchase_price"]');
+const quantity = document.querySelector('input[name="quantity"]');
+const msrp = document.querySelector('input[name="msrp"]');
+const totalSpent = document.querySelector('[data-total-spent]');
+const totalValue = document.querySelector('[data-total-value]');
+if (purchasePrice && quantity && msrp && totalSpent && totalValue) {
+  const numericValue = (input) => {
+    if (!input.value.trim()) return null;
+    const value = Number(input.value);
+    return Number.isFinite(value) ? value : null;
+  };
+  const moneyTotal = (price, count) => {
+    if (price === null || count === null) return '';
+    return `$${(price * count).toFixed(2)}`;
+  };
+  const updateValuationTotals = () => {
+    const bottleCount = numericValue(quantity);
+    totalSpent.value = moneyTotal(numericValue(purchasePrice), bottleCount);
+    totalValue.value = moneyTotal(numericValue(msrp), bottleCount);
+  };
+  [purchasePrice, quantity, msrp].forEach((input) => {
+    input.addEventListener('input', updateValuationTotals);
+  });
+  updateValuationTotals();
+}
+
 document.querySelectorAll('[data-delete-form]').forEach((form) => {
   form.addEventListener('submit', (event) => {
     if (!window.confirm('Remove this bottle permanently?')) event.preventDefault();

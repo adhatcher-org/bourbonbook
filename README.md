@@ -38,10 +38,11 @@ OPENAI_MODEL=gpt-5.5
 
 Keep the real API key only in `.env` or your container's secret environment settings; do not add it to `.env.example` or commit it.
 
-When OpenAI is selected, bottle analysis is followed by a grounded web search for current MSRP and
-secondary-market evidence. Only prices tied to a URL actually consulted by OpenAI are accepted.
-The bottle detail page shows the source and lookup basis, and the edit page can refresh prices
-without re-analyzing the photo. Each refresh uses an additional OpenAI web-search tool call.
+When OpenAI is selected, bottle analysis is followed by a grounded web search for the current Ohio
+retail price. The search checks OHLQ first for an exact product and bottle-size match, then broadens
+to other reliable web sources when OHLQ is unavailable or has no match. Only prices tied to a URL actually consulted by OpenAI are
+accepted. The edit page can refresh MSRP without re-analyzing the photo, while grounded source
+details remain internal. Each refresh uses an additional OpenAI web-search tool call.
 
 Admins can open `/admin/users` to search users, correct an email address after out-of-band identity
 verification, and send verification or reset links. `/admin/usage` shows recent OpenAI/Ollama call
@@ -242,7 +243,7 @@ Production rollout checklist:
    confirm verification, land on profile, set a screen name, change profile fields and password,
    request and complete a reset, and delete a test account.
 7. Add a bottle using the selected Ollama analysis settings plus OpenAI grounded pricing, then verify
-   final prices, clickable price sources, and admin API usage totals.
+   the final MSRP and admin API usage totals.
 8. Exercise admin user actions from `/admin/users` and review `/admin/usage`.
 9. Query Loki for JSON events such as `login_succeeded`, `admin_action`, and
    `ai_request_completed`; confirm secrets, one-time tokens, passwords, and user email addresses are

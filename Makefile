@@ -44,6 +44,11 @@ security: ## Scan maintained Python code with Bandit.
 dependency-check: ## Validate the lock and audit the resolved environment.
 	$(UV) lock --check
 	$(UV) sync --frozen
+	for attempt in 1 2 3; do \
+		$(UV) run pip-audit && exit 0; \
+		echo "pip-audit failed; retrying in $${attempt}0s" >&2; \
+		sleep $$((attempt * 10)); \
+	done; \
 	$(UV) run pip-audit
 
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.

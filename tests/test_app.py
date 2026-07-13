@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
@@ -112,6 +113,54 @@ def test_readyz_reports_unready_when_database_is_not_at_head(tmp_path: Path) -> 
         response = client.get("/readyz")
         assert response.status_code == 503
         assert response.json() == {"status": "not_ready"}
+
+
+def test_provider_clients_are_shared_and_closed(tmp_path: Path, monkeypatch) -> None:
+    openai_closed = []
+    ollama_closed = []
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.responses = SimpleNamespace()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            openai_closed.append(True)
+
+    class FakeOllamaClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            ollama_closed.append(True)
+
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        session_secret="test-secret-that-is-long-enough!",
+        secure_cookies=False,
+        ollama_url="http://ollama.invalid",
+        ollama_model="test",
+        max_users=10,
+        max_upload_mb=2,
+        openai_api_key="test-key",
+    )
+    bootstrap_database(settings)
+    monkeypatch.setattr("bourbonbook.main.AsyncOpenAI", FakeOpenAI)
+    monkeypatch.setattr("bourbonbook.main.httpx.AsyncClient", FakeOllamaClient)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.app.state.openai_client is not None
+        assert client.app.state.ollama_client is not None
+
+    assert openai_closed == [True]
+    assert ollama_closed == [True]
 
 
 def test_registration_library_and_logout(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from bourbonbook.observability import (
     ollama_duration_ms,
     ollama_usage_metadata,
 )
+from bourbonbook.provider_clients import ollama_client_session
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ async def request_analysis(
     start = time.perf_counter()
     metadata = UsageMetadata()
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with ollama_client_session() as client:
             response = await client.post(f"{settings.ollama_url}/api/generate", json=payload)
             response.raise_for_status()
         body = response.json()

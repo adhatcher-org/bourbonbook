@@ -5,16 +5,18 @@ import os
 import secrets
 import signal
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from openai import AsyncOpenAI
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -66,6 +68,12 @@ from bourbonbook.observability import (
     usage_context,
 )
 from bourbonbook.photos import save_avatar, save_photo
+from bourbonbook.provider_clients import (
+    reset_shared_ollama_client,
+    reset_shared_openai_client,
+    set_shared_ollama_client,
+    set_shared_openai_client,
+)
 from bourbonbook.rate_limit import RateLimiter
 from bourbonbook.tokens import (
     RESET_PASSWORD,
@@ -105,19 +113,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        bootstrap_database(settings)
-        removed = app.state.usage_recorder.cleanup_old_records()
-        if removed:
-            log_event(
-                logger,
-                logging.INFO,
-                "usage_retention_cleanup",
-                "Old API usage records removed",
-                removed=removed,
+        async with AsyncExitStack() as stack:
+            app.state.openai_client = None
+            if settings.openai_api_key:
+                app.state.openai_client = await stack.enter_async_context(
+                    AsyncOpenAI(api_key=settings.openai_api_key, timeout=120.0)
+                )
+            app.state.ollama_client = await stack.enter_async_context(
+                httpx.AsyncClient(timeout=120)
             )
-        with database.session_factory() as session:
-            await bootstrap_admin(session, settings, app.state.email_sender)
-        yield
+            bootstrap_database(settings)
+            removed = app.state.usage_recorder.cleanup_old_records()
+            if removed:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "usage_retention_cleanup",
+                    "Old API usage records removed",
+                    removed=removed,
+                )
+            with database.session_factory() as session:
+                await bootstrap_admin(session, settings, app.state.email_sender)
+            yield
         log_event(logger, logging.INFO, "app_stopping", "Bourbon Book stopping")
         database.engine.dispose()
 
@@ -142,6 +159,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=settings.secure_cookies,
         max_age=60 * 60 * 24 * 30,
     )
+
+    @app.middleware("http")
+    async def provider_client_context(request: Request, call_next):
+        tokens = []
+        openai_client = getattr(request.app.state, "openai_client", None)
+        ollama_client = getattr(request.app.state, "ollama_client", None)
+        if openai_client is not None:
+            tokens.append(set_shared_openai_client(openai_client))
+        if ollama_client is not None:
+            tokens.append(set_shared_ollama_client(ollama_client))
+        try:
+            return await call_next(request)
+        finally:
+            if ollama_client is not None:
+                reset_shared_ollama_client(tokens.pop())
+            if openai_client is not None:
+                reset_shared_openai_client(tokens.pop())
+
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     app.mount("/images", StaticFiles(directory=ROOT.parent / "images"), name="images")
     register_observability(app)

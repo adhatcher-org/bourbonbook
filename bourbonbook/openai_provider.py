@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from openai import APIError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI  # noqa: F401
 from pydantic import BaseModel
 
 from bourbonbook.analysis import normalize_analysis
@@ -19,6 +19,7 @@ from bourbonbook.observability import (
     current_usage_user_id,
     openai_usage_metadata,
 )
+from bourbonbook.provider_clients import openai_client_session
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ without Markdown."""
     start = time.perf_counter()
     metadata = UsageMetadata()
     try:
-        async with AsyncOpenAI(api_key=settings.openai_api_key, timeout=120.0) as client:
+        async with openai_client_session(settings) as client:
             response = await client.responses.parse(
                 model=settings.openai_model,
                 tools=[{"type": "web_search", "search_context_size": "medium"}],
@@ -192,7 +193,7 @@ async def request_analysis(
                     "detail": "high",
                 }
             )
-        async with AsyncOpenAI(api_key=settings.openai_api_key, timeout=120.0) as client:
+        async with openai_client_session(settings) as client:
             response = await client.responses.parse(
                 model=settings.openai_model,
                 input=[{"role": "user", "content": content}],

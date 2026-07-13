@@ -4,6 +4,7 @@ import asyncio
 
 from bourbonbook.config import Settings
 from bourbonbook.ollama import analyze_bottle_name, normalize_analysis, request_analysis
+from bourbonbook.provider_clients import reset_shared_ollama_client, set_shared_ollama_client
 
 
 class FakeResponse:
@@ -43,7 +44,7 @@ def test_qwen_thinking_field_is_accepted(tmp_path, monkeypatch) -> None:
         max_users=10,
         max_upload_mb=2,
     )
-    monkeypatch.setattr("bourbonbook.ollama.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", FakeClient)
 
     result, status = asyncio.run(request_analysis("Analyze this bottle", settings))
 
@@ -72,7 +73,7 @@ def test_invalid_ollama_response_is_unavailable(tmp_path, monkeypatch) -> None:
         async def post(self, url: str, json: dict) -> InvalidResponse:
             return InvalidResponse()
 
-    monkeypatch.setattr("bourbonbook.ollama.httpx.AsyncClient", InvalidClient)
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", InvalidClient)
     settings = Settings(
         data_dir=tmp_path,
         database_url="sqlite://",
@@ -86,3 +87,34 @@ def test_invalid_ollama_response_is_unavailable(tmp_path, monkeypatch) -> None:
 
     assert asyncio.run(request_analysis("prompt", settings)) == ({}, "unavailable")
     assert asyncio.run(analyze_bottle_name("Bottle", settings)) == ({}, "unavailable")
+
+
+def test_shared_ollama_client_is_reused(tmp_path, monkeypatch) -> None:
+    class SharedClient:
+        async def post(self, url: str, json: dict) -> FakeResponse:
+            assert url.endswith("/api/generate")
+            return FakeResponse()
+
+    class TempClient:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("A shared Ollama client should have been reused")
+
+    token = set_shared_ollama_client(SharedClient())
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", TempClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.invalid",
+        ollama_model="test",
+        max_users=1,
+        max_upload_mb=1,
+    )
+    try:
+        result, status = asyncio.run(request_analysis("prompt", settings))
+    finally:
+        reset_shared_ollama_client(token)
+
+    assert status == "complete"
+    assert result["name"] == "Example Bourbon"

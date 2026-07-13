@@ -57,23 +57,27 @@ dependency-check: ## Validate the lock and audit the resolved environment.
 
 benchmark-export: ## Export the benchmark fixture into local data/benchmarks.
 	@BENCHMARK_OWNER=$${BENCHMARK_OWNER:?set BENCHMARK_OWNER to the exact owner ID or username}; \
-	$(UV) run --env-file .env python -m bourbonbook.benchmark_cli export \
+	$(UV) run --env-file data/.env python -m bourbonbook.benchmark_cli export \
 		--owner "$$BENCHMARK_OWNER" \
 		--output $(BENCHMARK_FIXTURE)
 
 benchmark-run: ## Run the local benchmark fixture against the active provider.
-	$(UV) run --env-file .env python -m bourbonbook.benchmark_cli run \
+	@echo "Running benchmark fixture $(BENCHMARK_FIXTURE)"
+	$(UV) run --env-file data/.env python -m bourbonbook.benchmark_cli run \
+		--provider $${BENCHMARK_PROVIDER:-ollama} \
 		--fixture $(BENCHMARK_FIXTURE) \
 		--output $(BENCHMARK_CANDIDATE) \
 		--cold-start-state $${COLD_START_STATE:-uncontrolled}
+	@echo "Benchmark report written to $(BENCHMARK_CANDIDATE)"
 
 benchmark-compare: ## Compare the local benchmark baseline and candidate reports.
-	$(UV) run python -m bourbonbook.benchmark_cli compare \
+	@echo "Comparing $(BENCHMARK_BASELINE) against $(BENCHMARK_CANDIDATE)"
+	$(UV) run --env-file data/.env python -m bourbonbook.benchmark_cli compare \
 		--baseline $(BENCHMARK_BASELINE) \
 		--candidate $(BENCHMARK_CANDIDATE)
 
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.
-	$(UV) run $(PYTHON) scripts/pr_review.py
+	$(UV) run --env-file data/.env $(PYTHON) scripts/pr_review.py
 
 pre-ci: lint coverage security dependency-check pr-check ## Run all non-container quality gates.
 	@echo "All non-container quality gates passed."
@@ -85,7 +89,7 @@ pr-review: pre-ci build ## Run every required check before opening or updating a
 	@echo "PR review checks passed; this branch is ready to push."
 
 run_local: ## Run Uvicorn locally with reload and proxy trust disabled.
-	SECURE_COOKIES=$${SECURE_COOKIES:-false} $(UV) run --env-file .env uvicorn bourbonbook.main:app \
+	SECURE_COOKIES=$${SECURE_COOKIES:-false} $(UV) run --env-file data/.env uvicorn bourbonbook.main:app \
 		--reload --host $(HOST) --port $(PORT) --no-proxy-headers
 
 update: ## Upgrade dependencies intentionally, audit them, and run pre-CI.

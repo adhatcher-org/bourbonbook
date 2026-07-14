@@ -16,7 +16,7 @@ from bourbonbook.migrations import (
     alembic_config,
     bootstrap_database,
 )
-from bourbonbook.models import Bottle, PriceSource, User
+from bourbonbook.models import Bottle, CatalogPrice, PriceSource, User
 
 
 def migration_settings(tmp_path: Path) -> Settings:
@@ -49,6 +49,7 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             "alembic_version",
             "api_usage",
             "bottles",
+            "catalog_prices",
             "price_sources",
             "user_tokens",
             "users",
@@ -89,10 +90,10 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
             text(
                 "INSERT INTO bottles (owner_id, name, brand, release, edition, spirit_type, "
                 "distilled_by, mash_bill, size, age_statement, barrel_number, bottle_number, "
-                "warehouse, floor, status, fill_level, quantity, storage_location, rating, "
+                "warehouse, floor, status, fill_level, quantity, storage_location, msrp, rating, "
                 "tasting_notes, notes, photo_name, analysis_status, created_at, updated_at) VALUES "
                 "(:owner, 'Eagle Rare 10 Year', '', '', '', 'Bourbon', '', '', '750ml', '', '', "
-                "'', '', '', 'Unopened', 100, 1, '', 0, '', '', :photo, 'manual', "
+                "'', '', '', 'Unopened', 100, 1, '', 41.99, 0, '', '', :photo, 'manual', "
                 "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
             ),
             {"owner": user_id, "photo": photo.name},
@@ -101,8 +102,8 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
             text(
                 "INSERT INTO price_sources "
                 "(bottle_id, kind, title, url, basis, checked_at) VALUES "
-                "(:bottle, 'msrp', 'Existing source', "
-                "'https://example.com/eagle-rare', 'Listed price', CURRENT_TIMESTAMP)"
+                "(:bottle, 'msrp', 'OHLQ', "
+                "'https://www.ohlq.com/liquor/eagle-rare', 'OHLQ listing', CURRENT_TIMESTAMP)"
             ),
             {"bottle": bottle_id},
         )
@@ -117,6 +118,7 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
             user = session.get(User, user_id)
             bottle = session.get(Bottle, bottle_id)
             source = session.scalar(select(PriceSource).where(PriceSource.bottle_id == bottle_id))
+            catalog_price = session.scalar(select(CatalogPrice))
             assert user is not None
             assert user.username == "aaron@example.com"
             assert user.email == "aaron@example.com"
@@ -126,7 +128,10 @@ def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) 
             assert bottle.name == "Eagle Rare 10 Year"
             assert bottle.photo_name == photo.name
             assert source is not None
-            assert source.url == "https://example.com/eagle-rare"
+            assert source.url == "https://www.ohlq.com/liquor/eagle-rare"
+            assert catalog_price is not None
+            assert catalog_price.msrp == 41.99
+            assert catalog_price.url == source.url
         assert photo.read_bytes() == b"existing bottle photo"
         assert current_revision(migrated) == HEAD_REVISION
     finally:

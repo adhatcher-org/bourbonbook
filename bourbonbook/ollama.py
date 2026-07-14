@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from bourbonbook.analysis import FIELDS, PHOTO_PROMPT, name_prompt, normalize_analysis
+from bourbonbook.analysis import OUTPUT_FIELDS, PHOTO_PROMPT, name_prompt, normalize_analysis
 from bourbonbook.config import Settings
 from bourbonbook.observability import (
     UsageMetadata,
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 async def request_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:
-    field_list = ", ".join(FIELDS)
+    field_list = ", ".join(OUTPUT_FIELDS)
     payload: dict[str, Any] = {
         "model": settings.ollama_model,
         "prompt": f"{prompt}\nReturn ONLY one JSON object with these keys: {field_list}.",
@@ -51,7 +51,7 @@ async def request_analysis(
         metadata = ollama_usage_metadata(body)
         raw_output = body.get("response") or body.get("thinking")
         parsed = json.loads(raw_output)
-        values = {key: parsed.get(key) for key in FIELDS if parsed.get(key) is not None}
+        values = {key: parsed.get(key) for key in OUTPUT_FIELDS if parsed.get(key) is not None}
         if recorder:
             recorder.record(
                 provider="ollama",

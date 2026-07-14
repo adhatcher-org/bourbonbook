@@ -43,6 +43,7 @@ class BottleAnalysis(BaseModel):
     status: Literal["Unopened", "Opened", "Empty"] | None
     fill_level: int | None
     msrp: None
+    ocr_text: str | None = None
 
 
 class PriceAnalysis(BaseModel):

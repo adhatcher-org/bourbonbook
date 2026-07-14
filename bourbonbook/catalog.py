@@ -9,6 +9,11 @@ def normalize_product_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
+def catalog_price_key(name: str, size: str | None) -> tuple[str, str]:
+    """Return the stable local-cache key for an exact product and package size."""
+    return normalize_product_name(name), normalize_product_name(size or "")
+
+
 VERIFIED_PRODUCTS: dict[str, dict[str, Any]] = {
     "blantons-original-single-barrel": {
         "aliases": {
@@ -60,5 +65,16 @@ def verified_product(name: str) -> dict[str, Any] | None:
     for product in VERIFIED_PRODUCTS.values():
         aliases = {normalize_product_name(alias) for alias in product["aliases"]}
         if normalized in aliases:
+            return dict(product["values"])
+    return None
+
+
+def verified_product_from_text(text: str) -> dict[str, Any] | None:
+    normalized = normalize_product_name(text)
+    if not normalized:
+        return None
+    for product in VERIFIED_PRODUCTS.values():
+        aliases = {normalize_product_name(alias) for alias in product["aliases"]}
+        if any(alias and alias in normalized for alias in aliases):
             return dict(product["values"])
     return None

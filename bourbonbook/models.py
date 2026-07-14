@@ -113,6 +113,22 @@ class PriceSource(Base):
     bottle: Mapped[Bottle] = relationship(back_populates="price_sources")
 
 
+class CatalogPrice(Base):
+    """An OHLQ-backed MSRP cache shared by all bottles of the same product and size."""
+
+    __tablename__ = "catalog_prices"
+    __table_args__ = (UniqueConstraint("product_key", "size_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_key: Mapped[str] = mapped_column(String(240), index=True)
+    size_key: Mapped[str] = mapped_column(String(80), default="")
+    msrp: Mapped[float] = mapped_column(Float)
+    title: Mapped[str] = mapped_column(String(240), default="OHLQ")
+    url: Mapped[str] = mapped_column(Text)
+    basis: Mapped[str] = mapped_column(Text, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class ApiUsage(Base):
     __tablename__ = "api_usage"
 

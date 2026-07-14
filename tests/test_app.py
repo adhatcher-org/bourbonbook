@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from io import BytesIO
 from pathlib import Path
@@ -11,9 +12,9 @@ from PIL import Image
 from sqlalchemy import select, text
 
 from bourbonbook.config import Settings
-from bourbonbook.main import create_app
+from bourbonbook.main import apply_analysis, create_app, refresh_prices
 from bourbonbook.migrations import bootstrap_database
-from bourbonbook.models import Bottle, User
+from bourbonbook.models import Bottle, CatalogPrice, User
 from bourbonbook.tokens import token_digest
 
 
@@ -76,6 +77,63 @@ def test_health_and_auth_redirect(tmp_path: Path) -> None:
         response = client.get("/", follow_redirects=False)
         assert response.status_code == 303
         assert response.headers["location"] == "/login"
+
+
+def test_ohlq_price_cache_is_shared_between_matching_bottles(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            first = Bottle(owner_id=owner.id, name="Example Bourbon", size="750ml")
+            session.add(first)
+            session.flush()
+
+            async def first_lookup(name, settings, *, size=None):
+                assert (name, size) == ("Example Bourbon", "750ml")
+                return (
+                    {"msrp": 49.99},
+                    [
+                        {
+                            "kind": "msrp",
+                            "title": "OHLQ",
+                            "url": "https://www.ohlq.com/liquor/example-bourbon",
+                            "basis": "Exact OHLQ product listing.",
+                        }
+                    ],
+                    "complete",
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", first_lookup)
+            assert asyncio.run(refresh_prices(session, first, app.state.settings)) == "complete"
+            session.commit()
+
+            cached = session.scalar(select(CatalogPrice))
+            assert cached is not None
+            assert cached.msrp == 49.99
+            assert cached.url == "https://www.ohlq.com/liquor/example-bourbon"
+
+            second = Bottle(owner_id=owner.id, name="Example Bourbon", size="750ml")
+            session.add(second)
+            session.flush()
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError("A fresh OHLQ cache entry should prevent a provider call")
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+            assert asyncio.run(refresh_prices(session, second, app.state.settings)) == "cached"
+            assert second.msrp == 49.99
+            assert second.price_sources[0].url == cached.url
+
+
+def test_analysis_does_not_accept_an_inferred_msrp() -> None:
+    bottle = Bottle(name="Example", msrp=49.99)
+
+    apply_analysis(bottle, {"msrp": 1.0, "brand": "Example Brand"})
+
+    assert bottle.msrp == 49.99
+    assert bottle.brand == "Example Brand"
 
 
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:

@@ -365,6 +365,12 @@ def main() -> None:
     run.add_argument("--fixture", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument(
+        "--provider",
+        choices=("ollama", "openai"),
+        default=None,
+        help="Override ANALYSIS_PROVIDER for this benchmark run.",
+    )
+    run.add_argument(
         "--operations", choices=("photo", "name"), nargs="+", default=("photo", "name")
     )
     run.add_argument("--runs", type=int, default=3)
@@ -396,6 +402,11 @@ def main() -> None:
             if args.runs < 1:
                 raise ValueError("--runs must be positive")
             settings = Settings.from_env()
+            if args.provider is not None:
+                try:
+                    settings.analysis_provider = args.provider
+                except Exception:
+                    settings = Settings(**{**vars(settings), "analysis_provider": args.provider})
             report = asyncio.run(
                 run_fixture(
                     private_benchmark_path(settings, args.fixture),

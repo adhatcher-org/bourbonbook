@@ -1,4 +1,4 @@
-from bourbonbook.catalog import verified_product
+from bourbonbook.catalog import verified_product, verified_product_from_text
 
 
 def test_weller_full_proof_verified_values() -> None:
@@ -25,3 +25,12 @@ def test_blantons_verbose_name_maps_to_verified_values() -> None:
     assert product["name"] == "Blanton's Original Single Barrel"
     assert product["proof"] == 93.0
     assert product["abv"] == 46.5
+
+
+def test_verified_product_can_be_matched_from_label_ocr() -> None:
+    product = verified_product_from_text(
+        "W. L. WELLER\nFULL PROOF\nKENTUCKY STRAIGHT BOURBON WHISKEY"
+    )
+
+    assert product
+    assert product["name"] == "W.L. Weller Full Proof"

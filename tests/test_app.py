@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
@@ -10,9 +12,9 @@ from PIL import Image
 from sqlalchemy import select, text
 
 from bourbonbook.config import Settings
-from bourbonbook.main import create_app
+from bourbonbook.main import apply_analysis, create_app, refresh_prices
 from bourbonbook.migrations import bootstrap_database
-from bourbonbook.models import Bottle, User
+from bourbonbook.models import Bottle, CatalogPrice, User
 from bourbonbook.tokens import token_digest
 
 
@@ -77,6 +79,63 @@ def test_health_and_auth_redirect(tmp_path: Path) -> None:
         assert response.headers["location"] == "/login"
 
 
+def test_ohlq_price_cache_is_shared_between_matching_bottles(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            first = Bottle(owner_id=owner.id, name="Example Bourbon", size="750ml")
+            session.add(first)
+            session.flush()
+
+            async def first_lookup(name, settings, *, size=None):
+                assert (name, size) == ("Example Bourbon", "750ml")
+                return (
+                    {"msrp": 49.99},
+                    [
+                        {
+                            "kind": "msrp",
+                            "title": "OHLQ",
+                            "url": "https://www.ohlq.com/liquor/example-bourbon",
+                            "basis": "Exact OHLQ product listing.",
+                        }
+                    ],
+                    "complete",
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", first_lookup)
+            assert asyncio.run(refresh_prices(session, first, app.state.settings)) == "complete"
+            session.commit()
+
+            cached = session.scalar(select(CatalogPrice))
+            assert cached is not None
+            assert cached.msrp == 49.99
+            assert cached.url == "https://www.ohlq.com/liquor/example-bourbon"
+
+            second = Bottle(owner_id=owner.id, name="Example Bourbon", size="750ml")
+            session.add(second)
+            session.flush()
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError("A fresh OHLQ cache entry should prevent a provider call")
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+            assert asyncio.run(refresh_prices(session, second, app.state.settings)) == "cached"
+            assert second.msrp == 49.99
+            assert second.price_sources[0].url == cached.url
+
+
+def test_analysis_does_not_accept_an_inferred_msrp() -> None:
+    bottle = Bottle(name="Example", msrp=49.99)
+
+    apply_analysis(bottle, {"msrp": 1.0, "brand": "Example Brand"})
+
+    assert bottle.msrp == 49.99
+    assert bottle.brand == "Example Brand"
+
+
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
     client, _ = make_client(tmp_path)
     with client:
@@ -112,6 +171,54 @@ def test_readyz_reports_unready_when_database_is_not_at_head(tmp_path: Path) -> 
         response = client.get("/readyz")
         assert response.status_code == 503
         assert response.json() == {"status": "not_ready"}
+
+
+def test_provider_clients_are_shared_and_closed(tmp_path: Path, monkeypatch) -> None:
+    openai_closed = []
+    ollama_closed = []
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.responses = SimpleNamespace()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            openai_closed.append(True)
+
+    class FakeOllamaClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            ollama_closed.append(True)
+
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        session_secret="test-secret-that-is-long-enough!",
+        secure_cookies=False,
+        ollama_url="http://ollama.invalid",
+        ollama_model="test",
+        max_users=10,
+        max_upload_mb=2,
+        openai_api_key="test-key",
+    )
+    bootstrap_database(settings)
+    monkeypatch.setattr("bourbonbook.main.AsyncOpenAI", FakeOpenAI)
+    monkeypatch.setattr("bourbonbook.main.httpx.AsyncClient", FakeOllamaClient)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.app.state.openai_client is not None
+        assert client.app.state.ollama_client is not None
+
+    assert openai_closed == [True]
+    assert ollama_closed == [True]
 
 
 def test_registration_library_and_logout(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from bourbonbook.openai_provider import (
     request_analysis,
     search_prices,
 )
+from bourbonbook.provider_clients import reset_shared_openai_client, set_shared_openai_client
 
 
 def settings_for(tmp_path, api_key: str | None = "test-key") -> Settings:
@@ -70,7 +71,7 @@ def test_openai_image_analysis_uses_structured_output(tmp_path, monkeypatch) -> 
         async def __aexit__(self, *args) -> None:
             pass
 
-    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", FakeClient)
 
     result, status = asyncio.run(request_analysis("Analyze", settings_for(tmp_path), photo))
 
@@ -89,12 +90,57 @@ def test_missing_openai_key_is_unavailable(tmp_path, monkeypatch) -> None:
     def fail_if_called(**kwargs):
         raise AssertionError("OpenAI client should not be created without a key")
 
-    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", fail_if_called)
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", fail_if_called)
 
     result, status = asyncio.run(request_analysis("Analyze", settings_for(tmp_path, None)))
 
     assert status == "unavailable"
     assert result == {}
+
+
+def test_shared_openai_client_is_reused(tmp_path, monkeypatch) -> None:
+    class SharedResponses:
+        async def parse(self, **kwargs):
+            return SimpleNamespace(
+                output_parsed=BottleAnalysis(
+                    name="Example Bourbon",
+                    brand="Example",
+                    release=None,
+                    edition=None,
+                    spirit_type="Bourbon",
+                    distilled_by=None,
+                    mash_bill=None,
+                    proof=100,
+                    abv=50,
+                    size="750ml",
+                    age_statement=None,
+                    barrel_number=None,
+                    bottle_number=None,
+                    warehouse=None,
+                    floor=None,
+                    status="Unopened",
+                    fill_level=45,
+                    msrp=None,
+                )
+            )
+
+    class SharedClient:
+        def __init__(self) -> None:
+            self.responses = SharedResponses()
+
+    class TempClient:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("A shared OpenAI client should have been reused")
+
+    token = set_shared_openai_client(SharedClient())
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", TempClient)
+    try:
+        result, status = asyncio.run(request_analysis("Analyze", settings_for(tmp_path), None))
+    finally:
+        reset_shared_openai_client(token)
+
+    assert status == "complete"
+    assert result["name"] == "Example Bourbon"
 
 
 def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) -> None:
@@ -137,7 +183,7 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
         async def __aexit__(self, *args) -> None:
             pass
 
-    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", FakeClient)
 
     prices, sources, status = asyncio.run(
         search_prices("Weller Antique 107", settings_for(tmp_path), size="750ml")
@@ -182,7 +228,7 @@ def test_missing_parsed_openai_outputs_are_unavailable(tmp_path, monkeypatch) ->
         async def __aexit__(self, *args) -> None:
             return None
 
-    monkeypatch.setattr("bourbonbook.openai_provider.AsyncOpenAI", FakeClient)
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", FakeClient)
     settings = settings_for(tmp_path)
 
     assert asyncio.run(search_prices("Bottle", settings)) == ({}, [], "unavailable")

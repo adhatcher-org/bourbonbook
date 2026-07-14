@@ -24,7 +24,7 @@ def settings_for(tmp_path, provider: str) -> Settings:
 
 def test_openai_provider_is_selected(tmp_path, monkeypatch) -> None:
     async def fake_request(prompt, settings, photo=None):
-        assert "Weller Full Proof" in prompt
+        assert "Example Bourbon" in prompt
         assert settings.openai_model == "test-openai"
         assert photo is None
         return {"proof": 114}, "complete"
@@ -32,11 +32,11 @@ def test_openai_provider_is_selected(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("bourbonbook.openai_provider.request_analysis", fake_request)
 
     result, status = asyncio.run(
-        analyze_bottle_name("Weller Full Proof", settings_for(tmp_path, "openai"))
+        analyze_bottle_name("Example Bourbon", settings_for(tmp_path, "openai"))
     )
 
     assert status == "complete"
-    assert result == {"proof": 114}
+    assert result == {"name": "Example Bourbon", "proof": 114}
 
 
 def test_unknown_provider_is_unavailable(tmp_path) -> None:
@@ -55,15 +55,38 @@ def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) ->
     monkeypatch.setattr("bourbonbook.ollama.request_analysis", fake_request)
     assert asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))[0]["name"] == "From Ollama"
     assert asyncio.run(analyze_bottle_name("Bottle", settings))[1] == "complete"
-    assert asyncio.run(search_bottle_prices("Bottle", settings)) == ({}, [], "unavailable")
-
-    openai_settings = settings_for(tmp_path, "openai")
 
     async def fake_prices(name, settings, *, size=None):
         assert size == "750ml"
         return {"msrp": 50.0}, [], "complete"
 
     monkeypatch.setattr("bourbonbook.openai_provider.search_prices", fake_prices)
-    assert asyncio.run(search_bottle_prices("Bottle", openai_settings, size="750ml"))[0] == {
-        "msrp": 50.0
-    }
+    assert asyncio.run(search_bottle_prices("Bottle", settings, size="750ml"))[0] == {"msrp": 50.0}
+
+
+def test_partial_ollama_photo_analysis_falls_back_to_openai(tmp_path, monkeypatch) -> None:
+    settings = settings_for(tmp_path, "ollama")
+    calls: list[str] = []
+
+    async def fake_ollama(prompt, configured_settings, photo=None):
+        calls.append(configured_settings.analysis_provider)
+        return {
+            "name": "Uncatalogued Bottle",
+            "ocr_text": "UNCATALOGUED BOTTLE 100 PROOF",
+            "proof": 100,
+        }, "complete"
+
+    async def fake_openai(prompt, configured_settings, photo=None):
+        calls.append(configured_settings.analysis_provider)
+        assert "ocr_text" in prompt
+        return {"brand": "Example Distillery", "abv": 50}, "complete"
+
+    monkeypatch.setattr("bourbonbook.ollama.request_analysis", fake_ollama)
+    monkeypatch.setattr("bourbonbook.openai_provider.request_analysis", fake_openai)
+
+    values, status = asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+
+    assert status == "complete"
+    assert values["ocr_text"] == "UNCATALOGUED BOTTLE 100 PROOF"
+    assert values["brand"] == "Example Distillery"
+    assert calls == ["ollama", "ollama", "openai"]

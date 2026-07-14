@@ -81,3 +81,12 @@ python -m bourbonbook.benchmark_cli compare \
 
 The fixture and report directories are intentionally under the mounted data volume and ignored by
 Git. Back them up with the rest of the private app data, not in the repository.
+
+For local development from a repo checkout, the same benchmark files live under
+`data/benchmarks/` because `DATA_DIR` defaults to `./data`. The convenience targets are:
+
+```bash
+make benchmark-export BENCHMARK_OWNER=YOUR_OWNER_ID_OR_USERNAME
+make benchmark-run
+make benchmark-compare
+```

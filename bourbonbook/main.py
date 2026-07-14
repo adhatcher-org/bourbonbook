@@ -5,16 +5,19 @@ import os
 import secrets
 import signal
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from openai import AsyncOpenAI
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -41,7 +44,7 @@ from bourbonbook.auth import (
     verify_csrf,
     verify_password,
 )
-from bourbonbook.catalog import verified_product
+from bourbonbook.catalog import catalog_price_key, verified_product
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
 from bourbonbook.email import create_email_sender, security_message
@@ -54,7 +57,7 @@ from bourbonbook.logging_config import (
     valid_request_id,
 )
 from bourbonbook.migrations import HEAD_REVISION, bootstrap_database
-from bourbonbook.models import ApiUsage, Bottle, PriceSource, User, UserToken
+from bourbonbook.models import ApiUsage, Bottle, CatalogPrice, PriceSource, User, UserToken
 from bourbonbook.observability import (
     HTTP_IN_PROGRESS,
     AIUsageRecorder,
@@ -66,6 +69,12 @@ from bourbonbook.observability import (
     usage_context,
 )
 from bourbonbook.photos import save_avatar, save_photo
+from bourbonbook.provider_clients import (
+    reset_shared_ollama_client,
+    reset_shared_openai_client,
+    set_shared_ollama_client,
+    set_shared_openai_client,
+)
 from bourbonbook.rate_limit import RateLimiter
 from bourbonbook.tokens import (
     RESET_PASSWORD,
@@ -80,6 +89,7 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent
 templates = Jinja2Templates(directory=ROOT / "templates")
+PRICE_CACHE_TTL = timedelta(days=90)
 
 
 def money(value: float | None) -> str:
@@ -105,19 +115,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        bootstrap_database(settings)
-        removed = app.state.usage_recorder.cleanup_old_records()
-        if removed:
-            log_event(
-                logger,
-                logging.INFO,
-                "usage_retention_cleanup",
-                "Old API usage records removed",
-                removed=removed,
+        async with AsyncExitStack() as stack:
+            app.state.openai_client = None
+            if settings.openai_api_key:
+                app.state.openai_client = await stack.enter_async_context(
+                    AsyncOpenAI(api_key=settings.openai_api_key, timeout=120.0)
+                )
+            app.state.ollama_client = await stack.enter_async_context(
+                httpx.AsyncClient(timeout=120)
             )
-        with database.session_factory() as session:
-            await bootstrap_admin(session, settings, app.state.email_sender)
-        yield
+            bootstrap_database(settings)
+            removed = app.state.usage_recorder.cleanup_old_records()
+            if removed:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "usage_retention_cleanup",
+                    "Old API usage records removed",
+                    removed=removed,
+                )
+            with database.session_factory() as session:
+                await bootstrap_admin(session, settings, app.state.email_sender)
+            yield
         log_event(logger, logging.INFO, "app_stopping", "Bourbon Book stopping")
         database.engine.dispose()
 
@@ -142,6 +161,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=settings.secure_cookies,
         max_age=60 * 60 * 24 * 30,
     )
+
+    @app.middleware("http")
+    async def provider_client_context(request: Request, call_next):
+        tokens = []
+        openai_client = getattr(request.app.state, "openai_client", None)
+        ollama_client = getattr(request.app.state, "ollama_client", None)
+        if openai_client is not None:
+            tokens.append(set_shared_openai_client(openai_client))
+        if ollama_client is not None:
+            tokens.append(set_shared_ollama_client(ollama_client))
+        try:
+            return await call_next(request)
+        finally:
+            if ollama_client is not None:
+                reset_shared_ollama_client(tokens.pop())
+            if openai_client is not None:
+                reset_shared_openai_client(tokens.pop())
+
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     app.mount("/images", StaticFiles(directory=ROOT.parent / "images"), name="images")
     register_observability(app)
@@ -251,14 +288,14 @@ def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
 
 def apply_analysis(bottle: Bottle, analysis: dict[str, Any]) -> None:
     for key, value in analysis.items():
-        if hasattr(bottle, key) and value is not None:
+        if key != "msrp" and hasattr(bottle, key) and value is not None:
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
 
 
 def apply_price_search(
-    bottle: Bottle, prices: dict[str, float], sources: list[dict[str, str]]
+    bottle: Bottle, prices: dict[str, float], sources: list[dict[str, Any]]
 ) -> None:
     for field in ("msrp",):
         if field in prices:
@@ -271,11 +308,94 @@ def apply_price_search(
         bottle.price_sources.extend(PriceSource(**source) for source in sources)
 
 
-async def refresh_prices(bottle: Bottle, settings: Settings) -> str:
+def is_ohlq_source(source: dict[str, Any]) -> bool:
+    host = urlsplit(str(source.get("url", ""))).hostname or ""
+    return host == "ohlq.com" or host.endswith(".ohlq.com")
+
+
+def catalog_price_is_fresh(price: CatalogPrice) -> bool:
+    checked_at = price.checked_at
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    return checked_at >= datetime.now(UTC) - PRICE_CACHE_TTL
+
+
+def catalog_price_source(price: CatalogPrice) -> dict[str, Any]:
+    return {
+        "kind": "msrp",
+        "title": price.title,
+        "url": price.url,
+        "basis": price.basis,
+        "checked_at": price.checked_at,
+    }
+
+
+def cached_catalog_price(session: Session, bottle: Bottle) -> CatalogPrice | None:
+    product_key, size_key = catalog_price_key(bottle.name, bottle.size)
+    if not product_key:
+        return None
+    price = session.scalar(
+        select(CatalogPrice).where(
+            CatalogPrice.product_key == product_key,
+            CatalogPrice.size_key == size_key,
+        )
+    )
+    return price if price and catalog_price_is_fresh(price) else None
+
+
+def cache_ohlq_price(
+    session: Session, bottle: Bottle, prices: dict[str, float], sources: list[dict[str, Any]]
+) -> None:
+    if "msrp" not in prices:
+        return
+    source = next(
+        (
+            candidate
+            for candidate in sources
+            if candidate.get("kind") == "msrp" and is_ohlq_source(candidate)
+        ),
+        None,
+    )
+    if source is None:
+        return
+    product_key, size_key = catalog_price_key(bottle.name, bottle.size)
+    if not product_key:
+        return
+    cached = session.scalar(
+        select(CatalogPrice).where(
+            CatalogPrice.product_key == product_key,
+            CatalogPrice.size_key == size_key,
+        )
+    )
+    if cached is None:
+        cached = CatalogPrice(
+            product_key=product_key,
+            size_key=size_key,
+            msrp=prices["msrp"],
+            url="",
+        )
+        session.add(cached)
+    cached.msrp = prices["msrp"]
+    cached.title = str(source.get("title") or "OHLQ")
+    cached.url = str(source["url"])
+    cached.basis = str(source.get("basis") or "")
+    cached.checked_at = datetime.now(UTC)
+
+
+async def refresh_prices(
+    session: Session, bottle: Bottle, settings: Settings, *, force: bool = False
+) -> str:
     if not bottle.name or bottle.name == "Untitled bottle":
         return "unavailable"
+    if not force:
+        cached = cached_catalog_price(session, bottle)
+        if cached:
+            apply_price_search(bottle, {"msrp": cached.msrp}, [catalog_price_source(cached)])
+            return "cached"
     prices, sources, status = await search_bottle_prices(bottle.name, settings, size=bottle.size)
     apply_price_search(bottle, prices, sources)
+    if status == "complete":
+        cache_ohlq_price(session, bottle, prices, sources)
     return status
 
 
@@ -1529,7 +1649,7 @@ def register_routes(app: FastAPI) -> None:
                 if enrichment:
                     bottle.analysis_status = normalized_analysis_status(enrichment_status)
                 with usage_context(app.state.usage_recorder, user.id):
-                    price_status = await refresh_prices(bottle, app.state.settings)
+                    price_status = await refresh_prices(session, bottle, app.state.settings)
                 if price_status == "complete":
                     bottle.analysis_status = price_status
             bottle.purchase_price = parse_float(purchase_price)
@@ -1637,7 +1757,10 @@ def register_routes(app: FastAPI) -> None:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
             if mode == "price":
                 with usage_context(app.state.usage_recorder, user.id):
-                    analysis, analysis_status = {}, await refresh_prices(bottle, app.state.settings)
+                    analysis, analysis_status = (
+                        {},
+                        await refresh_prices(session, bottle, app.state.settings, force=True),
+                    )
             elif mode == "name":
                 with usage_context(app.state.usage_recorder, user.id):
                     analysis, analysis_status = await enrich_bottle_by_name(
@@ -1661,7 +1784,7 @@ def register_routes(app: FastAPI) -> None:
                     analysis_status = enrichment_status
             if mode in {"name", "photo"} and bottle.name:
                 with usage_context(app.state.usage_recorder, user.id):
-                    price_status = await refresh_prices(bottle, app.state.settings)
+                    price_status = await refresh_prices(session, bottle, app.state.settings)
                 if price_status == "complete":
                     analysis_status = price_status
             analysis_status = normalized_analysis_status(analysis_status)

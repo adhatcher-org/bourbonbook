@@ -77,7 +77,7 @@ benchmark-compare: ## Compare the local benchmark baseline and candidate reports
 		--candidate $(BENCHMARK_CANDIDATE)
 
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.
-	$(UV) run --env-file data/.env $(PYTHON) scripts/pr_review.py
+	$(UV) run $(PYTHON) scripts/pr_review.py
 
 pre-ci: lint coverage security dependency-check pr-check ## Run all non-container quality gates.
 	@echo "All non-container quality gates passed."

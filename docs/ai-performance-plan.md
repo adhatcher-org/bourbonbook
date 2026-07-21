@@ -1,6 +1,6 @@
 # AI Performance and Accuracy Plan
 
-This plan is a separate, evidence-first workstream alongside the RAG roadmap in `plan.md`.
+This plan is a separate, evidence-first workstream alongside the [RAG roadmap](adr/plan.md).
 It does not change production analysis settings without a candidate benchmark report that is at
 least as accurate and as fast as the approved baseline.
 
@@ -43,16 +43,67 @@ a separate source-backed, dated benchmark after the pricing roadmap is implement
 
 ## Phase 2: RTX 3090 (24 GB)
 
-1. Re-run the unchanged 1070 Ti fixture/report on the 3090 after confirming GPU passthrough,
-   sustained thermals, and model persistence.
-2. Benchmark `qwen2.5vl:7b`, `qwen3-vl:8b`, and a viable Gemma 3 12B quantization.  Select a model
-   only through the benchmark gate.
-3. Add a bounded GPU job queue and limited concurrency only after measuring VRAM under simultaneous
-   analysis.  Record queue time separately.
-4. If concurrent requests justify it, perform a separate vLLM evaluation; retain Ollama unless the
-   same benchmark proves a vLLM candidate meets the gate.
-5. Move analysis to durable background jobs with progress UI and user confirmation for low-confidence
-   fields.  Benchmark the end-to-end user-visible completion time before enabling it.
+The 3090 creates enough headroom to use larger specialist models, but it does not make multiple
+large models resident for one user transaction a safe default. Preserve the benchmark gate: no model
+below is a production selection until it has passed the frozen collection benchmark.
+
+### Model roles
+
+| Application work | Primary path | Local model role | Non-LLM evidence and guardrails |
+| --- | --- | --- | --- |
+| Add a bottle from a photo: label transcription, identity, bottle-specific visual facts, status, and fill level | Photo-analysis job | `gemma4:26b` is the primary VLM candidate | Normalize the image first; retain extracted label text and confidence. OCR text cannot establish fill level, so preserve its separate visual result and request user confirmation when confidence is low. |
+| Add a bottle from a photo: durable product attributes | Local catalog after the photo job | No routine LLM call | Match the recognized name/label text to the versioned catalog to supply distillery, mash bill, standard proof/ABV, and size. Do not let the VLM invent missing product facts. |
+| Resolve an unknown or ambiguous recognized bottle | Exception path after catalog matching fails | `qwen3:30b-a3b` for fast text/name reconciliation | Send the existing extracted evidence only; do not make this a second call for every successful photo. Persist an unresolved result for user correction rather than guessing. |
+| Look up or refresh bottle attributes from a typed bottle name | Catalog-first name lookup | `qwen3:30b-a3b` only for a catalog miss or ambiguity | Exact catalog matches return immediately. The general model may reconcile a name, then the catalog remains the authority for durable fields. |
+| Add or refresh MSRP | Source-backed pricing job | No LLM | Use the existing local OHLQ cache and a direct OHLQ/imported catalog source with exact product-and-size matching, source URL, and checked date. A cache miss may be unavailable; no model may infer MSRP. |
+| Continue-assisted development | Developer workstation, never the application request path | `qwen3-coder:30b` | Unload it before application benchmarks or user analysis so it cannot consume VRAM or bias results. |
+
+`qwen3.6:35b` is a benchmark candidate for broader text reconciliation only; it is not the default
+until it passes the same name-lookup accuracy and latency gate. `qwen3-vl:8b` is not a production
+default: its prior fixture report regressed photo latency and critical extraction accuracy against the
+OpenAI baseline. It may be retained only as a control in future benchmark reports.
+
+### User-transaction timing and model residency
+
+1. Re-run the unchanged private fixture on the 3090 after confirming GPU passthrough, sustained
+   thermals, model digest, and model persistence. Treat any 1070 Ti report as historical comparison
+   evidence only; capture every new cold-start and warm sample on the 3090. Record `nvidia-smi`,
+   `ollama ps`, Ollama version, and whether the selected model was unloaded for the cold-start sample.
+2. Benchmark `gemma4:26b` as the photo candidate. Benchmark `qwen3:30b-a3b` and `qwen3.6:35b` only
+   on the name/reconciliation operation. Select each role independently through the benchmark gate;
+   do not compare text-token throughput with end-to-end photo completion time.
+3. Treat the normal photo transaction as one VLM call followed by local catalog work. Show progress
+   while the photo job is running, then save the result for review. A catalog miss may enqueue the
+   text-reconciliation exception, but the user-facing flow must identify that additional stage rather
+   than silently loading another large model.
+4. Treat the normal typed-name transaction as catalog-first. Only load/use the general model after a
+   miss or ambiguity. This keeps common name edits fast and avoids loading the vision model.
+5. Treat pricing as a separate source-backed refresh. Apply a fresh matching cached price instantly;
+   otherwise queue or run the OHLQ/import job and show the timestamp/source. It must never block a
+   photo or name-analysis model call.
+6. Keep exactly one large application model resident initially. A photo request uses the VLM; a
+   reconciliation/name request uses the general model; Continue's coding model is unloaded outside
+   development. Measure model-load/eviction time separately from inference and include it in the
+   user-visible cold-start report. Do not preload both the 26B vision model and 30B general/coding
+   models on a 24 GB card.
+7. Add a bounded GPU job queue and limited concurrency only after measuring VRAM under simultaneous
+   analysis. Record queue wait, model-load/eviction, inference, catalog, and pricing times separately.
+   Move jobs to durable background execution with progress UI and user confirmation for low-confidence
+   fields only after the end-to-end user-visible completion benchmark passes.
+8. If concurrent requests justify it, perform a separate vLLM evaluation. Retain Ollama unless the
+   same role-specific benchmark proves a vLLM candidate meets the gate.
+
+### Changes from original Phase 2 plan
+
+- Replaced the generic `qwen2.5vl:7b` / `qwen3-vl:8b` / Gemma 3 12B shortlist with measured-role
+  candidates: `gemma4:26b` for photos, `qwen3:30b-a3b` for text reconciliation, and
+  `qwen3.6:35b` as an experimental text candidate.
+- Explicitly removed `qwen3-vl:8b` as the production default because its recorded benchmark regressed
+  both latency and critical photo accuracy.
+- Added a catalog-first, source-backed transaction design so durable attributes and MSRP are not
+  invented by an LLM; MSRP is now explicitly a non-LLM OHLQ/cache operation.
+- Added the one-large-model residency rule, explicit model-load/eviction timing, and visible exception
+  stages to account for the 3090's 24 GB VRAM during real user transactions.
 
 ## Unraid runbook
 

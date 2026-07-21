@@ -4,16 +4,21 @@ SHELL := /bin/bash
 UV ?= uv
 PYTHON ?= python
 IMAGE ?= bourbonbook
-TAG ?= local
+TAG ?= local-v1
 HOST ?= 127.0.0.1
 PORT ?= 8000
 BENCHMARK_ROOT ?= data/benchmarks
 BENCHMARK_FIXTURE ?= $(BENCHMARK_ROOT)/fixtures/collection-v1
 BENCHMARK_BASELINE ?= $(BENCHMARK_ROOT)/reports/current-baseline.json
 BENCHMARK_CANDIDATE ?= $(BENCHMARK_ROOT)/reports/candidate.json
+PRICE_CATALOG ?= data/catalog-prices.jsonl
+CATALOG_SCREENSHOTS ?= AmericanWhiskey1.png AmericanWhiskey2.png
+CATALOG_SCREENSHOT_OUTPUT ?= data/ohlq-screenshot-prices.jsonl
 
 .PHONY: help install build build-local pre-ci ci test coverage run_local update lint format \
-	pr-review pr-check security dependency-check benchmark-export benchmark-run benchmark-compare
+	pr-review pr-check security dependency-check benchmark-export benchmark-run benchmark-compare \
+	price-catalog-ingest price-catalog-reindex
+	price-catalog-extract-screenshots
 
 help: ## List development and CI targets.
 	@awk 'BEGIN {FS = ":.*## "; printf "Bourbon Book targets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -75,6 +80,16 @@ benchmark-compare: ## Compare the local benchmark baseline and candidate reports
 	$(UV) run --env-file data/.env python -m bourbonbook.benchmark_cli compare \
 		--baseline $(BENCHMARK_BASELINE) \
 		--candidate $(BENCHMARK_CANDIDATE)
+
+price-catalog-ingest: ## Import validated local price records from PRICE_CATALOG JSON Lines.
+	$(UV) run --env-file data/.env python -m bourbonbook.catalog_cli ingest-jsonl $(PRICE_CATALOG)
+
+price-catalog-reindex: ## Rebuild the configured Qdrant price index from the SQLite catalog.
+	$(UV) run --env-file data/.env python -m bourbonbook.catalog_cli reindex
+
+price-catalog-extract-screenshots: ## Extract local screenshot records through the configured Ollama vision model.
+	$(UV) run --env-file data/.env python -m scripts.extract_catalog_screenshots $(CATALOG_SCREENSHOTS) \
+		--output $(CATALOG_SCREENSHOT_OUTPUT) --ingest
 
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.
 	$(UV) run $(PYTHON) scripts/pr_review.py

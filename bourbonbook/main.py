@@ -7,6 +7,7 @@ import signal
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -75,6 +76,7 @@ from bourbonbook.provider_clients import (
     set_shared_ollama_client,
     set_shared_openai_client,
 )
+from bourbonbook.qdrant_prices import QdrantPriceIndex
 from bourbonbook.rate_limit import RateLimiter
 from bourbonbook.tokens import (
     RESET_PASSWORD,
@@ -90,6 +92,7 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).parent
 templates = Jinja2Templates(directory=ROOT / "templates")
 PRICE_CACHE_TTL = timedelta(days=90)
+USER_PRICE_OVERRIDE_TTL = timedelta(days=183)
 
 
 def money(value: float | None) -> str:
@@ -124,7 +127,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.ollama_client = await stack.enter_async_context(
                 httpx.AsyncClient(timeout=120)
             )
+            app.state.qdrant_price_index = QdrantPriceIndex(settings)
+            stack.push_async_callback(app.state.qdrant_price_index.close)
             bootstrap_database(settings)
+            await app.state.qdrant_price_index.ensure_collection()
             removed = app.state.usage_recorder.cleanup_old_records()
             if removed:
                 log_event(
@@ -144,6 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.database = database
     app.state.usage_recorder = usage_recorder
+    app.state.qdrant_price_index = None
     app.state.email_sender = ObservedEmailSender(
         create_email_sender(settings), metrics_enabled=settings.metrics_enabled
     )
@@ -308,16 +315,20 @@ def apply_price_search(
         bottle.price_sources.extend(PriceSource(**source) for source in sources)
 
 
-def is_ohlq_source(source: dict[str, Any]) -> bool:
-    host = urlsplit(str(source.get("url", ""))).hostname or ""
-    return host == "ohlq.com" or host.endswith(".ohlq.com")
-
-
 def catalog_price_is_fresh(price: CatalogPrice) -> bool:
     checked_at = price.checked_at
     if checked_at.tzinfo is None:
         checked_at = checked_at.replace(tzinfo=UTC)
     return checked_at >= datetime.now(UTC) - PRICE_CACHE_TTL
+
+
+def catalog_price_needs_user_update(price: CatalogPrice | None) -> bool:
+    if price is None:
+        return True
+    checked_at = price.checked_at
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    return checked_at < datetime.now(UTC) - USER_PRICE_OVERRIDE_TTL
 
 
 def catalog_price_source(price: CatalogPrice) -> dict[str, Any]:
@@ -343,24 +354,89 @@ def cached_catalog_price(session: Session, bottle: Bottle) -> CatalogPrice | Non
     return price if price and catalog_price_is_fresh(price) else None
 
 
-def cache_ohlq_price(
+async def apply_user_purchase_price(
+    session: Session, bottle: Bottle, price_index: QdrantPriceIndex | None = None
+) -> bool:
+    """Use a recent user-entered purchase price only when shared catalog data is stale or absent."""
+    if bottle.purchase_price is None or bottle.purchase_price <= 0:
+        return False
+    product_key, size_key = catalog_price_key(bottle.name, bottle.size)
+    if not product_key:
+        return False
+    price = session.scalar(
+        select(CatalogPrice).where(
+            CatalogPrice.product_key == product_key,
+            CatalogPrice.size_key == size_key,
+        )
+    )
+    if not catalog_price_needs_user_update(price):
+        return False
+    if price is None:
+        price = CatalogPrice(
+            product_key=product_key,
+            size_key=size_key,
+            msrp=bottle.purchase_price,
+            title="User-entered purchase price",
+            url="",
+        )
+        session.add(price)
+    price.msrp = bottle.purchase_price
+    price.title = "User-entered purchase price"
+    price.url = ""
+    price.basis = ""
+    price.checked_at = datetime.now(UTC)
+    bottle.msrp = bottle.purchase_price
+    session.flush()
+    if price_index:
+        await price_index.upsert(price)
+    log_event(
+        logger,
+        logging.INFO,
+        "user_purchase_price_applied",
+        "User purchase price applied to local catalog",
+        catalog_price_id=price.id,
+    )
+    return True
+
+
+async def qdrant_catalog_price(
+    session: Session, bottle: Bottle, price_index: QdrantPriceIndex | None
+) -> CatalogPrice | None:
+    if price_index is None:
+        return None
+    product_key, size_key = catalog_price_key(bottle.name, bottle.size)
+    if not product_key:
+        return None
+    match = await price_index.find(product_key, size_key)
+    if match is None or match.score < 0.82:
+        return None
+    price = session.get(CatalogPrice, match.catalog_price_id)
+    if price is None or not catalog_price_is_fresh(price):
+        return None
+    if SequenceMatcher(None, product_key, price.product_key).ratio() < 0.82:
+        return None
+    return price
+
+
+def cache_catalog_price(
     session: Session, bottle: Bottle, prices: dict[str, float], sources: list[dict[str, Any]]
-) -> None:
+) -> CatalogPrice | None:
     if "msrp" not in prices:
-        return
+        return None
     source = next(
         (
             candidate
             for candidate in sources
-            if candidate.get("kind") == "msrp" and is_ohlq_source(candidate)
+            if candidate.get("kind") == "msrp"
+            and urlsplit(str(candidate.get("url") or "")).scheme in {"http", "https"}
         ),
         None,
     )
     if source is None:
-        return
+        return None
     product_key, size_key = catalog_price_key(bottle.name, bottle.size)
     if not product_key:
-        return
+        return None
     cached = session.scalar(
         select(CatalogPrice).where(
             CatalogPrice.product_key == product_key,
@@ -376,14 +452,21 @@ def cache_ohlq_price(
         )
         session.add(cached)
     cached.msrp = prices["msrp"]
-    cached.title = str(source.get("title") or "OHLQ")
+    cached.title = str(source.get("title") or "Local catalog")
     cached.url = str(source["url"])
     cached.basis = str(source.get("basis") or "")
     cached.checked_at = datetime.now(UTC)
+    session.flush()
+    return cached
 
 
 async def refresh_prices(
-    session: Session, bottle: Bottle, settings: Settings, *, force: bool = False
+    session: Session,
+    bottle: Bottle,
+    settings: Settings,
+    *,
+    force: bool = False,
+    price_index: QdrantPriceIndex | None = None,
 ) -> str:
     if not bottle.name or bottle.name == "Untitled bottle":
         return "unavailable"
@@ -392,10 +475,16 @@ async def refresh_prices(
         if cached:
             apply_price_search(bottle, {"msrp": cached.msrp}, [catalog_price_source(cached)])
             return "cached"
+        matched = await qdrant_catalog_price(session, bottle, price_index)
+        if matched:
+            apply_price_search(bottle, {"msrp": matched.msrp}, [catalog_price_source(matched)])
+            return "local_match"
     prices, sources, status = await search_bottle_prices(bottle.name, settings, size=bottle.size)
     apply_price_search(bottle, prices, sources)
     if status == "complete":
-        cache_ohlq_price(session, bottle, prices, sources)
+        cached = cache_catalog_price(session, bottle, prices, sources)
+        if cached and price_index:
+            await price_index.upsert(cached)
     return status
 
 
@@ -608,7 +697,7 @@ def register_routes(app: FastAPI) -> None:
                     mode="login",
                     error="Contact an administrator to update this legacy account.",
                 )
-            if not user.email_verified_at:
+            if app.state.settings.email_verification_required and not user.email_verified_at:
                 observe_auth_event("login", "unverified")
                 request.session.clear()
                 request.session["unverified_user_id"] = user.id
@@ -659,9 +748,17 @@ def register_routes(app: FastAPI) -> None:
                 email=email,
                 screen_name=screen_name or email.split("@", 1)[0],
                 password_hash=hash_password(password),
+                email_verified_at=(
+                    None if app.state.settings.email_verification_required else datetime.now(UTC)
+                ),
             )
             session.add(user)
             session.flush()
+            if not app.state.settings.email_verification_required:
+                session.commit()
+                authenticate_session(request, user)
+                observe_auth_event("registration", "success")
+                return RedirectResponse("/profile", 303)
             request.session.clear()
             request.session["unverified_user_id"] = user.id
             try:
@@ -1115,7 +1212,6 @@ def register_routes(app: FastAPI) -> None:
                 .outerjoin(Bottle, Bottle.owner_id == User.id)
                 .group_by(User.id)
             )
-
             count_statement = select(func.count(User.id))
             if q.strip():
                 term = f"%{q.strip()}%"
@@ -1140,6 +1236,122 @@ def register_routes(app: FastAPI) -> None:
                 page_size=page_size,
                 total=total,
                 max_page=max(1, (total + page_size - 1) // page_size),
+            )
+
+    @app.get("/admin/catalog", response_class=HTMLResponse)
+    def admin_catalog(
+        request: Request, q: str = "", sort: str = "name_asc", page: int = 1, page_size: int = 25
+    ) -> Response:
+        page_size = page_size if page_size in {10, 25, 50, 100} else 25
+        page = max(1, page)
+        ordering = {
+            "name_asc": (CatalogPrice.product_key.asc(),),
+            "name_desc": (CatalogPrice.product_key.desc(),),
+            "price_asc": (CatalogPrice.msrp.asc(), CatalogPrice.product_key.asc()),
+            "price_desc": (CatalogPrice.msrp.desc(), CatalogPrice.product_key.asc()),
+        }
+        sort = sort if sort in ordering else "name_asc"
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            statement = select(CatalogPrice)
+            count_statement = select(func.count(CatalogPrice.id))
+            if q.strip():
+                statement = statement.where(CatalogPrice.product_key.ilike(f"%{q.strip()}%"))
+                count_statement = count_statement.where(
+                    CatalogPrice.product_key.ilike(f"%{q.strip()}%")
+                )
+            total = session.scalar(count_statement) or 0
+            max_page = max(1, (total + page_size - 1) // page_size)
+            page = min(page, max_page)
+            prices = list(
+                session.scalars(
+                    statement.order_by(*ordering[sort])
+                    .limit(page_size)
+                    .offset((page - 1) * page_size)
+                )
+            )
+            return render(
+                request,
+                "admin/catalog.html",
+                user=admin,
+                prices=prices,
+                q=q,
+                sort=sort,
+                page=page,
+                page_size=page_size,
+                total=total,
+                max_page=max_page,
+                pages=range(1, max_page + 1),
+            )
+
+    @app.post("/admin/catalog")
+    async def admin_catalog_update(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        q = str(form.get("q", ""))
+        sort = str(form.get("sort", "name_asc"))
+        page = parse_int(form.get("page"), 1, 1)
+        page_size = parse_int(form.get("page_size"), 25, 10, 100)
+        selected = {parse_int(value, 0, 1) for value in form.getlist("selected")}
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            if str(form.get("action")) == "delete":
+                for price_id in selected:
+                    if price := session.get(CatalogPrice, price_id):
+                        session.delete(price)
+            else:
+                for key, value in form.items():
+                    if not key.startswith("name_"):
+                        continue
+                    price_id = parse_int(key.removeprefix("name_"), 0, 1)
+                    price = session.get(CatalogPrice, price_id)
+                    if price is None:
+                        continue
+                    name = str(value).strip()
+                    msrp = parse_float(form.get(f"msrp_{price_id}"))
+                    if not name or msrp is None or msrp <= 0:
+                        continue
+                    product_key, size_key = catalog_price_key(name, price.size_key)
+                    if product_key:
+                        price.product_key, price.size_key, price.msrp = product_key, size_key, msrp
+                        price.checked_at = datetime.now(UTC)
+            session.commit()
+            log_admin_action(admin.id, admin.id, f"catalog_{form.get('action', 'update')}", True)
+        return RedirectResponse(
+            f"/admin/catalog?q={q}&sort={sort}&page={page}&page_size={page_size}", 303
+        )
+
+    @app.get("/admin/catalog-import", response_class=HTMLResponse)
+    def admin_catalog_import(request: Request, error: str | None = None) -> Response:
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            return render(request, "admin/catalog_import.html", user=admin, error=error)
+
+    @app.post("/admin/catalog-import", response_class=HTMLResponse)
+    async def admin_catalog_import_upload(request: Request) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            pages = form.getlist("pages")
+            allowed = {"image/png", "image/jpeg", "application/pdf"}
+            valid = pages and all(
+                isinstance(page, StarletteUploadFile) and page.content_type in allowed
+                for page in pages
+            )
+            if not valid:
+                return render(
+                    request,
+                    "admin/catalog_import.html",
+                    user=admin,
+                    error="Upload PNG, JPEG, or PDF files.",
+                    status_code=400,
+                )
+            return render(
+                request,
+                "admin/catalog_import.html",
+                user=admin,
+                error="Upload received; extraction review will be available in the next update.",
             )
 
     def render_admin_config(
@@ -1641,6 +1853,8 @@ def register_routes(app: FastAPI) -> None:
                 analysis_status=analysis_status,
             )
             apply_analysis(bottle, analysis)
+            bottle.purchase_price = parse_float(purchase_price)
+            bottle.quantity = parse_int(quantity, 1, 1, 99)
             if bottle.name and bottle.name != "Untitled bottle":
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, app.state.settings, allow_provider=False
@@ -1648,12 +1862,21 @@ def register_routes(app: FastAPI) -> None:
                 apply_analysis(bottle, enrichment)
                 if enrichment:
                     bottle.analysis_status = normalized_analysis_status(enrichment_status)
-                with usage_context(app.state.usage_recorder, user.id):
-                    price_status = await refresh_prices(session, bottle, app.state.settings)
+                user_price_applied = await apply_user_purchase_price(
+                    session, bottle, app.state.qdrant_price_index
+                )
+                if not user_price_applied:
+                    with usage_context(app.state.usage_recorder, user.id):
+                        price_status = await refresh_prices(
+                            session,
+                            bottle,
+                            app.state.settings,
+                            price_index=app.state.qdrant_price_index,
+                        )
+                else:
+                    price_status = "user_price"
                 if price_status == "complete":
                     bottle.analysis_status = price_status
-            bottle.purchase_price = parse_float(purchase_price)
-            bottle.quantity = parse_int(quantity, 1, 1, 99)
             session.add(bottle)
             session.commit()
             return RedirectResponse(f"/bottles/{bottle.id}/edit?new=1", 303)
@@ -1745,6 +1968,9 @@ def register_routes(app: FastAPI) -> None:
                 return RedirectResponse("/", 303)
             saved_bottle_id = bottle.id
             update_bottle_from_form(bottle, form)
+            user_price_applied = await apply_user_purchase_price(
+                session, bottle, app.state.qdrant_price_index
+            )
             upload = form.get("photo")
             if isinstance(upload, StarletteUploadFile) and upload.filename:
                 old_photo = bottle.photo_name
@@ -1756,11 +1982,20 @@ def register_routes(app: FastAPI) -> None:
                 if old_photo:
                     (app.state.settings.data_dir / "uploads" / old_photo).unlink(missing_ok=True)
             if mode == "price":
-                with usage_context(app.state.usage_recorder, user.id):
-                    analysis, analysis_status = (
-                        {},
-                        await refresh_prices(session, bottle, app.state.settings, force=True),
-                    )
+                if user_price_applied:
+                    analysis, analysis_status = {}, "complete"
+                else:
+                    with usage_context(app.state.usage_recorder, user.id):
+                        analysis, analysis_status = (
+                            {},
+                            await refresh_prices(
+                                session,
+                                bottle,
+                                app.state.settings,
+                                force=True,
+                                price_index=app.state.qdrant_price_index,
+                            ),
+                        )
             elif mode == "name":
                 with usage_context(app.state.usage_recorder, user.id):
                     analysis, analysis_status = await enrich_bottle_by_name(
@@ -1782,9 +2017,14 @@ def register_routes(app: FastAPI) -> None:
                 apply_analysis(bottle, enrichment)
                 if enrichment:
                     analysis_status = enrichment_status
-            if mode in {"name", "photo"} and bottle.name:
+            if mode in {"name", "photo"} and bottle.name and not user_price_applied:
                 with usage_context(app.state.usage_recorder, user.id):
-                    price_status = await refresh_prices(session, bottle, app.state.settings)
+                    price_status = await refresh_prices(
+                        session,
+                        bottle,
+                        app.state.settings,
+                        price_index=app.state.qdrant_price_index,
+                    )
                 if price_status == "complete":
                     analysis_status = price_status
             analysis_status = normalized_analysis_status(analysis_status)

@@ -114,7 +114,7 @@ class PriceSource(Base):
 
 
 class CatalogPrice(Base):
-    """An OHLQ-backed MSRP cache shared by all bottles of the same product and size."""
+    """A reusable local MSRP cache shared by all bottles of the same product and size."""
 
     __tablename__ = "catalog_prices"
     __table_args__ = (UniqueConstraint("product_key", "size_key"),)

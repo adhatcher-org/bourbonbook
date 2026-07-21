@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Catalog import · Bourbon Book{% endblock %}
+{% block page %}
+{% set active_page = '' %}{% include '_collection_header.html' %}
+<main id="main" class="app-shell edit-page admin-page">
+  <section class="collection-head"><div><p class="eyebrow">Administration</p><h1>Catalog import</h1><p class="muted">Upload PNG, JPEG, or PDF pages. Extracted rows will be reviewed before any catalog update.</p></div></section>
+  {% if error %}<div class="form-alert" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/admin/catalog-import" enctype="multipart/form-data" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Catalog pages<input type="file" name="pages" accept="image/png,image/jpeg,application/pdf" multiple required></label><label>Price update date<input type="date" name="price_updated_at"></label><button class="primary-button">Extract for review</button></form>
+</main>
+{% endblock %}

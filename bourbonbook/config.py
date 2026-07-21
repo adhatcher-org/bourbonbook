@@ -17,6 +17,11 @@ class Settings:
     ollama_model: str
     max_users: int
     max_upload_mb: int
+    ollama_vision_model: str | None = None
+    ollama_text_model: str | None = None
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_price_collection: str = "bourbonbook_prices"
     analysis_provider: str = "ollama"
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.5"
@@ -30,6 +35,7 @@ class Settings:
     smtp_from_name: str = "Bourbon Book"
     smtp_tls_mode: str = "starttls"
     verification_ttl_hours: int = 24
+    email_verification_required: bool = True
     reset_ttl_minutes: int = 60
     default_admin_email: str | None = None
     default_admin_password: str | None = None
@@ -59,6 +65,11 @@ class Settings:
             secure_cookies=get("SECURE_COOKIES", "false").lower() == "true",
             ollama_url=get("OLLAMA_URL", "https://ollama.aaronhatcher.com").rstrip("/"),
             ollama_model=get("OLLAMA_MODEL", "gemma3:4b"),
+            ollama_vision_model=get("OLLAMA_VISION_MODEL") or None,
+            ollama_text_model=get("OLLAMA_TEXT_MODEL") or None,
+            qdrant_url=get("QDRANT_URL", "").rstrip("/") or None,
+            qdrant_api_key=get("QDRANT_API_KEY") or None,
+            qdrant_price_collection=get("QDRANT_PRICE_COLLECTION", "bourbonbook_prices"),
             max_users=int(get("MAX_USERS", "10")),
             max_upload_mb=int(get("MAX_UPLOAD_MB", "15")),
             analysis_provider=get("ANALYSIS_PROVIDER", "ollama").strip().lower(),
@@ -74,6 +85,8 @@ class Settings:
             smtp_from_name=get("SMTP_FROM_NAME", "Bourbon Book"),
             smtp_tls_mode=get("SMTP_TLS_MODE", "starttls").lower(),
             verification_ttl_hours=int(get("VERIFICATION_TTL_HOURS", "24")),
+            email_verification_required=get("EMAIL_VERIFICATION_REQUIRED", "true").lower()
+            == "true",
             reset_ttl_minutes=int(get("RESET_TTL_MINUTES", "60")),
             default_admin_email=get("DEFAULT_ADMIN_EMAIL") or None,
             default_admin_password=get("DEFAULT_ADMIN_PASSWORD") or None,

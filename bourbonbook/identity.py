@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -69,7 +69,11 @@ async def bootstrap_admin(session: Session, settings: Settings, sender: EmailSen
         )
         session.add(user)
     session.flush()
-    await issue_verification(session, user, settings, sender)
+    if settings.email_verification_required:
+        await issue_verification(session, user, settings, sender)
+    elif not user.email_verified_at:
+        user.email_verified_at = datetime.now(UTC)
+        session.commit()
     logger.warning(
         "Initial administrator created; remove DEFAULT_ADMIN_PASSWORD from configuration"
     )

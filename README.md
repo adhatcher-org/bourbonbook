@@ -38,11 +38,30 @@ OPENAI_MODEL=gpt-5.5
 
 Keep the real API key only in `.env` or your container's secret environment settings; do not add it to `.env.example` or commit it.
 
-When OpenAI is selected, bottle analysis is followed by a grounded web search for the current Ohio
-retail price. The search checks OHLQ first for an exact product and bottle-size match, then broadens
-to other reliable web sources when OHLQ is unavailable or has no match. Only prices tied to a URL actually consulted by OpenAI are
-accepted. The edit page can refresh MSRP without re-analyzing the photo, while grounded source
-details remain internal. Each refresh uses an additional OpenAI web-search tool call.
+Pricing is local-first, regardless of the analysis provider: an exact SQLite catalog match is used
+first, followed by an optional Qdrant fuzzy match for the same bottle size. Only a local miss calls
+OpenAI's grounded web search, which checks OHLQ first and then reliable sources. Every accepted
+result has a consulted source URL and is written back to the reusable local catalog; Qdrant is a
+rebuildable retrieval index, not the source of truth. The edit page can explicitly refresh MSRP
+from the web without re-analyzing the photo.
+
+To enable the optional Qdrant index, set `QDRANT_URL` to its HTTP endpoint (normally port `6333`).
+Import vetted source records as JSON Lines with `name`, `size`, `msrp`, `title`, `url`, and optional
+`basis`, then run `make price-catalog-ingest PRICE_CATALOG=/path/to/prices.jsonl`. Run
+`make price-catalog-reindex` after restoring the database or repairing the Qdrant collection.
+
+For a bulk local inventory update, `make price-catalog-extract-screenshots` reads the configured
+PNG, JPEG, or PDF files with the local Ollama vision model. It writes records containing `name`,
+`size`, `msrp`, and `price_updated_at`, then upserts them into the local catalog: existing
+name-and-size pairs receive the new price and date, while new pairs are added. The date defaults to
+the extraction date; invoke `python -m scripts.extract_catalog_screenshots --help` to supply a
+known `--price-updated-at` date or custom input/output paths. This workflow never browses the web
+and does not include a source URL in the extracted records.
+
+When a user saves a purchase price for a bottle, Bourbon Book uses it as the shared current price
+only if the matching name-and-size catalog entry is missing or more than six months old. In that
+case the bottle and catalog MSRP are both updated with the user-entered amount and the catalog date
+is reset; a fresher catalog entry is not overwritten.
 
 Admins can open `/admin/users` to search users, correct an email address after out-of-band identity
 verification, and send verification or reset links. `/admin/usage` shows recent OpenAI/Ollama call
@@ -50,6 +69,10 @@ counts, token-like counts, failures, and durations from the local usage ledger. 
 provider, operation, model, bounded error type, duration, token counts, optional internal user ID,
 and timestamp only; it does not store prompts, responses, bottle names, email addresses, URLs, or
 API keys. Set `API_USAGE_RETENTION_DAYS` to control local ledger cleanup.
+
+`/admin/catalog` manages the shared bottle-price catalog. It supports name search, name/price
+sorting, selectable page sizes, numbered pagination, inline name/price updates, and bulk deletion
+of selected rows.
 
 `/admin/config` exposes every setting listed in `.env.example` with server-side type, range, and
 allowed-value validation. Secret fields are never displayed; leave one blank to preserve it or use
@@ -99,7 +122,12 @@ the value actually configured in Unraid.
 | `FORWARDED_ALLOW_IPS` | Variable | `FORWARDED_ALLOW_IPS` | SWAG fixed IP or smallest proxy CIDR | Yes | No |
 | `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama` or `openai` | Yes | No |
 | `OLLAMA_URL` | Variable | `OLLAMA_URL` | `http://ollama:11434` | If using Ollama | No |
-| `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `gemma3:4b` | If using Ollama | No |
+| `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `gemma3:4b` | Fallback for either Ollama task | No |
+| `OLLAMA_VISION_MODEL` | Variable | `OLLAMA_VISION_MODEL` | `qwen3-vl:30b` | Photo analysis | No |
+| `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | `qwen3:30b-a3b` | Name-only analysis | No |
+| `QDRANT_URL` | Variable | `QDRANT_URL` | `http://qdrant:6333` | Local price search index | No |
+| `QDRANT_API_KEY` | Variable | `QDRANT_API_KEY` | masked value | If Qdrant requires authentication | Yes |
+| `QDRANT_PRICE_COLLECTION` | Variable | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Local price-search collection | No |
 | `OPENAI_API_KEY` | Variable | `OPENAI_API_KEY` | masked value | If using OpenAI | Yes |
 | `OPENAI_MODEL` | Variable | `OPENAI_MODEL` | `gpt-5.5` | No | No |
 | `EMAIL_DELIVERY_MODE` | Variable | `EMAIL_DELIVERY_MODE` | `smtp` | Yes | No |
@@ -111,6 +139,7 @@ the value actually configured in Unraid.
 | `SMTP_FROM_NAME` | Variable | `SMTP_FROM_NAME` | `Bourbon Book` | No | No |
 | `SMTP_TLS_MODE` | Variable | `SMTP_TLS_MODE` | `starttls` | Yes for SMTP | No |
 | `VERIFICATION_TTL_HOURS` | Variable | `VERIFICATION_TTL_HOURS` | `24` | No | No |
+| `EMAIL_VERIFICATION_REQUIRED` | Variable | `EMAIL_VERIFICATION_REQUIRED` | `true` | No | No |
 | `RESET_TTL_MINUTES` | Variable | `RESET_TTL_MINUTES` | `60` | No | No |
 | `DEFAULT_ADMIN_EMAIL` | Variable | `DEFAULT_ADMIN_EMAIL` | owner email | First startup only | No |
 | `DEFAULT_ADMIN_PASSWORD` | Variable | `DEFAULT_ADMIN_PASSWORD` | masked temporary value | First startup only | Yes |
@@ -129,6 +158,14 @@ for the first start, verify that the account was created and received a verifica
 remove `DEFAULT_ADMIN_PASSWORD` from the Unraid template and restart the container. Startup must
 still succeed after removal because an admin already exists. If restoring an empty or pre-admin
 database, supply fresh bootstrap values again.
+
+`EMAIL_VERIFICATION_REQUIRED` defaults to `true`. Set it to `false` only for trusted local or
+development deployments; existing unverified accounts can then sign in, and newly created accounts
+are marked verified without sending an email.
+
+For Ollama, photo analysis uses `OLLAMA_VISION_MODEL` and name-only analysis uses
+`OLLAMA_TEXT_MODEL`. Either setting falls back to `OLLAMA_MODEL` when unset, preserving existing
+deployments. A vision-capable model is required for uploaded bottle photos.
 
 Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
 are process-local; add a shared limiter before scaling workers or replicas.
@@ -242,8 +279,8 @@ Production rollout checklist:
 6. Run the account flow end to end: register, open the captured or delivered verification link,
    confirm verification, land on profile, set a screen name, change profile fields and password,
    request and complete a reset, and delete a test account.
-7. Add a bottle using the selected Ollama analysis settings plus OpenAI grounded pricing, then verify
-   the final MSRP and admin API usage totals.
+7. Add a bottle using the selected Ollama analysis settings and verify the local-first pricing path,
+   final MSRP, and admin API usage totals.
 8. Exercise admin user actions from `/admin/users` and review `/admin/usage`.
 9. Query Loki for JSON events such as `login_succeeded`, `admin_action`, and
    `ai_request_completed`; confirm secrets, one-time tokens, passwords, and user email addresses are

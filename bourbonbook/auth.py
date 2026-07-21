@@ -52,7 +52,7 @@ def require_user(request: Request, session: Session) -> User:
 
 def require_verified_user(request: Request, session: Session) -> User:
     user = require_user(request, session)
-    if not user.email_verified_at:
+    if request.app.state.settings.email_verification_required and not user.email_verified_at:
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/check-email"}
         )

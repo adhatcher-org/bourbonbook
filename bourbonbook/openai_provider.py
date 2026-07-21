@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from bourbonbook.analysis import normalize_analysis
 from bourbonbook.config import Settings
+from bourbonbook.logging_config import log_event
 from bourbonbook.observability import (
     UsageMetadata,
     bounded_error_type,
@@ -95,6 +96,13 @@ without Markdown."""
     recorder = current_usage_recorder()
     start = time.perf_counter()
     metadata = UsageMetadata()
+    log_event(
+        logger,
+        logging.INFO,
+        "openai_price_search_started",
+        "OpenAI price search started",
+        model=settings.openai_model,
+    )
     try:
         async with openai_client_session(settings) as client:
             response = await client.responses.parse(
@@ -151,6 +159,16 @@ without Markdown."""
                 metadata=metadata,
                 user_id=current_usage_user_id(),
             )
+        log_event(
+            logger,
+            logging.INFO,
+            "openai_price_search_completed",
+            "OpenAI price search completed",
+            model=settings.openai_model,
+            result=status,
+            duration_ms=round((time.perf_counter() - start) * 1000),
+            sources_found=len(sources),
+        )
         return prices, sources, status
     except (APIError, OSError, ValueError, TypeError) as exc:
         error_type = bounded_error_type(exc)
@@ -183,6 +201,14 @@ async def request_analysis(
     operation = "photo_analysis" if photo else "name_analysis"
     start = time.perf_counter()
     metadata = UsageMetadata()
+    log_event(
+        logger,
+        logging.INFO,
+        "openai_analysis_started",
+        "OpenAI analysis started",
+        operation=operation,
+        model=settings.openai_model,
+    )
     try:
         content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
         if photo:
@@ -226,6 +252,17 @@ async def request_analysis(
                 metadata=metadata,
                 user_id=current_usage_user_id(),
             )
+        log_event(
+            logger,
+            logging.INFO,
+            "openai_analysis_completed",
+            "OpenAI analysis completed",
+            operation=operation,
+            model=settings.openai_model,
+            result="success",
+            duration_ms=round((time.perf_counter() - start) * 1000),
+            fields_returned=len(values),
+        )
         return normalize_analysis(values), "complete"
     except (APIError, OSError, ValueError, TypeError) as exc:
         error_type = bounded_error_type(exc)

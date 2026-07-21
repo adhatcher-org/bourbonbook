@@ -37,7 +37,31 @@ CONFIG_FIELDS = (
         ("ollama", "openai"),
     ),
     ConfigField("OLLAMA_URL", "ollama_url", "Ollama URL", "Analysis", "url"),
-    ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama model", "Analysis"),
+    ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama fallback model", "Analysis"),
+    ConfigField(
+        "OLLAMA_VISION_MODEL",
+        "ollama_vision_model",
+        "Ollama vision model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField(
+        "OLLAMA_TEXT_MODEL",
+        "ollama_text_model",
+        "Ollama text model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField("QDRANT_URL", "qdrant_url", "Qdrant URL", "Pricing", "url", optional=True),
+    ConfigField(
+        "QDRANT_API_KEY", "qdrant_api_key", "Qdrant API key", "Pricing", secret=True, optional=True
+    ),
+    ConfigField(
+        "QDRANT_PRICE_COLLECTION",
+        "qdrant_price_collection",
+        "Qdrant price collection",
+        "Pricing",
+    ),
     ConfigField(
         "OPENAI_API_KEY", "openai_api_key", "OpenAI API key", "Analysis", secret=True, optional=True
     ),
@@ -89,6 +113,13 @@ CONFIG_FIELDS = (
         "Email",
         "integer",
         minimum=1,
+    ),
+    ConfigField(
+        "EMAIL_VERIFICATION_REQUIRED",
+        "email_verification_required",
+        "Require email verification",
+        "Email",
+        "boolean",
     ),
     ConfigField(
         "RESET_TTL_MINUTES",

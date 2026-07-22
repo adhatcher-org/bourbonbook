@@ -288,6 +288,70 @@ def test_lifespan_startup_recovers_leases_and_stop_cancels_its_idle_loop(tmp_pat
     asyncio.run(start_then_stop())
 
 
+def test_worker_periodically_expires_terminal_sources_without_restart(
+    tmp_path: Path,
+) -> None:
+    configured = Settings(
+        **{
+            **vars(settings(tmp_path)),
+            "catalog_import_poll_seconds": 0.01,
+            "catalog_import_source_expiry_hours": 1,
+        }
+    )
+    bootstrap_database(configured)
+    database = Database(configured)
+
+    polling = asyncio.Event()
+    release_poll = asyncio.Event()
+    extracting = asyncio.Event()
+    sleep_calls = 0
+
+    async def controlled_sleep(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 1:
+            polling.set()
+            await release_poll.wait()
+            return
+        await asyncio.Event().wait()
+
+    async def blocked_extractor(*_args, **_kwargs) -> list[CatalogExtractionProposal]:
+        extracting.set()
+        await asyncio.Event().wait()
+        return []
+
+    worker = CatalogImportWorker(
+        database.session_factory,
+        configured,
+        object(),
+        extractor=blocked_extractor,
+        sleep=controlled_sleep,
+    )
+
+    async def run_periodic_cleanup() -> None:
+        await worker.start()
+        await polling.wait()
+        failed_id = create_batch(database, configured, state=CatalogImportState.FAILED.value)
+        queued_id = create_batch(database, configured, state=CatalogImportState.QUEUED.value)
+        extracting_id = create_batch(
+            database, configured, state=CatalogImportState.EXTRACTING.value
+        )
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).timestamp()
+        for batch_id in (failed_id, queued_id, extracting_id):
+            source_directory = catalog_import_batch_directory(configured, batch_id)
+            os.utime(source_directory, (old_timestamp, old_timestamp))
+        release_poll.set()
+        await extracting.wait()
+        assert not catalog_import_batch_directory(configured, failed_id).exists()
+        # The queued batch was claimed after cleanup; both it and independently extracting work
+        # still retain their sources through the periodic terminal-source expiry pass.
+        assert catalog_import_batch_directory(configured, queued_id).exists()
+        assert catalog_import_batch_directory(configured, extracting_id).exists()
+        await worker.stop()
+
+    asyncio.run(run_periodic_cleanup())
+
+
 def test_worker_heartbeats_while_extraction_is_running(tmp_path: Path) -> None:
     configured = Settings(
         **{**vars(settings(tmp_path)), "catalog_import_lease_heartbeat_seconds": 0.01}

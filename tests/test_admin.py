@@ -5,9 +5,11 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from bourbonbook.admin_config import CONFIG_FIELDS, read_managed_config, settings_values
 from bourbonbook.auth import hash_password
@@ -18,7 +20,7 @@ from bourbonbook.catalog_imports import (
 )
 from bourbonbook.catalog_uploads import catalog_import_batch_directory
 from bourbonbook.config import Settings
-from bourbonbook.main import delete_catalog_import_batch
+from bourbonbook.main import delete_catalog_import_batch, enforce_catalog_import_request_size
 from bourbonbook.models import (
     ApiUsage,
     CatalogImportBatch,
@@ -281,12 +283,18 @@ def test_admin_catalog_import_commit_failure_cleans_sources_and_skips_catalog_si
         assert not list((tmp_path / "catalog-imports").glob("*"))
 
 
-def test_admin_catalog_import_enforces_configured_batch_limits(tmp_path: Path) -> None:
+def test_admin_catalog_import_enforces_configured_batch_limits(tmp_path: Path, monkeypatch) -> None:
     client, app = make_client(tmp_path)
     app.state.settings = Settings(**{**vars(app.state.settings), "catalog_import_max_files": 1})
     with client:
         register(client, "admin")
         promote_admin(app, "admin@example.com")
+        import bourbonbook.main as main
+
+        def validation_must_not_run(*_args) -> None:
+            raise AssertionError("multipart parser must reject excess files before validation")
+
+        monkeypatch.setattr(main, "validate_catalog_uploads", validation_must_not_run)
         page = client.get("/admin/catalog-import")
         limited = client.post(
             "/admin/catalog-import",
@@ -298,6 +306,49 @@ def test_admin_catalog_import_enforces_configured_batch_limits(tmp_path: Path) -
         )
         assert limited.status_code == 413
         assert "at most 1 catalog files" in limited.text
+
+
+def test_admin_catalog_import_rejects_aggregate_request_before_form_parsing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    app.state.settings = Settings(**{**vars(app.state.settings), "catalog_import_max_total_mb": 1})
+    form_calls = 0
+
+    async def form_must_not_run(self, **_kwargs) -> None:
+        nonlocal form_calls
+        form_calls += 1
+        raise AssertionError("oversized catalog import must be rejected before form parsing")
+
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/catalog-import")
+        monkeypatch.setattr(Request, "form", form_must_not_run)
+        rejected = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+            files=[("pages", ("catalog.png", b"x" * (1024 * 1024), "image/png"))],
+        )
+        assert rejected.status_code == 413
+        assert "exceeds the configured total size limit" in rejected.text
+        assert form_calls == 0
+
+
+def test_catalog_import_request_size_requires_valid_content_length() -> None:
+    class RequestWithoutContentLength:
+        headers: dict[str, str] = {}
+
+    with pytest.raises(HTTPException, match="Content-Length") as missing:
+        enforce_catalog_import_request_size(RequestWithoutContentLength(), 100)  # type: ignore[arg-type]
+    assert missing.value.status_code == 411
+
+    class RequestWithInvalidContentLength:
+        headers = {"content-length": "not-a-number"}
+
+    with pytest.raises(HTTPException, match="Invalid Content-Length") as invalid:
+        enforce_catalog_import_request_size(RequestWithInvalidContentLength(), 100)  # type: ignore[arg-type]
+    assert invalid.value.status_code == 400
 
 
 def create_review_batch(app, user_id: int, proposal_count: int = 1) -> CatalogImportBatch:

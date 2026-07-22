@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from bourbonbook.admin_config import (
@@ -125,6 +126,33 @@ def money(value: float | None) -> str:
 
 
 templates.env.filters["money"] = money
+
+
+def enforce_catalog_import_request_size(request: Request, maximum_bytes: int) -> None:
+    """Reject catalog multipart bodies that cannot be bounded before parsing.
+
+    Starlette's multipart parser spools uploaded file parts while it parses.  Requiring a
+    valid Content-Length lets this route reject an aggregate body before that spool begins;
+    chunked requests are deliberately rejected because their size cannot be bounded at this
+    point.
+    """
+    raw_content_length = request.headers.get("content-length")
+    if raw_content_length is None:
+        raise HTTPException(
+            status_code=411,
+            detail="Catalog uploads require a Content-Length header.",
+        )
+    try:
+        content_length = int(raw_content_length)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length header.") from exc
+    if content_length < 0:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length header.")
+    if content_length > maximum_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail="Catalog upload request exceeds the configured total size limit.",
+        )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -1752,7 +1780,33 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:
-        form = await request.form()
+        try:
+            enforce_catalog_import_request_size(
+                request,
+                app.state.settings.catalog_import_max_total_mb * 1024 * 1024,
+            )
+            form = await request.form(
+                max_files=app.state.settings.catalog_import_max_files,
+                max_part_size=app.state.settings.max_upload_mb * 1024 * 1024,
+            )
+        except StarletteHTTPException as exc:
+            detail = str(exc.detail)
+            if detail.startswith("Too many files."):
+                detail = (
+                    f"Upload at most {app.state.settings.catalog_import_max_files} catalog files."
+                )
+                status_code = 413
+            else:
+                status_code = exc.status_code
+            with app.state.database.session_factory() as session:
+                admin = require_admin(request, session)
+            return render(
+                request,
+                "admin/catalog_import.html",
+                user=admin,
+                error=detail,
+                status_code=status_code,
+            )
         verify_csrf(request, str(form.get("csrf_token", "")))
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)

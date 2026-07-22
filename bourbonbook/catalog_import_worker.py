@@ -23,6 +23,7 @@ from bourbonbook.catalog_extract import (
 from bourbonbook.catalog_imports import CatalogImportState, transition_batch
 from bourbonbook.catalog_uploads import (
     catalog_import_batch_directory,
+    cleanup_expired_catalog_import_sources,
     remove_catalog_import_batch_sources,
 )
 from bourbonbook.config import Settings
@@ -140,6 +141,9 @@ class CatalogImportWorker:
         with self._session_factory() as session:
             recovered = recover_expired_catalog_import_leases(session, self._now())
             session.commit()
+            # Cleanup must follow lease recovery: interrupted work is requeued and therefore
+            # retains its input even when the directory is older than the terminal-source TTL.
+            cleanup_expired_catalog_import_sources(self._settings, session)
         if recovered:
             log_event(
                 logger,
@@ -161,9 +165,17 @@ class CatalogImportWorker:
 
     async def _run(self) -> None:
         while not self._stopping.is_set():
+            # Run at the worker's poll cadence so terminal and orphan sources can expire without
+            # requiring an application restart. The cleanup routine preserves queued/extracting
+            # inputs, including batches recovered from an expired lease.
+            self._cleanup_expired_sources()
             found = await self.process_next()
             if not found:
                 await self._sleep(self._settings.catalog_import_poll_seconds)
+
+    def _cleanup_expired_sources(self) -> None:
+        with self._session_factory() as session:
+            cleanup_expired_catalog_import_sources(self._settings, session)
 
     async def process_next(self) -> bool:
         """Claim and process at most one batch; convenient for deterministic tests."""

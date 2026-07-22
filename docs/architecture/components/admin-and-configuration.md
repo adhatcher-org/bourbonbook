@@ -20,7 +20,7 @@ environment-driven setting — all gated behind `auth.require_admin()` and audit
 | `POST /admin/users/{id}/send-reset`, `/resend-verification` | Admin-triggered identity emails, rate-limited |
 | `POST /admin/users/{id}/email` | Correct a user's email after out-of-band verification (requires typed confirmation match) |
 | `GET /admin/catalog`, `POST /admin/catalog` | Browse/search/sort `CatalogPrice`; bulk edit or delete |
-| `GET /admin/catalog-import`, `POST /admin/catalog-import` | Upload PNG/JPEG/PDF price sheets — currently validates only; see [Pricing & catalog](pricing-and-catalog.md) known gap |
+| `GET /admin/catalog-import`, `POST /admin/catalog-import` | Upload bounded PNG/JPEG/PDF price sheets; administrators can review, retry, and apply queued local extraction batches |
 | `GET /admin/config`, `POST /admin/config` | View/edit the managed configuration file |
 | `POST /admin/restart` | Self-`SIGTERM`, relies on the container's process supervisor to come back up |
 | `GET /admin/usage` | AI/API usage dashboard, aggregated + paginated recent events |

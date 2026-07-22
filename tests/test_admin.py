@@ -442,7 +442,7 @@ def test_admin_catalog_import_review_lists_owned_batches_and_edits_proposals(
         assert 'class="review-primary-actions"' in review.text
         assert 'class="proposal-date-input"' in review.text
         assert ".catalog-import-review-page{width:min(1440px,calc(100% - 48px))}" in styles
-        assert ".import-proposals{min-width:1280px;table-layout:fixed}" in styles
+        assert ".import-proposals{min-width:1470px;table-layout:fixed}" in styles
         assert ".import-proposals .proposal-include-column{width:72px}" in styles
         assert ".import-proposals th,.import-proposals td{padding:9px 12px}" in styles
         assert ".import-proposals input{width:100%;min-width:0" in styles
@@ -452,13 +452,14 @@ def test_admin_catalog_import_review_lists_owned_batches_and_edits_proposals(
         )
         assert ".import-proposals .proposal-size-input{width:100%;min-width:14ch}" in styles
         assert ".import-proposals .proposal-price-input{width:100%;min-width:11ch}" in styles
+        assert ".proposal-bulk-controls{display:flex;align-items:center;flex-wrap:wrap" in styles
         assert (
             ".review-primary-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))"
             in styles
         )
         assert (
             "@media(max-width:620px){.catalog-import-review-page{width:calc(100% - 28px)}"
-            ".review-primary-actions{grid-template-columns:1fr}" in styles
+            ".proposal-bulk-controls{align-items:stretch;flex-direction:column}" in styles
         )
 
         with app.state.database.session_factory() as session:
@@ -498,6 +499,51 @@ def test_admin_catalog_import_review_lists_owned_batches_and_edits_proposals(
                 False,
             )
             assert session.query(CatalogPrice).count() == 0
+
+
+def test_catalog_import_review_shows_actions_and_visible_selection_controls(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id, proposal_count=3)
+        with app.state.database.session_factory() as session:
+            session.add_all(
+                [
+                    CatalogPrice(
+                        product_key="review bourbon 1",
+                        size_key="750ml",
+                        msrp=1.0,
+                        title="Current catalog",
+                        url="",
+                        checked_at=datetime(2026, 7, 22, tzinfo=UTC),
+                    ),
+                    CatalogPrice(
+                        product_key="review bourbon 2",
+                        size_key="750ml",
+                        msrp=2.0,
+                        title="Stale catalog",
+                        url="",
+                        checked_at=datetime(2026, 7, 21, tzinfo=UTC),
+                    ),
+                ]
+            )
+            session.commit()
+
+        review = client.get(f"/admin/catalog-import/{batch.id}")
+        assert review.status_code == 200
+        assert "Keep current fresh" in review.text
+        assert "Update stale/missing" in review.text
+        assert "New" in review.text
+        assert "data-catalog-import-review-form" in review.text
+        assert 'data-proposal-select-all aria-controls="catalog-import-proposals"' in review.text
+        assert "data-proposal-include-all>Include all visible</button>" in review.text
+        assert "data-proposal-exclude-all>Exclude all visible</button>" in review.text
+        assert review.text.count("data-proposal-include aria-label") == 3
+
+        script = Path("bourbonbook/static/app.js").read_text()
+        assert "setVisibleProposals" in script
+        assert "selectAllVisible.indeterminate" in script
 
 
 def test_catalog_import_review_page_navigation_renders_the_requested_rows(tmp_path: Path) -> None:

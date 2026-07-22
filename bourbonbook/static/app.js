@@ -79,6 +79,31 @@ document.querySelectorAll('[data-delete-form]').forEach((form) => {
   });
 });
 
+const catalogImportReviewForm = document.querySelector('[data-catalog-import-review-form]');
+if (catalogImportReviewForm) {
+  const proposalCheckboxes = [...catalogImportReviewForm.querySelectorAll('[data-proposal-include]')];
+  const selectAllVisible = catalogImportReviewForm.querySelector('[data-proposal-select-all]');
+  const includeAllVisible = catalogImportReviewForm.querySelector('[data-proposal-include-all]');
+  const excludeAllVisible = catalogImportReviewForm.querySelector('[data-proposal-exclude-all]');
+  const syncSelectAllVisible = () => {
+    if (!(selectAllVisible instanceof HTMLInputElement) || !proposalCheckboxes.length) return;
+    const selected = proposalCheckboxes.filter((checkbox) => checkbox.checked).length;
+    selectAllVisible.checked = selected === proposalCheckboxes.length;
+    selectAllVisible.indeterminate = selected > 0 && selected < proposalCheckboxes.length;
+  };
+  const setVisibleProposals = (included) => {
+    proposalCheckboxes.forEach((checkbox) => {
+      checkbox.checked = included;
+    });
+    syncSelectAllVisible();
+  };
+  proposalCheckboxes.forEach((checkbox) => checkbox.addEventListener('change', syncSelectAllVisible));
+  selectAllVisible?.addEventListener('change', () => setVisibleProposals(selectAllVisible.checked));
+  includeAllVisible?.addEventListener('click', () => setVisibleProposals(true));
+  excludeAllVisible?.addEventListener('click', () => setVisibleProposals(false));
+  syncSelectAllVisible();
+}
+
 const editForm = document.querySelector('.edit-form');
 const emptyDialog = document.querySelector('[data-empty-dialog]');
 let pendingSubmitter = null;

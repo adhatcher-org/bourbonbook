@@ -115,9 +115,10 @@ Operator-invoked only, never reachable from an HTTP route on behalf of an untrus
   `price_updated_at`), upserts by `(product_key, size_key)`, and keeps Qdrant synced live.
   `reindex()` rebuilds the entire Qdrant index from all `CatalogPrice` rows.
 
-> **Known gap** (see ADR 0002 Consequences): `/admin/catalog-import` in `main.py` currently only
-> validates an uploaded file's type; it does not yet invoke this extraction pipeline. The pipeline is
-> reachable today only via `make price-catalog-extract-screenshots`.
+> **Admin import workflow:** `/admin/catalog-import` stages bounded local uploads into the durable
+> queue. The single local worker extracts review proposals, and an administrator may edit, exclude,
+> retry failed work, and atomically apply approved rows. SQLite commits first; Qdrant receives a
+> best-effort post-commit refresh and can always be rebuilt with `reindex()`.
 
 ## Config knobs
 

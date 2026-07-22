@@ -394,6 +394,23 @@ def catalog_price_is_fresh(price: CatalogPrice) -> bool:
     return checked_at >= datetime.now(UTC) - PRICE_CACHE_TTL
 
 
+def catalog_import_review_action(
+    proposal: CatalogImportProposal, current_price: CatalogPrice | None
+) -> str:
+    """Describe whether applying this proposal would add or replace a catalog price."""
+    if current_price is None:
+        return "New"
+    current_checked_at = current_price.checked_at
+    if current_checked_at.tzinfo is None:
+        current_checked_at = current_checked_at.replace(tzinfo=UTC)
+    current_date = current_checked_at.date()
+    if current_date > proposal.price_updated_at or (
+        current_date == proposal.price_updated_at and current_price.msrp == proposal.msrp
+    ):
+        return "Keep current fresh"
+    return "Update stale/missing"
+
+
 def catalog_price_needs_user_update(price: CatalogPrice | None) -> bool:
     if price is None:
         return True
@@ -1530,10 +1547,16 @@ def register_routes(app: FastAPI) -> None:
                     (price.product_key, price.size_key): price
                     for price in session.scalars(select(CatalogPrice).where(or_(*matches)))
                 }
-                current_catalog_prices = {
-                    proposal.id: prices_by_key.get((proposal.product_key, proposal.size_key))
-                    for proposal in proposals
-                }
+            current_catalog_prices = {
+                proposal.id: prices_by_key.get((proposal.product_key, proposal.size_key))
+                for proposal in proposals
+            }
+            proposal_actions = {
+                proposal.id: catalog_import_review_action(
+                    proposal, current_catalog_prices[proposal.id]
+                )
+                for proposal in proposals
+            }
             return render(
                 request,
                 "admin/catalog_import_review.html",
@@ -1543,6 +1566,7 @@ def register_routes(app: FastAPI) -> None:
                 batch=selected_batch,
                 proposals=proposals,
                 current_catalog_prices=current_catalog_prices,
+                proposal_actions=proposal_actions,
                 proposal_total=total,
                 page=page,
                 max_page=max_page,

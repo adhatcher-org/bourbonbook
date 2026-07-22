@@ -54,6 +54,34 @@ class CatalogImportApplyStateError(ValueError):
     """Raised when a batch is no longer eligible for catalog application."""
 
 
+def retry_failed_catalog_import_batch(
+    session: Session,
+    batch_id: int,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> bool:
+    """Atomically make one failed batch eligible for a fresh extraction attempt.
+
+    A manual retry starts a new bounded automatic-attempt cycle.  The state predicate means a
+    concurrent retry or worker claim cannot make the same failed job runnable twice.
+    """
+    result = session.execute(
+        update(CatalogImportBatch)
+        .where(
+            CatalogImportBatch.id == batch_id,
+            CatalogImportBatch.state == CatalogImportState.FAILED.value,
+        )
+        .values(
+            state=CatalogImportState.QUEUED.value,
+            attempt_count=0,
+            lease_expires_at=None,
+            error_summary=None,
+            updated_at=now(),
+        )
+    )
+    return bool(result.rowcount)
+
+
 def apply_catalog_import_batch(
     session: Session,
     batch_id: int,

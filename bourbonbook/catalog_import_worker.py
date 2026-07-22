@@ -274,8 +274,6 @@ class CatalogImportWorker:
             transition_batch(batch, target, now=self._now)
             batch.error_summary = failure_kind
             session.commit()
-        if terminal:
-            remove_catalog_import_batch_sources(self._settings, batch_id)
         log_event(
             logger,
             logging.WARNING,

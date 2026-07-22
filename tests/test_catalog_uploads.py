@@ -196,6 +196,24 @@ def test_catalog_upload_cleanup_retains_expired_queued_batch_sources(tmp_path: P
     assert source.exists()
 
 
+def test_catalog_upload_cleanup_expires_failed_batch_sources_after_retry_window(
+    tmp_path: Path,
+) -> None:
+    configured = settings(tmp_path, catalog_import_source_expiry_hours=1)
+    bootstrap_database(configured)
+    database = Database(configured)
+    batch_id = create_batch(database, state="failed")
+    source = catalog_import_batch_directory(configured, batch_id)
+    source.mkdir(parents=True)
+    old = time.time() - 3601
+    os.utime(source, (old, old))
+
+    with database.session_factory() as session:
+        cleanup_expired_catalog_import_sources(configured, session)
+
+    assert not source.exists()
+
+
 def test_catalog_upload_cleanup_removes_stale_temp_without_touching_other_paths(
     tmp_path: Path,
 ) -> None:

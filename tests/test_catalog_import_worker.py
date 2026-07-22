@@ -15,7 +15,11 @@ from bourbonbook.catalog_import_worker import (
     claim_next_catalog_import,
     recover_expired_catalog_import_leases,
 )
-from bourbonbook.catalog_imports import CatalogImportState, reserve_catalog_import_batch
+from bourbonbook.catalog_imports import (
+    CatalogImportState,
+    reserve_catalog_import_batch,
+    retry_failed_catalog_import_batch,
+)
 from bourbonbook.catalog_uploads import (
     catalog_import_batch_directory,
     cleanup_expired_catalog_import_sources,
@@ -167,7 +171,7 @@ def test_worker_persists_proposals_then_moves_to_review_and_removes_sources(tmp_
     assert not catalog_import_batch_directory(configured, batch_id).exists()
 
 
-def test_worker_retries_only_one_transient_failure_then_terminally_cleans_sources(
+def test_worker_retries_only_one_transient_failure_then_retains_sources_for_admin_retry(
     tmp_path: Path,
 ) -> None:
     configured = settings(tmp_path)
@@ -193,7 +197,42 @@ def test_worker_retries_only_one_transient_failure_then_terminally_cleans_source
         batch = session.get(CatalogImportBatch, batch_id)
         assert batch is not None
         assert (batch.state, batch.attempt_count, batch.error_summary) == ("failed", 2, "transport")
-    assert not catalog_import_batch_directory(configured, batch_id).exists()
+    assert catalog_import_batch_directory(configured, batch_id).exists()
+
+
+def test_concurrent_manual_retries_only_requeue_one_failed_batch(tmp_path: Path) -> None:
+    configured = settings(tmp_path)
+    bootstrap_database(configured)
+    database = Database(configured)
+    batch_id = create_batch(database, configured, state=CatalogImportState.FAILED.value)
+    barrier = Barrier(2)
+    now = datetime(2026, 7, 22, tzinfo=UTC)
+
+    def retry_in_own_session() -> bool:
+        with database.session_factory() as session:
+            barrier.wait()
+            retried = retry_failed_catalog_import_batch(session, batch_id, now=lambda: now)
+            session.commit()
+            return retried
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        retries = list(executor.map(lambda _ignored: retry_in_own_session(), range(2)))
+
+    assert retries.count(True) == 1
+    assert retries.count(False) == 1
+    with database.session_factory() as session:
+        batch = session.get(CatalogImportBatch, batch_id)
+        assert batch is not None
+        assert (batch.state, batch.attempt_count, batch.error_summary, batch.lease_expires_at) == (
+            "queued",
+            0,
+            None,
+            None,
+        )
+        claimed = claim_next_catalog_import(session, configured, now)
+        session.commit()
+        assert claimed is not None and claimed.id == batch_id
+        assert claim_next_catalog_import(session, configured, now) is None
 
 
 def test_worker_cancellation_keeps_leased_source_for_safe_startup_recovery(tmp_path: Path) -> None:
@@ -317,9 +356,7 @@ def test_expired_extracting_lease_requeues_only_expired_work(tmp_path: Path) -> 
 def test_recovered_expired_lease_retains_old_sources_through_startup_cleanup(
     tmp_path: Path,
 ) -> None:
-    configured = Settings(
-        **{**vars(settings(tmp_path)), "catalog_import_source_expiry_hours": 1}
-    )
+    configured = Settings(**{**vars(settings(tmp_path)), "catalog_import_source_expiry_hours": 1})
     bootstrap_database(configured)
     database = Database(configured)
     batch_id = create_batch(database, configured, state=CatalogImportState.EXTRACTING.value)

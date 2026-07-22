@@ -752,6 +752,77 @@ def test_admin_catalog_import_delete_requires_csrf_and_verified_admin(tmp_path: 
             assert session.get(CatalogImportBatch, batch.id) is not None
 
 
+def test_admin_retries_failed_catalog_import_with_retained_sources(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            persisted.state = "failed"
+            persisted.attempt_count = 2
+            persisted.lease_expires_at = datetime(2026, 7, 22, tzinfo=UTC)
+            persisted.error_summary = "transport"
+            session.commit()
+        source = catalog_import_batch_directory(app.state.settings, batch.id)
+        source.mkdir(parents=True)
+        (source / "catalog.png").write_bytes(b"staged source")
+
+        page = client.get(f"/admin/catalog-import/{batch.id}")
+        assert "Retry extraction" in page.text
+        assert client.post(f"/admin/catalog-import/{batch.id}/retry").status_code == 403
+        retried = client.post(
+            f"/admin/catalog-import/{batch.id}/retry",
+            data={"csrf_token": csrf(page)},
+            follow_redirects=False,
+        )
+        assert retried.status_code == 303
+        assert retried.headers["location"] == f"/admin/catalog-import/{batch.id}?retried=1"
+        assert source.exists()
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            assert (
+                persisted.state,
+                persisted.attempt_count,
+                persisted.error_summary,
+                persisted.lease_expires_at,
+            ) == ("queued", 0, None, None)
+
+        duplicate_retry = client.post(
+            f"/admin/catalog-import/{batch.id}/retry", data={"csrf_token": csrf(page)}
+        )
+        assert duplicate_retry.status_code == 409
+        assert "Only failed catalog import batches can be retried" in duplicate_retry.text
+
+
+def test_admin_retry_reports_missing_failed_source_without_changing_batch(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            persisted.state = "failed"
+            persisted.error_summary = "filenotfounderror"
+            session.commit()
+
+        page = client.get(f"/admin/catalog-import/{batch.id}")
+        unavailable = client.post(
+            f"/admin/catalog-import/{batch.id}/retry", data={"csrf_token": csrf(page)}
+        )
+        assert unavailable.status_code == 409
+        assert "staged source files are no longer available" in unavailable.text
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            assert (persisted.state, persisted.error_summary) == ("failed", "filenotfounderror")
+
+
 def test_admin_catalog_import_delete_blocks_extracting_batches(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:

@@ -52,8 +52,10 @@ from bourbonbook.catalog_imports import (
     CatalogImportApplyStateError,
     apply_catalog_import_batch,
     reserve_catalog_import_batch,
+    retry_failed_catalog_import_batch,
 )
 from bourbonbook.catalog_uploads import (
+    catalog_import_sources_available,
     cleanup_expired_catalog_import_sources,
     remove_catalog_import_batch_sources,
     stage_catalog_uploads,
@@ -1413,7 +1415,10 @@ def register_routes(app: FastAPI) -> None:
             "extracting": "Extraction is in progress. Refresh this page for its review status.",
             "review": "Review the proposed rows below. Saving changes does not update the catalog.",
             "applied": "This batch has already been applied; its proposal rows are read-only.",
-            "failed": "Extraction did not complete. No catalog prices were changed.",
+            "failed": (
+                "Extraction did not complete. No catalog prices were changed. You may retry while "
+                "the staged source files remain available."
+            ),
             "expired": (
                 "This batch has expired. Its proposal rows are retained only as audit evidence."
             ),
@@ -1547,6 +1552,7 @@ def register_routes(app: FastAPI) -> None:
         created: int = 0,
         updated: int = 0,
         skipped: int = 0,
+        retried: int = 0,
     ) -> Response:
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)
@@ -1566,6 +1572,11 @@ def register_routes(app: FastAPI) -> None:
                     f"{skipped} skipped."
                 )
                 if applied
+                else (
+                    "Catalog import retry queued. Extraction will start when the local processing "
+                    "lane is free."
+                )
+                if retried
                 else None
             ),
         )
@@ -1698,6 +1709,46 @@ def register_routes(app: FastAPI) -> None:
             session.commit()
         remove_catalog_import_batch_sources(app.state.settings, batch_id)
         return RedirectResponse("/admin/catalog-import?deleted=1", 303)
+
+    @app.post("/admin/catalog-import/{batch_id}/retry", response_class=HTMLResponse)
+    async def admin_catalog_import_retry(request: Request, batch_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            batch = session.get(CatalogImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+            if batch.state != "failed":
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    error="Only failed catalog import batches can be retried.",
+                    status_code=409,
+                )
+            if not catalog_import_sources_available(app.state.settings, batch_id):
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    error=(
+                        "This failed import cannot be retried because its staged source files are "
+                        "no longer available. Upload the catalog again to create a new batch."
+                    ),
+                    status_code=409,
+                )
+            if not retry_failed_catalog_import_batch(session, batch_id):
+                session.rollback()
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    error="Only failed catalog import batches can be retried.",
+                    status_code=409,
+                )
+            session.commit()
+        return RedirectResponse(f"/admin/catalog-import/{batch_id}?retried=1", 303)
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:

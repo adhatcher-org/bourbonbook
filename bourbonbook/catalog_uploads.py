@@ -51,6 +51,15 @@ def remove_catalog_import_batch_sources(settings: Settings, batch_id: int) -> No
     shutil.rmtree(catalog_import_batch_directory(settings, batch_id), ignore_errors=True)
 
 
+def catalog_import_sources_available(settings: Settings, batch_id: int) -> bool:
+    """Return whether a retry has at least one staged regular source file available."""
+    directory = catalog_import_batch_directory(settings, batch_id)
+    try:
+        return directory.is_dir() and any(path.is_file() for path in directory.iterdir())
+    except OSError:
+        return False
+
+
 def validate_catalog_uploads(
     uploads: list[tuple[str | None, bytes]], settings: Settings
 ) -> list[StagedCatalogFile]:

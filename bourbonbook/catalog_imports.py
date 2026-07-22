@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from enum import StrEnum
@@ -54,6 +54,19 @@ class CatalogImportApplyStateError(ValueError):
     """Raised when a batch is no longer eligible for catalog application."""
 
 
+@dataclass(frozen=True)
+class CatalogImportReviewUpdate:
+    """A validated, page-scoped review edit submitted alongside an apply request."""
+
+    proposal_id: int
+    name: str
+    product_key: str
+    size_key: str
+    msrp: float
+    price_updated_at: date
+    included: bool
+
+
 def retry_failed_catalog_import_batch(
     session: Session,
     batch_id: int,
@@ -88,6 +101,7 @@ def apply_catalog_import_batch(
     *,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     before_persist: Callable[[CatalogImportProposal], None] | None = None,
+    review_updates: Sequence[CatalogImportReviewUpdate] = (),
 ) -> CatalogImportApplyResult:
     """Apply included reviewed proposals in one SQLite transaction.
 
@@ -101,6 +115,24 @@ def apply_catalog_import_batch(
             raise LookupError("Catalog import batch not found.")
         if batch.state != CatalogImportState.REVIEW.value:
             raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
+
+        if review_updates:
+            updates_by_id = {update.proposal_id: update for update in review_updates}
+            updated_proposals = session.scalars(
+                select(CatalogImportProposal).where(
+                    CatalogImportProposal.batch_id == batch.id,
+                    CatalogImportProposal.id.in_(updates_by_id),
+                )
+            )
+            for proposal in updated_proposals:
+                review_update = updates_by_id[proposal.id]
+                proposal.name = review_update.name
+                proposal.product_key = review_update.product_key
+                proposal.size_key = review_update.size_key
+                proposal.msrp = review_update.msrp
+                proposal.price_updated_at = review_update.price_updated_at
+                proposal.included = review_update.included
+                proposal.validation_error = None
 
         proposals = list(
             session.scalars(

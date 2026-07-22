@@ -51,6 +51,7 @@ from bourbonbook.catalog import catalog_price_key, verified_product
 from bourbonbook.catalog_import_worker import CatalogImportWorker
 from bourbonbook.catalog_imports import (
     CatalogImportApplyStateError,
+    CatalogImportReviewUpdate,
     apply_catalog_import_batch,
     reserve_catalog_import_batch,
     retry_failed_catalog_import_batch,
@@ -409,6 +410,38 @@ def catalog_import_review_action(
     ):
         return "Keep current fresh"
     return "Update stale/missing"
+
+
+def catalog_import_review_updates(form: Any) -> tuple[list[CatalogImportReviewUpdate], list[str]]:
+    """Parse page-scoped review fields without mutating durable proposals."""
+    proposal_ids = {parse_int(value, 0, 1, 2_147_483_647) for value in form.getlist("proposal_id")}
+    updates: list[CatalogImportReviewUpdate] = []
+    errors: list[str] = []
+    for proposal_id in proposal_ids:
+        name = str(form.get(f"name_{proposal_id}", "")).strip()
+        size = str(form.get(f"size_{proposal_id}", "")).strip()
+        msrp = parse_float(form.get(f"msrp_{proposal_id}"))
+        raw_date = str(form.get(f"price_updated_at_{proposal_id}", "")).strip()
+        try:
+            price_updated_at = date.fromisoformat(raw_date)
+        except ValueError:
+            price_updated_at = None
+        product_key, size_key = catalog_price_key(name, size)
+        if not product_key or not size_key or msrp is None or msrp <= 0 or price_updated_at is None:
+            errors.append(f"Proposal {proposal_id}")
+            continue
+        updates.append(
+            CatalogImportReviewUpdate(
+                proposal_id=proposal_id,
+                name=name[:240],
+                product_key=product_key,
+                size_key=size_key[:80],
+                msrp=msrp,
+                price_updated_at=price_updated_at,
+                included=str(form.get(f"included_{proposal_id}", "")) == "on",
+            )
+        )
+    return updates, errors
 
 
 def catalog_price_needs_user_update(price: CatalogPrice | None) -> bool:
@@ -1711,11 +1744,35 @@ def register_routes(app: FastAPI) -> None:
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         page = parse_int(form.get("page"), 1, 1, 100_000)
+        review_updates, errors = catalog_import_review_updates(form)
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)
+            batch = session.get(CatalogImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+            if batch.state != "review":
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    page=page,
+                    error="Only batches awaiting review can be applied.",
+                    status_code=409,
+                )
+            if errors:
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    page=page,
+                    error=f"Fix the required fields for {', '.join(errors)} before applying.",
+                    status_code=400,
+                )
         try:
             with app.state.database.session_factory() as session:
-                result = apply_catalog_import_batch(session, batch_id)
+                result = apply_catalog_import_batch(
+                    session, batch_id, review_updates=review_updates
+                )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except CatalogImportApplyStateError as exc:

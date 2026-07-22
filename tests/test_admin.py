@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -438,7 +439,8 @@ def test_admin_catalog_import_review_lists_owned_batches_and_edits_proposals(
         styles = Path("bourbonbook/static/app.css").read_text()
         assert 'class="app-shell edit-page admin-page catalog-import-review-page"' in review.text
         assert 'id="catalog-import-review-form"' in review.text
-        assert 'form="catalog-import-review-form">Save review changes</button>' in review.text
+        assert 'formaction="/admin/catalog-import/' in review.text
+        assert ">Save review changes</button>" in review.text
         assert 'class="review-primary-actions"' in review.text
         assert 'class="proposal-date-input"' in review.text
         assert ".catalog-import-review-page{width:min(1440px,calc(100% - 48px))}" in styles
@@ -544,6 +546,130 @@ def test_catalog_import_review_shows_actions_and_visible_selection_controls(tmp_
         script = Path("bourbonbook/static/app.js").read_text()
         assert "setVisibleProposals" in script
         assert "selectAllVisible.indeterminate" in script
+
+
+def test_catalog_import_apply_uses_unsaved_review_fields_atomically(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+
+        excluded_batch = create_review_batch(app, admin_id, proposal_count=2)
+        with app.state.database.session_factory() as session:
+            session.add_all(
+                [
+                    CatalogPrice(
+                        product_key="review bourbon 1",
+                        size_key="750ml",
+                        msrp=31.0,
+                        url="",
+                    ),
+                    CatalogPrice(
+                        product_key="review bourbon 2",
+                        size_key="750ml",
+                        msrp=32.0,
+                        url="",
+                    ),
+                ]
+            )
+            excluded_proposals = list(
+                session.scalars(
+                    select(CatalogImportProposal)
+                    .where(CatalogImportProposal.batch_id == excluded_batch.id)
+                    .order_by(CatalogImportProposal.position)
+                )
+            )
+            session.commit()
+        excluded_page = client.get(f"/admin/catalog-import/{excluded_batch.id}")
+        excluded_form: dict[str, str | list[str]] = {
+            "csrf_token": csrf(excluded_page),
+            "page": "1",
+            "proposal_id": [str(proposal.id) for proposal in excluded_proposals],
+        }
+        for proposal in excluded_proposals:
+            excluded_form[f"name_{proposal.id}"] = proposal.name
+            excluded_form[f"size_{proposal.id}"] = proposal.size_key
+            excluded_form[f"msrp_{proposal.id}"] = str(proposal.msrp)
+            excluded_form[f"price_updated_at_{proposal.id}"] = proposal.price_updated_at.isoformat()
+        excluded = client.post(
+            f"/admin/catalog-import/{excluded_batch.id}/apply",
+            data=excluded_form,
+            follow_redirects=False,
+        )
+        assert excluded.status_code == 303
+        assert "created=0" in excluded.headers["location"]
+        assert "updated=0" in excluded.headers["location"]
+        assert "skipped=2" in excluded.headers["location"]
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, excluded_batch.id).state == "applied"
+            retained_first = (
+                session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
+            )
+            retained_second = (
+                session.query(CatalogPrice).filter_by(product_key="review bourbon 2").one()
+            )
+            assert retained_first.msrp == 31.0
+            assert retained_second.msrp == 32.0
+
+        edit_batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            proposal = session.query(CatalogImportProposal).filter_by(batch_id=edit_batch.id).one()
+            proposal_id = proposal.id
+        edit_page = client.get(f"/admin/catalog-import/{edit_batch.id}")
+        edited = client.post(
+            f"/admin/catalog-import/{edit_batch.id}/apply",
+            data={
+                "csrf_token": csrf(edit_page),
+                "page": "1",
+                "proposal_id": str(proposal_id),
+                f"name_{proposal_id}": "Unsaved applied edit",
+                f"size_{proposal_id}": "1 L",
+                f"msrp_{proposal_id}": "88.50",
+                f"price_updated_at_{proposal_id}": "2026-07-22",
+                f"included_{proposal_id}": "on",
+            },
+            follow_redirects=False,
+        )
+        assert edited.status_code == 303
+        with app.state.database.session_factory() as session:
+            price = session.query(CatalogPrice).filter_by(product_key="unsaved applied edit").one()
+            assert (price.size_key, price.msrp) == ("1 l", 88.5)
+
+        invalid_batch = create_review_batch(app, admin_id, proposal_count=2)
+        with app.state.database.session_factory() as session:
+            invalid_proposals = list(
+                session.scalars(
+                    select(CatalogImportProposal)
+                    .where(CatalogImportProposal.batch_id == invalid_batch.id)
+                    .order_by(CatalogImportProposal.position)
+                )
+            )
+        invalid_page = client.get(f"/admin/catalog-import/{invalid_batch.id}")
+        first, second = invalid_proposals
+        invalid = client.post(
+            f"/admin/catalog-import/{invalid_batch.id}/apply",
+            data={
+                "csrf_token": csrf(invalid_page),
+                "proposal_id": [str(first.id), str(second.id)],
+                f"name_{first.id}": "Would be partial",
+                f"size_{first.id}": "750ml",
+                f"msrp_{first.id}": "99.00",
+                f"price_updated_at_{first.id}": "2026-07-22",
+                f"included_{first.id}": "on",
+                f"name_{second.id}": second.name,
+                f"size_{second.id}": second.size_key,
+                f"msrp_{second.id}": "0",
+                f"price_updated_at_{second.id}": "not-a-date",
+            },
+        )
+        assert invalid.status_code == 400
+        with app.state.database.session_factory() as session:
+            persisted_first = session.get(CatalogImportProposal, first.id)
+            assert persisted_first is not None and persisted_first.name == "Review Bourbon 1"
+            assert session.get(CatalogImportBatch, invalid_batch.id).state == "review"
+            assert (
+                session.query(CatalogPrice).filter_by(product_key="would be partial").count() == 0
+            )
 
 
 def test_catalog_import_review_page_navigation_renders_the_requested_rows(tmp_path: Path) -> None:

@@ -144,6 +144,7 @@ class CatalogImportWorker:
             # Cleanup must follow lease recovery: interrupted work is requeued and therefore
             # retains its input even when the directory is older than the terminal-source TTL.
             cleanup_expired_catalog_import_sources(self._settings, session)
+            session.commit()
         if recovered:
             log_event(
                 logger,
@@ -176,6 +177,7 @@ class CatalogImportWorker:
     def _cleanup_expired_sources(self) -> None:
         with self._session_factory() as session:
             cleanup_expired_catalog_import_sources(self._settings, session)
+            session.commit()
 
     async def process_next(self) -> bool:
         """Claim and process at most one batch; convenient for deterministic tests."""

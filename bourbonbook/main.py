@@ -1780,6 +1780,21 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:
+        # Authenticate before inspecting or parsing an untrusted multipart body.  The
+        # parser may spool file parts, so even the aggregate Content-Length check must
+        # not disclose parser behavior or consume resources for non-admin requests.
+        try:
+            with app.state.database.session_factory() as session:
+                admin = require_admin(request, session)
+        except HTTPException as exc:
+            # Upload endpoints return a uniform authorization failure instead of a
+            # login redirect, so unauthorized callers cannot distinguish this check
+            # from multipart validation behavior.
+            if exc.status_code == 303:
+                raise HTTPException(
+                    status_code=403, detail="Administrator access required"
+                ) from exc
+            raise
         try:
             enforce_catalog_import_request_size(
                 request,
@@ -1798,8 +1813,6 @@ def register_routes(app: FastAPI) -> None:
                 status_code = 413
             else:
                 status_code = exc.status_code
-            with app.state.database.session_factory() as session:
-                admin = require_admin(request, session)
             return render(
                 request,
                 "admin/catalog_import.html",
@@ -1809,7 +1822,6 @@ def register_routes(app: FastAPI) -> None:
             )
         verify_csrf(request, str(form.get("csrf_token", "")))
         with app.state.database.session_factory() as session:
-            admin = require_admin(request, session)
             pages = form.getlist("pages")
             if not pages or not all(isinstance(page, StarletteUploadFile) for page in pages):
                 return render(

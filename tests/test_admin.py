@@ -219,6 +219,31 @@ def test_admin_catalog_import_post_requires_csrf_and_verified_admin(tmp_path: Pa
         assert denied.status_code == 403
 
 
+def test_admin_catalog_import_rejects_unauthorized_requests_before_form_parsing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    anonymous_client, _ = make_client(tmp_path / "anonymous")
+    member_client, _ = make_client(tmp_path / "member")
+    with member_client:
+        register(member_client, "member")
+
+    form_calls = 0
+
+    async def form_must_not_run(self, **_kwargs) -> None:
+        nonlocal form_calls
+        form_calls += 1
+        raise AssertionError("unauthorized catalog imports must not parse multipart bodies")
+
+    monkeypatch.setattr(Request, "form", form_must_not_run)
+    with anonymous_client:
+        anonymous = anonymous_client.post("/admin/catalog-import")
+        assert anonymous.status_code == 403
+    with member_client:
+        non_admin = member_client.post("/admin/catalog-import")
+        assert non_admin.status_code == 403
+    assert form_calls == 0
+
+
 def test_admin_catalog_import_rejects_bad_content_and_cleans_staging_failures(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -704,6 +729,33 @@ def test_catalog_import_apply_exclusion_rollback_and_state_rejection(tmp_path: P
                 .count()
                 == 2
             )
+
+
+def test_catalog_import_apply_preserves_newer_catalog_price(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            proposal = session.query(CatalogImportProposal).filter_by(batch_id=batch.id).one()
+            proposal.price_updated_at = datetime(2025, 1, 1, tzinfo=UTC).date()
+            session.add(
+                CatalogPrice(
+                    product_key=proposal.product_key,
+                    size_key=proposal.size_key,
+                    msrp=99.99,
+                    url="",
+                    checked_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+            session.commit()
+        with app.state.database.session_factory() as session:
+            result = apply_catalog_import_batch(session, batch.id)
+            assert (result.created, result.updated, result.skipped) == (0, 0, 1)
+        with app.state.database.session_factory() as session:
+            price = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
+            assert price.msrp == 99.99
 
 
 def test_catalog_import_apply_requires_csrf_admin_and_review_state(tmp_path: Path) -> None:

@@ -136,11 +136,20 @@ def apply_catalog_import_batch(
                 session.add(price)
                 created += 1
             else:
+                proposal_checked_at = datetime.combine(
+                    proposal.price_updated_at, time.min, tzinfo=UTC
+                )
+                price_checked_at = price.checked_at
+                if price_checked_at.tzinfo is None:
+                    price_checked_at = price_checked_at.replace(tzinfo=UTC)
+                if price_checked_at > proposal_checked_at:
+                    skipped += 1
+                    continue
                 price.msrp = proposal.msrp
                 price.title = "Local screenshot catalog"
                 price.url = ""
                 price.basis = f"Approved catalog import batch #{batch.id}."
-                price.checked_at = datetime.combine(proposal.price_updated_at, time.min, tzinfo=UTC)
+                price.checked_at = proposal_checked_at
                 updated += 1
             applied_prices.append(price)
         # Newly created rows need their primary keys before the committed result can identify

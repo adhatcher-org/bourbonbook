@@ -210,8 +210,11 @@ def test_catalog_upload_cleanup_expires_failed_batch_sources_after_retry_window(
 
     with database.session_factory() as session:
         cleanup_expired_catalog_import_sources(configured, session)
+        session.commit()
 
     assert not source.exists()
+    with database.session_factory() as session:
+        assert session.get(CatalogImportBatch, batch_id).state == "expired"
 
 
 def test_catalog_upload_cleanup_removes_stale_temp_without_touching_other_paths(

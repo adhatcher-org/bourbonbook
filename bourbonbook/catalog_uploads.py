@@ -14,6 +14,7 @@ from uuid import uuid4
 import fitz
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from bourbonbook.config import Settings
@@ -237,8 +238,15 @@ def cleanup_expired_catalog_import_sources(settings: Settings, session: Session)
             continue
         if not expired:
             continue
+        batch = None
         if child.name.isdigit():
             batch = session.get(CatalogImportBatch, int(child.name))
             if batch is not None and batch.state in _SOURCE_RETAINING_BATCH_STATES:
                 continue
         shutil.rmtree(child, ignore_errors=True)
+        if batch is not None and batch.state == "failed":
+            session.execute(
+                update(CatalogImportBatch)
+                .where(CatalogImportBatch.id == batch.id, CatalogImportBatch.state == "failed")
+                .values(state="expired", lease_expires_at=None)
+            )

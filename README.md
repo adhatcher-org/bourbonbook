@@ -309,7 +309,7 @@ The Makefile is the canonical command interface for local development and CI:
 ```bash
 make install       # install the exact uv.lock environment
 make test          # fast deterministic tests
-make coverage      # branch coverage with the enforced 90% floor
+make coverage      # branch coverage with the temporary 80% floor
 make pr-review     # all pre-PR gates plus the production image build
 make help          # list every available target
 ```

@@ -11,11 +11,16 @@ import asyncio
 import hashlib
 import json
 import re
+import subprocess
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
 from sqlalchemy import select
 
 from bourbonbook.analysis import FIELDS, analyze_bottle, analyze_bottle_name
@@ -24,10 +29,25 @@ from bourbonbook.database import Database
 from bourbonbook.models import Bottle, User
 
 FIXTURE_SCHEMA_VERSION = 1
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+REPORT_CONTRACT_VERSION = "benchmark-v2-local-only"
 PHOTO_FIELDS = tuple(field for field in FIELDS if field != "msrp")
-CRITICAL_FIELDS = ("name", "brand", "proof", "abv", "size", "status", "fill_level")
+NAME_FIELDS = tuple(
+    field
+    for field in PHOTO_FIELDS
+    if field not in {"status", "fill_level", "barrel_number", "bottle_number", "warehouse", "floor"}
+)
+OPERATION_FIELDS = {"photo": PHOTO_FIELDS, "name": NAME_FIELDS}
+CRITICAL_FIELDS = {
+    "photo": ("name", "brand", "proof", "abv", "size", "status", "fill_level"),
+    "name": ("name", "brand", "proof", "abv", "size"),
+}
 NUMERIC_FIELDS = {"proof", "abv", "fill_level"}
+SUCCESS_STATUSES = {"complete", "verified"}
+PHOTO_PREPROCESS_REVISION = "application-default"
+
+CommandRunner = Callable[[list[str]], str]
+OllamaGetter = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 def utc_now() -> str:
@@ -130,7 +150,7 @@ def export_fixture(settings: Settings, owner_selector: str, destination: Path) -
         "created_at": utc_now(),
         "case_count": len(cases),
         "scored_fields": list(PHOTO_FIELDS),
-        "critical_fields": list(CRITICAL_FIELDS),
+        "critical_fields": list(CRITICAL_FIELDS["photo"]),
         "cases": cases,
     }
     manifest["manifest_sha256"] = json_digest(manifest)
@@ -165,6 +185,26 @@ def as_number(value: Any) -> float | None:
     return float(match.group()) if match else None
 
 
+def canonical_size(value: Any) -> int | None:
+    """Return a bottle size in millilitres only when its unit is unambiguous."""
+    if value in (None, ""):
+        return None
+    rendered = str(value).strip().lower().replace(" ", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(ml|millilit(?:er|re)s?|cl|l|lit(?:er|re)s?)", rendered)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2)
+    if unit.startswith(("ml", "millil")):
+        multiplier = 1
+    elif unit == "cl":
+        multiplier = 10
+    else:
+        multiplier = 1000
+    millilitres = amount * multiplier
+    return int(millilitres) if millilitres.is_integer() else None
+
+
 def matches(field: str, expected: Any, actual: Any) -> bool:
     if expected in (None, ""):
         return False
@@ -176,12 +216,10 @@ def matches(field: str, expected: Any, actual: Any) -> bool:
             and actual_number is not None
             and abs(expected_number - actual_number) <= tolerance
         )
+    if field == "size":
+        expected_size, actual_size = canonical_size(expected), canonical_size(actual)
+        return expected_size is not None and expected_size == actual_size
     expected_text, actual_text = normalize(expected), normalize(actual)
-    if field == "name":
-        return bool(expected_text) and (
-            set(expected_text.split()) <= set(actual_text.split())
-            or set(actual_text.split()) <= set(expected_text.split())
-        )
     return bool(expected_text) and expected_text == actual_text
 
 
@@ -212,7 +250,7 @@ def summarize(samples: list[dict[str, Any]], fields: list[str]) -> dict[str, Any
     matched = sum(item["matched"] for item in field_summary.values())
     return {
         "requests": len(samples),
-        "successes": sum(sample["status"] == "complete" for sample in samples),
+        "successes": sum(sample["status"] in SUCCESS_STATUSES for sample in samples),
         "p50_ms": percentile(timings, 0.5),
         "p95_ms": percentile(timings, 0.95),
         "max_ms": max(timings) if timings else None,
@@ -221,13 +259,140 @@ def summarize(samples: list[dict[str, Any]], fields: list[str]) -> dict[str, Any
     }
 
 
+def configured_model(settings: Settings, operation: str) -> str:
+    if operation == "photo":
+        return getattr(settings, "ollama_vision_model", None) or settings.ollama_model
+    return getattr(settings, "ollama_text_model", None) or settings.ollama_model
+
+
+def ensure_local_benchmark_settings(settings: Settings) -> None:
+    if settings.analysis_provider != "ollama" or settings.openai_api_key is not None:
+        raise ValueError(
+            "Benchmarks are local-only; the provider must be Ollama and the OpenAI key "
+            "must be cleared"
+        )
+
+
+def local_benchmark_settings(settings: Settings) -> Settings:
+    """Strip OpenAI configuration before benchmark settings reach provider dispatch."""
+    return replace(settings, analysis_provider="ollama", openai_api_key=None)
+
+
+def default_command_runner(command: list[str]) -> str:
+    return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL, timeout=5)
+
+
+async def default_ollama_getter(settings: Settings, path: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.ollama_url, timeout=5.0) as client:
+        response = await client.get(path)
+        response.raise_for_status()
+        payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def gpu_snapshot(command_runner: CommandRunner = default_command_runner) -> list[dict[str, str]]:
+    """Capture public GPU inventory; return no data when the host has no NVIDIA tooling."""
+    try:
+        output = command_runner(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,driver_version,memory.total,memory.used",
+                "--format=csv,noheader,nounits",
+            ]
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if not isinstance(output, str):
+        return []
+    keys = ("name", "driver_version", "memory_total_mib", "memory_used_mib")
+    return [
+        dict(zip(keys, (part.strip() for part in line.split(",")), strict=True))
+        for line in output.splitlines()
+        if line.strip() and len(line.split(",")) == len(keys)
+    ]
+
+
+async def collect_runtime_evidence(
+    settings: Settings,
+    *,
+    preprocess_revision: str = PHOTO_PREPROCESS_REVISION,
+    command_runner: CommandRunner = default_command_runner,
+    ollama_getter: OllamaGetter | None = None,
+) -> dict[str, Any]:
+    """Collect bounded non-secret evidence without making a benchmark result depend on it."""
+    ensure_local_benchmark_settings(settings)
+    getter = ollama_getter or (lambda path: default_ollama_getter(settings, path))
+    version: str | None = None
+    resident_models: list[dict[str, Any]] = []
+    try:
+        version_payload = await getter("/api/version")
+        version_value = version_payload.get("version")
+        version = str(version_value) if version_value not in (None, "") else None
+        ps_payload = await getter("/api/ps")
+        models = ps_payload.get("models", [])
+        if not isinstance(models, list):
+            raise ValueError("Ollama /api/ps models must be a list")
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            resident_models.append(
+                {
+                    key: model[key]
+                    for key in ("name", "digest", "size_vram", "expires_at")
+                    if model.get(key) not in (None, "")
+                }
+            )
+    except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
+        # A benchmark still records application timings if runtime inspection is unavailable.
+        pass
+    return {
+        "collected_at": utc_now(),
+        "ollama": {
+            "endpoint_host": urlsplit(settings.ollama_url).hostname,
+            "version": version,
+            "resident_models": resident_models,
+        },
+        "gpu": gpu_snapshot(command_runner),
+        "configured_models": {
+            "photo": configured_model(settings, "photo"),
+            "name": configured_model(settings, "name"),
+        },
+        "preprocess_revision": preprocess_revision,
+        "timing_instrumentation": {
+            "queue_wait_ms": None,
+            "model_load_ms": None,
+            "model_eviction_ms": None,
+            "instrumented": False,
+        },
+    }
+
+
+def upgrade_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Read v1 reports for inspection, but prevent comparisons across metric contracts."""
+    schema_version = report.get("schema_version", 1)
+    if schema_version == REPORT_SCHEMA_VERSION:
+        return dict(report)
+    if schema_version != 1:
+        raise ValueError(f"Unsupported benchmark report schema: {schema_version!r}")
+    upgraded = dict(report)
+    upgraded["schema_version"] = REPORT_SCHEMA_VERSION
+    upgraded["report_contract"] = "legacy-v1"
+    upgraded["runtime_evidence"] = {"available": False, "reason": "not recorded by report v1"}
+    upgraded["migration"] = {"from_schema_version": 1, "comparison_compatible": False}
+    return upgraded
+
+
 async def run_fixture(
     fixture: Path,
     settings: Settings,
     operations: tuple[str, ...],
     runs: int,
     cold_start_state: str,
+    *,
+    runtime_evidence: dict[str, Any] | None = None,
+    preprocess_revision: str = PHOTO_PREPROCESS_REVISION,
 ) -> dict[str, Any]:
+    ensure_local_benchmark_settings(settings)
     manifest = load_fixture(fixture)
     cases = manifest["cases"]
     first_operation = operations[0]
@@ -264,7 +429,7 @@ async def run_fixture(
                         "match": matches(field, expected, actual.get(field)),
                     }
                     for field, expected in case["expected"].items()
-                    if expected not in (None, "")
+                    if field in OPERATION_FIELDS[operation] and expected not in (None, "")
                 }
                 samples[operation].append(
                     {
@@ -277,6 +442,7 @@ async def run_fixture(
                 )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
+        "report_contract": REPORT_CONTRACT_VERSION,
         "created_at": utc_now(),
         "fixture_manifest_sha256": manifest["manifest_sha256"],
         "case_count": manifest["case_count"],
@@ -284,12 +450,15 @@ async def run_fixture(
         "cold_start_state": cold_start_state,
         "cold_start": cold_start,
         "provider": settings.analysis_provider,
-        "model": settings.openai_model
-        if settings.analysis_provider == "openai"
-        else settings.ollama_model,
+        "model": {operation: configured_model(settings, operation) for operation in operations},
+        "runtime_evidence": runtime_evidence
+        if runtime_evidence is not None
+        else await collect_runtime_evidence(settings, preprocess_revision=preprocess_revision),
         "operations": {
             operation: {
-                "summary": summarize(values, list(manifest["scored_fields"])),
+                "scoring_fields": list(OPERATION_FIELDS[operation]),
+                "critical_fields": list(CRITICAL_FIELDS[operation]),
+                "summary": summarize(values, list(OPERATION_FIELDS[operation])),
                 "samples": values,
             }
             for operation, values in samples.items()
@@ -298,7 +467,19 @@ async def run_fixture(
 
 
 def compare_reports(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    baseline, candidate = upgrade_report(baseline), upgrade_report(candidate)
     failures: list[str] = []
+    baseline_contract = baseline.get("report_contract")
+    candidate_contract = candidate.get("report_contract")
+    if (
+        baseline_contract != REPORT_CONTRACT_VERSION
+        or candidate_contract != REPORT_CONTRACT_VERSION
+    ):
+        failures.append("reports must use the current benchmark v2 contract")
+    if baseline_contract != candidate_contract:
+        failures.append(
+            "report contract differs; recapture the baseline with the current benchmark"
+        )
     if baseline["fixture_manifest_sha256"] != candidate["fixture_manifest_sha256"]:
         failures.append("fixture manifest differs")
     if baseline["runs_per_case"] != candidate["runs_per_case"]:
@@ -306,7 +487,7 @@ def compare_reports(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict
     if baseline["cold_start_state"] != candidate["cold_start_state"]:
         failures.append("cold-start state differs")
     if baseline["cold_start_state"] == "unloaded":
-        if candidate["cold_start"]["status"] != "complete":
+        if candidate["cold_start"]["status"] not in SUCCESS_STATUSES:
             failures.append("cold-start request failed")
         if candidate["cold_start"]["duration_ms"] > baseline["cold_start"]["duration_ms"]:
             failures.append("cold-start latency regressed")
@@ -329,7 +510,8 @@ def compare_reports(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict
             failures.append(f"{operation} request count differs")
         if candidate_summary["successes"] < baseline_summary["successes"]:
             failures.append(f"{operation} success count regressed")
-        for field in CRITICAL_FIELDS:
+        critical_fields = baseline_operation.get("critical_fields", CRITICAL_FIELDS[operation])
+        for field in critical_fields:
             baseline_field = baseline_summary["fields"].get(field, {})
             candidate_field = candidate_summary["fields"].get(field, {})
             if candidate_field.get("scored", 0) < baseline_field.get("scored", 0):
@@ -365,15 +547,19 @@ def main() -> None:
     run.add_argument("--fixture", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument(
-        "--provider",
-        choices=("ollama", "openai"),
-        default=None,
-        help="Override ANALYSIS_PROVIDER for this benchmark run.",
+        "--live",
+        action="store_true",
+        help="Acknowledge that this command calls the configured local Ollama service.",
     )
     run.add_argument(
         "--operations", choices=("photo", "name"), nargs="+", default=("photo", "name")
     )
     run.add_argument("--runs", type=int, default=3)
+    run.add_argument(
+        "--preprocess-revision",
+        default=PHOTO_PREPROCESS_REVISION,
+        help="A non-secret identifier for the image preprocessing configuration used by this run.",
+    )
     run.add_argument(
         "--cold-start-state",
         choices=("unloaded", "uncontrolled"),
@@ -383,6 +569,11 @@ def main() -> None:
     compare = commands.add_parser("compare", help="Require a candidate to meet a baseline")
     compare.add_argument("--baseline", type=Path, required=True)
     compare.add_argument("--candidate", type=Path, required=True)
+    upgrade = commands.add_parser(
+        "upgrade-report", help="Upgrade a legacy report for inspection; it remains incomparable"
+    )
+    upgrade.add_argument("--input", type=Path, required=True)
+    upgrade.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == "export":
@@ -401,12 +592,10 @@ def main() -> None:
         elif args.command == "run":
             if args.runs < 1:
                 raise ValueError("--runs must be positive")
-            settings = Settings.from_env()
-            if args.provider is not None:
-                try:
-                    settings.analysis_provider = args.provider
-                except Exception:
-                    settings = Settings(**{**vars(settings), "analysis_provider": args.provider})
+            if not args.live:
+                raise ValueError("Benchmark runs call Ollama; pass --live to proceed")
+            settings = local_benchmark_settings(Settings.from_env())
+            ensure_local_benchmark_settings(settings)
             report = asyncio.run(
                 run_fixture(
                     private_benchmark_path(settings, args.fixture),
@@ -414,6 +603,7 @@ def main() -> None:
                     tuple(args.operations),
                     args.runs,
                     args.cold_start_state,
+                    preprocess_revision=args.preprocess_revision,
                 )
             )
             write_json(private_benchmark_path(settings, args.output), report)
@@ -424,6 +614,21 @@ def main() -> None:
                         for operation, value in report["operations"].items()
                     },
                     indent=2,
+                )
+            )
+        elif args.command == "upgrade-report":
+            settings = Settings.from_env()
+            source = private_benchmark_path(settings, args.input)
+            destination = private_benchmark_path(settings, args.output)
+            upgraded = upgrade_report(json.loads(source.read_text()))
+            write_json(destination, upgraded)
+            print(
+                json.dumps(
+                    {
+                        "schema_version": upgraded["schema_version"],
+                        "report_contract": upgraded["report_contract"],
+                        "migration": upgraded.get("migration"),
+                    }
                 )
             )
         else:

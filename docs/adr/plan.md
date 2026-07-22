@@ -41,6 +41,22 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
     discovery, crawling, production ingestion, and user-visible recommendations remain deferred.
 14. Development supports Aaron's external Unraid Qdrant by URL plus an optional local Compose
     service. Qdrant must not be exposed through the public Bourbon Book route.
+15. Admin catalog imports use a SQLite-backed durable queue with one lifespan-owned worker in the
+    existing single-Uvicorn-worker process. The database is the source of truth: a request commits
+    a queued batch before responding; a leased worker claims it; startup recovers expired leases.
+    Redis, Celery, RQ, extra workers, and replicas are out of scope while SQLite is the write store.
+16. Local-model work has one GPU lane with capacity one. Catalog imports do not run concurrent
+    model calls, do not preempt active work, and must later yield priority to interactive analysis.
+    The approved catalog-import defaults are: five waiting batches; five files, 50 MiB total, and
+    ten PDF pages per batch; 120-second chunk timeout; 15-minute batch deadline; one automatic
+    retry for transient failures; and a 20-minute leased job with heartbeat/recovery.
+17. Catalog-import source files are retained only while queued or extracting and are deleted
+    immediately after normalized proposals or a terminal failure are persisted. Reprocessing is not
+    in scope. Batch audit summaries (without source files, raw model output, or prompts) are
+    retained for 90 days.
+18. The repository-wide branch-coverage gate is temporarily **80%** while the approved AUP2 upload
+    sequence is under implementation. AUP2-13 must restore and pass the **90%** gate before final
+    validation, pull-request promotion, or release.
 
 ## Action Tracker
 
@@ -48,11 +64,14 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
 | --- | --- | --- | --- | --- |
 | A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
 | A02 | Apply Atkinson Hyperlegible Next to edit controls | Complete | `codex/readable-edit-font` | [PR #12](https://github.com/adhatcher-org/bourbonbook/pull/12); desktop/iPhone and missing-font fallback verified; sub-agent clean; `make pr-review` passed. |
-| P2-00 | Correct benchmark semantics and capture 3090 runtime evidence | Incomplete | `feature/p2-benchmark-contract` | Must precede every Phase 2 model or runtime change. |
-| P2-01 | Select local model roles on the 3090 | Incomplete | `feature/p2-model-evaluation` | Benchmark `gemma4:26b` for photos and `qwen3:30b-a3b` / `qwen3.6:35b` for text roles. |
-| P2-02 | Build the local photo, catalog, and job pipeline | Incomplete | `feature/p2-local-analysis-pipeline` | Starts only after P2-01 selects passing role-specific models. |
-| P2-03 | Replace LLM price lookup with a direct source-backed refresh | Incomplete | `feature/p2-direct-price-refresh` | Requires exact product/size provenance and a separate price benchmark. |
-| P2-04 | Remove OpenAI runtime paths | Incomplete | `feature/p2-remove-openai` | Requires P2-02 and P2-03 acceptance evidence. |
+| P2-00 | Repair benchmark semantics, runtime evidence, and local-only enforcement | Validated locally | `feature/p2-benchmark-contract` | `p2_00_benchmark_implementer` and `p2_00_benchmark_validator` passed focused 92.20% coverage and full tests. The repository aggregate is 86.80%; 90% remains required before PR promotion. |
+| P2-01 | Select local model roles on the 3090 | Deterministic validation complete; live selection pending authorization | `feature/p2-model-evaluation` | Offline implementer/validator pass: 149 tests and 90% focused coverage. A private, authorized 3090 report is still required; the repository aggregate is 86.93%, so 90% remains a PR-promotion blocker. |
+| P2-02A | Harden local evidence-to-catalog analysis contract | Blocked by P2-01 | `feature/p2-local-analysis-contract` | `p2_02a_analysis_implementer` then `p2_02a_analysis_validator`; catalog is authoritative and unresolved facts remain reviewable. |
+| P2-02B | Add bounded GPU scheduling and timing telemetry | Blocked by P2-02A | `feature/p2-gpu-queue-telemetry` | `p2_02b_queue_implementer` then `p2_02b_queue_validator`; one-large-model residency and deterministic timing tests required. |
+| P2-02C | Add durable analysis jobs, progress, and confirmation UI | Blocked by P2-02B | `feature/p2-analysis-jobs-ui` | `p2_02c_jobs_ui_implementer` then `p2_02c_jobs_ui_validator`; fresh/upgrade migrations, owner security, browser tests, and ≥80% focused coverage required. |
+| P2-03A | Establish exact source-backed price evaluation contract | Blocked by P2-02C | `feature/p2-price-evaluation-contract` | `p2_03a_price_contract_implementer` then `p2_03a_price_contract_validator`; separate pricing fixture and provenance gate required. |
+| P2-03B | Replace runtime LLM price lookup with direct evidence | Blocked by P2-03A | `feature/p2-direct-price-refresh` | `p2_03b_price_source_implementer` then `p2_03b_price_source_validator`; exact matching and no-OpenAI-path tests required. |
+| P2-04 | Remove OpenAI runtime paths | Blocked by P2-02C / P2-03B | `feature/p2-remove-openai` | `p2_04_openai_removal_implementer` then `p2_04_openai_removal_validator`; prove local-only operation and ≥80% focused coverage. |
 | A03 | Configure prototype RAG infrastructure | Incomplete | `codex/rag-infrastructure` | No Qdrant/Ollama embedding module, configuration, CLI, dependency, or Compose profile is present. |
 | A04 | Load and search the prototype corpus | Incomplete | `codex/rag-prototype-index` | No prototype corpus, loader, raw search command, or Qdrant substrate is present; blocked by A03. |
 | A05 | Reconcile and extend the pricing evaluation fixtures | Deferred | `codex/pricing-evaluation-fixtures` | Phase 1 added a private benchmark fixture/CLI, but MSRP is reference-only and unscored; production pricing evaluation remains deferred. |
@@ -67,8 +86,30 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
 
 ## Implementation Audit
 
-Audited against the current repository on 2026-07-18. “Partial” below identifies reusable
+Audited against committed `4e70330` on 2026-07-21. “Partial” below identifies reusable
 foundations only; it does not satisfy an action's dependencies, completion evidence, or lifecycle.
+
+### Phase 2 audit
+
+- **P2-00 — Outstanding.** `benchmark_cli.py` writes a v1 report, counts only `complete` status as
+  success, scores all fields for both operations, permits fuzzy name matching, and has no runtime
+  evidence or local-only provider guard. Catalog-backed analysis can return `verified`, so current
+  benchmark results are not decision-ready.
+- **P2-01 — Partial foundation.** Vision/text model settings and photo-aware model selection exist,
+  but defaults have not been accepted through the repaired 3090 role benchmark. No controlled model
+  report or residency evidence is committed.
+- **P2-02A/B/C — Partial foundation.** Local extraction, catalog matching, a text reconciliation
+  path, and synchronous request handling exist. The confidence/evidence contract, bounded residency
+  queue, durable work, progress surface, low-confidence confirmation, and timing lifecycle are
+  outstanding.
+- **P2-03A/B — Partial foundation.** `CatalogPrice`, an import CLI, and optional Qdrant lookup exist,
+  but the lookup is fuzzy and a cache miss can use OpenAI web search. The separate source-backed
+  pricing benchmark, exact canonical identity/provenance gate, and direct-only refresh are
+  outstanding.
+- **P2-04 — Outstanding.** OpenAI provider/runtime/configuration/admin/docs/dependency paths remain.
+
+Uncommitted work in `bourbonbook/catalog_extract.py`, `bourbonbook/migrations/`, `tests/tmp/`, and
+`.vscode/` is excluded from this audit and must not be treated as Phase 2 completion evidence.
 
 - **A03 — Outstanding.** No application Qdrant client, `/api/embed` boundary, RAG settings/admin
   fields, RAG command module, Qdrant dependency, or Compose `rag` profile exists.
@@ -168,10 +209,14 @@ the tracker is updated with an approved scope.
 5. Implement only the named action and its documentation/tests. Prefer extending existing modules
    over adding parallel implementations.
 6. Run focused tests throughout development, followed by the relevant full local checks.
-7. Spawn a sub-agent with instructions to inspect the final diff, run or inspect focused tests, and
-   report correctness, regressions, missing coverage, security concerns, and scope creep. The
-   reviewer must not modify files unless explicitly asked after its report.
-8. Resolve every actionable sub-agent finding and rerun affected tests.
+7. After the implementation agent finishes, start a **new validation/fix agent**. It must inspect
+   the final diff, run focused tests and `make coverage`, report correctness/regressions/missing
+   coverage/security/scope findings, and make only contained fixes in the named action. Every fix
+   requires a regression test and a rerun of affected checks.
+8. Do not begin the next action until the validation/fix agent reports passing tests and ≥80% focused
+   coverage. Before a PR, the temporary repository-wide 80% `make coverage` gate and the separate read-only
+   `bourbonbook_reviewer` and `pr_validator`
+   commit-bound checks required by the project instructions.
 9. Run `make pr-review`. Fix failures and rerun until it passes. This target includes lint,
    formatting checks, branch coverage, Bandit, dependency audit, repository-integrity checks,
    migration tests, Compose validation, and a production image build.

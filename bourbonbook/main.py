@@ -141,7 +141,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        cleanup_expired_catalog_import_sources(settings)
         async with AsyncExitStack() as stack:
             app.state.openai_client = None
             if settings.openai_api_key:
@@ -154,6 +153,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.qdrant_price_index = QdrantPriceIndex(settings)
             stack.push_async_callback(app.state.qdrant_price_index.close)
             bootstrap_database(settings)
+            with database.session_factory() as session:
+                cleanup_expired_catalog_import_sources(settings, session)
             await app.state.qdrant_price_index.ensure_collection()
             removed = app.state.usage_recorder.cleanup_old_records()
             if removed:
@@ -438,6 +439,46 @@ async def apply_user_purchase_price(
         catalog_price_id=price.id,
     )
     return True
+
+
+async def sync_applied_catalog_prices_to_qdrant(
+    app: FastAPI, catalog_price_ids: tuple[int, ...]
+) -> None:
+    """Best-effort post-commit refresh of just-applied catalog prices.
+
+    SQLite is the source of truth.  Failed or disabled Qdrant writes therefore never change
+    the completed import result; the existing catalog reindex command can safely retry them.
+    """
+    price_index: QdrantPriceIndex | None = app.state.qdrant_price_index
+    if not catalog_price_ids or price_index is None or not price_index.enabled:
+        return
+
+    with app.state.database.session_factory() as session:
+        prices = list(
+            session.scalars(select(CatalogPrice).where(CatalogPrice.id.in_(catalog_price_ids)))
+        )
+
+    for price in prices:
+        try:
+            indexed = await price_index.upsert(price)
+        except Exception as exc:  # External index errors are intentionally non-fatal.
+            log_event(
+                logger,
+                logging.WARNING,
+                "qdrant_catalog_import_sync_failed",
+                "Catalog import Qdrant sync failed; reindex can retry it",
+                catalog_price_id=price.id,
+                error_type=exc.__class__.__name__,
+            )
+            continue
+        if not indexed:
+            log_event(
+                logger,
+                logging.WARNING,
+                "qdrant_catalog_import_sync_deferred",
+                "Catalog import Qdrant sync deferred; reindex can retry it",
+                catalog_price_id=price.id,
+            )
 
 
 async def qdrant_catalog_price(
@@ -1626,6 +1667,7 @@ def register_routes(app: FastAPI) -> None:
                 error=str(exc),
                 status_code=409,
             )
+        await sync_applied_catalog_prices_to_qdrant(app, result.catalog_price_ids)
         return RedirectResponse(
             f"/admin/catalog-import/{batch_id}?page={page}&applied=1&created={result.created}"
             f"&updated={result.updated}&skipped={result.skipped}",

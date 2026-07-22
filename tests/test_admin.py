@@ -489,7 +489,7 @@ def test_admin_catalog_import_review_rejects_invalid_or_nonreview_edits(tmp_path
 
 
 def test_catalog_import_review_shows_current_price_context_and_apply_is_atomic(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     client, app = make_client(tmp_path)
     with client:
@@ -517,10 +517,22 @@ def test_catalog_import_review_shows_current_price_context_and_apply_is_atomic(
         assert "No current price" in review.text
         assert "Apply included proposals to catalog" in review.text
 
-        async def qdrant_write(*_args) -> bool:
-            raise AssertionError("applying a batch must not write Qdrant")
+        indexed_ids: list[int] = []
 
-        monkeypatch.setattr(app.state.qdrant_price_index, "upsert", qdrant_write)
+        class CommittedIndex:
+            enabled = True
+
+            async def upsert(self, price: CatalogPrice) -> bool:
+                # The route must not hand any data to Qdrant until the import transaction has
+                # committed its price rows and terminal batch state.
+                with app.state.database.session_factory() as session:
+                    persisted_batch = session.get(CatalogImportBatch, batch.id)
+                    assert persisted_batch is not None and persisted_batch.state == "applied"
+                    assert session.get(CatalogPrice, price.id) is not None
+                indexed_ids.append(price.id)
+                return True
+
+        app.state.qdrant_price_index = CommittedIndex()
         applied = client.post(
             f"/admin/catalog-import/{batch.id}/apply",
             data={"csrf_token": csrf(review)},
@@ -540,6 +552,57 @@ def test_catalog_import_review_shows_current_price_context_and_apply_is_atomic(
             assert created.msrp == 2.0
             assert created.title == "Local screenshot catalog"
             assert created.url == ""
+            assert indexed_ids == [existing.id, created.id]
+
+
+def test_catalog_import_apply_keeps_sql_committed_when_qdrant_is_disabled_or_fails(
+    tmp_path: Path,
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+
+        class DisabledIndex:
+            enabled = False
+
+            async def upsert(self, _price: CatalogPrice) -> bool:
+                raise AssertionError("disabled indexes must not receive writes")
+
+        app.state.qdrant_price_index = DisabledIndex()
+        disabled_batch = create_review_batch(app, admin_id)
+        disabled_page = client.get(f"/admin/catalog-import/{disabled_batch.id}")
+        disabled_result = client.post(
+            f"/admin/catalog-import/{disabled_batch.id}/apply",
+            data={"csrf_token": csrf(disabled_page)},
+            follow_redirects=False,
+        )
+        assert disabled_result.status_code == 303
+
+        class FailingIndex:
+            enabled = True
+
+            async def upsert(self, _price: CatalogPrice) -> bool:
+                raise RuntimeError("injected Qdrant outage")
+
+        app.state.qdrant_price_index = FailingIndex()
+        failing_batch = create_review_batch(app, admin_id)
+        failing_page = client.get(f"/admin/catalog-import/{failing_batch.id}")
+        failed_sync_result = client.post(
+            f"/admin/catalog-import/{failing_batch.id}/apply",
+            data={"csrf_token": csrf(failing_page)},
+            follow_redirects=False,
+        )
+        assert failed_sync_result.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, disabled_batch.id).state == "applied"
+            assert session.get(CatalogImportBatch, failing_batch.id).state == "applied"
+            assert (
+                session.query(CatalogPrice)
+                .filter_by(product_key="review bourbon 1", size_key="750ml")
+                .count()
+                == 1
+            )
 
 
 def test_catalog_import_apply_exclusion_rollback_and_state_rejection(tmp_path: Path) -> None:

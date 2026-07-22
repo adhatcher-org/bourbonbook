@@ -6,6 +6,7 @@ import io
 import re
 import shutil
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -13,8 +14,10 @@ from uuid import uuid4
 import fitz
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
+from sqlalchemy.orm import Session
 
 from bourbonbook.config import Settings
+from bourbonbook.models import CatalogImportBatch
 
 _CONTENT_TYPES = {
     "image/png": ("png", b"\x89PNG\r\n\x1a\n"),
@@ -22,12 +25,18 @@ _CONTENT_TYPES = {
     "application/pdf": ("pdf", b"%PDF-"),
 }
 _TEMP_BATCH_DIRECTORY = re.compile(r"^\.[1-9][0-9]*-[0-9a-f]{32}\.tmp$")
+PDF_RENDER_SCALE = 2
+_SOURCE_RETAINING_BATCH_STATES = frozenset({"queued", "extracting"})
 
 
 @dataclass(frozen=True)
 class StagedCatalogFile:
     extension: str
     content: bytes
+
+
+class CatalogInputLimitError(ValueError):
+    """A decoded input would exceed a configured memory or dimension budget."""
 
 
 def catalog_import_root(settings: Settings) -> Path:
@@ -87,6 +96,16 @@ def validate_catalog_uploads(
             try:
                 with fitz.open(stream=content, filetype="pdf") as document:
                     page_count = document.page_count
+                    for page in document:
+                        _validate_pdf_render_dimensions(
+                            page,
+                            max_pixels=settings.catalog_import_max_pdf_render_pixels,
+                            max_dimension=settings.catalog_import_max_pdf_render_dimension,
+                        )
+            except CatalogInputLimitError as exc:
+                raise HTTPException(
+                    status_code=413, detail="Catalog PDF exceeds the allowed render dimensions."
+                ) from exc
             except (fitz.FileDataError, RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="Please choose a valid PDF.") from exc
             if page_count < 1:
@@ -104,14 +123,62 @@ def validate_catalog_uploads(
                 )
         else:
             try:
-                with Image.open(io.BytesIO(content)) as image:
-                    image.verify()
-            except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as exc:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", Image.DecompressionBombWarning)
+                    with Image.open(io.BytesIO(content)) as image:
+                        _validate_image_dimensions(
+                            image,
+                            max_pixels=settings.catalog_import_max_image_pixels,
+                            max_dimension=settings.catalog_import_max_image_dimension,
+                        )
+                        image.verify()
+            except CatalogInputLimitError as exc:
+                raise HTTPException(
+                    status_code=413, detail="Catalog image exceeds the allowed dimensions."
+                ) from exc
+            except (
+                Image.DecompressionBombError,
+                Image.DecompressionBombWarning,
+                UnidentifiedImageError,
+                OSError,
+            ) as exc:
                 raise HTTPException(
                     status_code=400, detail="Please choose a valid catalog image."
                 ) from exc
         staged.append(StagedCatalogFile(extension=extension, content=content))
     return staged
+
+
+def validate_catalog_image_dimensions(
+    image: Image.Image, *, max_pixels: int, max_dimension: int
+) -> None:
+    """Reject image headers that would exceed the catalog extraction memory budget."""
+    _validate_image_dimensions(image, max_pixels=max_pixels, max_dimension=max_dimension)
+
+
+def validate_catalog_pdf_render_dimensions(
+    page: fitz.Page, *, max_pixels: int, max_dimension: int
+) -> None:
+    """Reject a PDF page before PyMuPDF allocates its rendered pixel buffer."""
+    _validate_pdf_render_dimensions(page, max_pixels=max_pixels, max_dimension=max_dimension)
+
+
+def _validate_image_dimensions(image: Image.Image, *, max_pixels: int, max_dimension: int) -> None:
+    width, height = image.size
+    if width > max_dimension or height > max_dimension or width * height > max_pixels:
+        raise CatalogInputLimitError("catalog image dimensions exceed configured limit")
+
+
+def _validate_pdf_render_dimensions(
+    page: fitz.Page, *, max_pixels: int, max_dimension: int
+) -> None:
+    bounds = page.bound()
+    width = int(bounds.width * PDF_RENDER_SCALE + 0.999999)
+    height = int(bounds.height * PDF_RENDER_SCALE + 0.999999)
+    if width < 1 or height < 1:
+        raise CatalogInputLimitError("catalog PDF page has invalid dimensions")
+    if width > max_dimension or height > max_dimension or width * height > max_pixels:
+        raise CatalogInputLimitError("catalog PDF render dimensions exceed configured limit")
 
 
 def stage_catalog_uploads(
@@ -138,8 +205,13 @@ def stage_catalog_uploads(
         raise
 
 
-def cleanup_expired_catalog_import_sources(settings: Settings) -> None:
-    """Remove only stale numeric batch directories; temporary directories are always stale."""
+def cleanup_expired_catalog_import_sources(settings: Settings, session: Session) -> None:
+    """Remove expired terminal/orphan sources while preserving runnable batch input.
+
+    A queued batch, including one requeued after an interrupted extraction lease, must keep its
+    source files no matter how old their directory is.  The durable batch state is the authority
+    for that decision; directory mtimes only control retention for terminal and orphan sources.
+    """
     root = catalog_import_root(settings)
     if not root.exists():
         return
@@ -154,5 +226,10 @@ def cleanup_expired_catalog_import_sources(settings: Settings) -> None:
             expired = now - child.stat().st_mtime >= cutoff
         except OSError:
             continue
-        if expired:
-            shutil.rmtree(child, ignore_errors=True)
+        if not expired:
+            continue
+        if child.name.isdigit():
+            batch = session.get(CatalogImportBatch, int(child.name))
+            if batch is not None and batch.state in _SOURCE_RETAINING_BATCH_STATES:
+                continue
+        shutil.rmtree(child, ignore_errors=True)

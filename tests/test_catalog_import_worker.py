@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from bourbonbook.catalog_import_worker import (
 from bourbonbook.catalog_imports import CatalogImportState, reserve_catalog_import_batch
 from bourbonbook.catalog_uploads import (
     catalog_import_batch_directory,
+    cleanup_expired_catalog_import_sources,
     remove_catalog_import_batch_sources,
 )
 from bourbonbook.config import Settings
@@ -310,3 +312,37 @@ def test_expired_extracting_lease_requeues_only_expired_work(tmp_path: Path) -> 
         assert expired.state == "queued"
         assert expired.lease_expires_at is None
         assert active.state == "extracting"
+
+
+def test_recovered_expired_lease_retains_old_sources_through_startup_cleanup(
+    tmp_path: Path,
+) -> None:
+    configured = Settings(
+        **{**vars(settings(tmp_path)), "catalog_import_source_expiry_hours": 1}
+    )
+    bootstrap_database(configured)
+    database = Database(configured)
+    batch_id = create_batch(database, configured, state=CatalogImportState.EXTRACTING.value)
+    source = catalog_import_batch_directory(configured, batch_id)
+    old = datetime.now(UTC) - timedelta(hours=2)
+    source_file = source / "source.png"
+    source_file.write_bytes(b"fixture")
+
+    timestamp = old.timestamp()
+    os.utime(source, (timestamp, timestamp))
+    with database.session_factory() as session:
+        batch = session.get(CatalogImportBatch, batch_id)
+        assert batch is not None
+        batch.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+    with database.session_factory() as session:
+        assert recover_expired_catalog_import_leases(session, datetime.now(UTC)) == 1
+        session.commit()
+        cleanup_expired_catalog_import_sources(configured, session)
+
+    with database.session_factory() as session:
+        batch = session.get(CatalogImportBatch, batch_id)
+        assert batch is not None
+        assert batch.state == CatalogImportState.QUEUED.value
+    assert source_file.exists()

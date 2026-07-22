@@ -121,6 +121,25 @@ def test_reusable_extraction_renders_generated_pdf_pages(tmp_path) -> None:
     assert chunks[0].image.startswith(b"\xff\xd8\xff")
 
 
+def test_document_chunks_rejects_oversized_image_before_conversion(tmp_path: Path) -> None:
+    image_path = tmp_path / "oversized.png"
+    Image.new("RGB", (11, 10), "white").save(image_path)
+
+    with pytest.raises(ValueError, match="dimensions"):
+        document_chunks(image_path, max_image_pixels=100)
+
+
+def test_document_chunks_rejects_pdf_before_oversized_rasterization(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "oversized.pdf"
+    document = fitz.open()
+    document.new_page(width=100, height=72)
+    document.save(pdf_path)
+    document.close()
+
+    with pytest.raises(ValueError, match="render dimensions"):
+        document_chunks(pdf_path, max_pdf_render_dimension=100)
+
+
 @pytest.mark.parametrize(
     ("response", "failure_kind"),
     [

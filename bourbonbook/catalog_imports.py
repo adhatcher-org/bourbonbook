@@ -47,6 +47,7 @@ class CatalogImportApplyResult:
     created: int
     updated: int
     skipped: int
+    catalog_price_ids: tuple[int, ...]
 
 
 class CatalogImportApplyStateError(ValueError):
@@ -63,7 +64,8 @@ def apply_catalog_import_batch(
     """Apply included reviewed proposals in one SQLite transaction.
 
     This deliberately owns no provider or vector-index work.  A failure while creating or
-    updating any price rolls back every price and leaves the batch awaiting review.
+    updating any price rolls back every price and leaves the batch awaiting review.  The
+    returned IDs identify the committed rows a caller may reindex after this transaction.
     """
     with session.begin():
         batch = session.get(CatalogImportBatch, batch_id)
@@ -80,6 +82,7 @@ def apply_catalog_import_batch(
             )
         )
         created = updated = skipped = 0
+        applied_prices: list[CatalogPrice] = []
         for proposal in proposals:
             if not proposal.included:
                 skipped += 1
@@ -111,6 +114,10 @@ def apply_catalog_import_batch(
                 price.basis = f"Approved catalog import batch #{batch.id}."
                 price.checked_at = datetime.combine(proposal.price_updated_at, time.min, tzinfo=UTC)
                 updated += 1
+            applied_prices.append(price)
+        # Newly created rows need their primary keys before the committed result can identify
+        # the exact subset eligible for a post-commit index refresh.
+        session.flush()
         timestamp = now()
         transitioned = session.execute(
             update(CatalogImportBatch)
@@ -127,7 +134,12 @@ def apply_catalog_import_batch(
         )
         if transitioned.rowcount != 1:
             raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
-    return CatalogImportApplyResult(created=created, updated=updated, skipped=skipped)
+    return CatalogImportApplyResult(
+        created=created,
+        updated=updated,
+        skipped=skipped,
+        catalog_price_ids=tuple(dict.fromkeys(price.id for price in applied_prices)),
+    )
 
 
 def transition_batch(

@@ -24,6 +24,12 @@ import httpx
 from PIL import Image
 
 from bourbonbook.catalog import normalize_product_name
+from bourbonbook.catalog_uploads import (
+    PDF_RENDER_SCALE,
+    CatalogInputLimitError,
+    validate_catalog_image_dimensions,
+    validate_catalog_pdf_render_dimensions,
+)
 from bourbonbook.config import Settings
 from bourbonbook.logging_config import log_event
 
@@ -141,23 +147,44 @@ def catalog_proposals(items: Iterable[dict[str, str | float]]) -> list[CatalogEx
 
 
 def image_chunks(
-    path: Path, chunk_height: int = DEFAULT_CHUNK_HEIGHT, overlap: int = DEFAULT_CHUNK_OVERLAP
+    path: Path,
+    chunk_height: int = DEFAULT_CHUNK_HEIGHT,
+    overlap: int = DEFAULT_CHUNK_OVERLAP,
+    *,
+    max_pixels: int = 20_000_000,
+    max_dimension: int = 10_000,
 ) -> list[tuple[int, bytes]]:
     """Encode a local staged image as overlapping JPEG chunks without network access."""
     _validate_chunk_dimensions(chunk_height, overlap)
     with Image.open(path) as source:
+        validate_catalog_image_dimensions(
+            source, max_pixels=max_pixels, max_dimension=max_dimension
+        )
         return _image_chunks(source.convert("RGB"), chunk_height, overlap)
 
 
 def document_chunks(
-    path: Path, chunk_height: int = DEFAULT_CHUNK_HEIGHT, overlap: int = DEFAULT_CHUNK_OVERLAP
+    path: Path,
+    chunk_height: int = DEFAULT_CHUNK_HEIGHT,
+    overlap: int = DEFAULT_CHUNK_OVERLAP,
+    *,
+    max_image_pixels: int = 20_000_000,
+    max_image_dimension: int = 10_000,
+    max_pdf_render_pixels: int = 20_000_000,
+    max_pdf_render_dimension: int = 10_000,
 ) -> list[CatalogRenderChunk]:
     """Render PNG/JPEG or every local PDF page into bounded vision-model chunks."""
     _validate_chunk_dimensions(chunk_height, overlap)
     if path.suffix.lower() != ".pdf":
         return [
             CatalogRenderChunk(path.name, top, image)
-            for top, image in image_chunks(path, chunk_height, overlap)
+            for top, image in image_chunks(
+                path,
+                chunk_height,
+                overlap,
+                max_pixels=max_image_pixels,
+                max_dimension=max_image_dimension,
+            )
         ]
 
     import fitz
@@ -165,7 +192,14 @@ def document_chunks(
     chunks: list[CatalogRenderChunk] = []
     with fitz.open(path) as document:
         for page_number, page in enumerate(document, start=1):
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            validate_catalog_pdf_render_dimensions(
+                page,
+                max_pixels=max_pdf_render_pixels,
+                max_dimension=max_pdf_render_dimension,
+            )
+            pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False
+            )
             with Image.open(io.BytesIO(pixmap.tobytes("jpeg"))) as rendered:
                 for top, image in _image_chunks(rendered.convert("RGB"), chunk_height, overlap):
                     chunks.append(CatalogRenderChunk(f"{path.name}:page-{page_number}", top, image))
@@ -254,7 +288,26 @@ async def extract_catalog_files(
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(path)
-        for chunk in document_chunks(path, chunk_height, overlap):
+        try:
+            chunks = document_chunks(
+                path,
+                chunk_height,
+                overlap,
+                max_image_pixels=settings.catalog_import_max_image_pixels,
+                max_image_dimension=settings.catalog_import_max_image_dimension,
+                max_pdf_render_pixels=settings.catalog_import_max_pdf_render_pixels,
+                max_pdf_render_dimension=settings.catalog_import_max_pdf_render_dimension,
+            )
+        except (
+            CatalogInputLimitError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+        ) as exc:
+            raise CatalogExtractionError("unsafe_input") from exc
+        for chunk in chunks:
             if max_chunks is not None and chunk_count >= max_chunks:
                 break
             extracted.extend(

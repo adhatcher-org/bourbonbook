@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from io import BytesIO
 from pathlib import Path
 
@@ -599,6 +599,7 @@ def test_catalog_import_apply_uses_unsaved_review_fields_atomically(tmp_path: Pa
         assert excluded.status_code == 303
         assert "created=0" in excluded.headers["location"]
         assert "updated=0" in excluded.headers["location"]
+        assert "unchanged=0" in excluded.headers["location"]
         assert "skipped=2" in excluded.headers["location"]
         with app.state.database.session_factory() as session:
             assert session.get(CatalogImportBatch, excluded_batch.id).state == "applied"
@@ -663,6 +664,7 @@ def test_catalog_import_apply_uses_unsaved_review_fields_atomically(tmp_path: Pa
             },
         )
         assert invalid.status_code == 400
+        assert "1 invalid proposal(s)" in invalid.text
         with app.state.database.session_factory() as session:
             persisted_first = session.get(CatalogImportProposal, first.id)
             assert persisted_first is not None and persisted_first.name == "Review Bourbon 1"
@@ -789,7 +791,13 @@ def test_catalog_import_review_shows_current_price_context_and_apply_is_atomic(
         assert applied.status_code == 303
         assert "created=1" in applied.headers["location"]
         assert "updated=1" in applied.headers["location"]
+        assert "unchanged=0" in applied.headers["location"]
         assert "skipped=0" in applied.headers["location"]
+        receipt = client.get(applied.headers["location"])
+        assert (
+            "Catalog import batch applied: 1 created, 1 updated, 0 unchanged, 0 skipped."
+            in receipt.text
+        )
         with app.state.database.session_factory() as session:
             persisted = session.get(CatalogImportBatch, batch.id)
             assert persisted is not None and persisted.state == "applied"
@@ -871,7 +879,12 @@ def test_catalog_import_apply_exclusion_rollback_and_state_rejection(tmp_path: P
             session.commit()
         with app.state.database.session_factory() as session:
             result = apply_catalog_import_batch(session, batch.id)
-            assert (result.created, result.updated, result.skipped) == (1, 0, 1)
+            assert (result.created, result.updated, result.unchanged, result.skipped) == (
+                1,
+                0,
+                0,
+                1,
+            )
         with app.state.database.session_factory() as session:
             retained = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
             assert retained.msrp == 30.0
@@ -924,7 +937,43 @@ def test_catalog_import_apply_preserves_newer_catalog_price(tmp_path: Path) -> N
             session.commit()
         with app.state.database.session_factory() as session:
             result = apply_catalog_import_batch(session, batch.id)
-            assert (result.created, result.updated, result.skipped) == (0, 0, 1)
+            assert (result.created, result.updated, result.unchanged, result.skipped) == (
+                0,
+                0,
+                1,
+                0,
+            )
+        with app.state.database.session_factory() as session:
+            price = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
+            assert price.msrp == 99.99
+
+
+def test_catalog_import_apply_retains_equal_catalog_price(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            proposal = session.query(CatalogImportProposal).filter_by(batch_id=batch.id).one()
+            session.add(
+                CatalogPrice(
+                    product_key=proposal.product_key,
+                    size_key=proposal.size_key,
+                    msrp=99.99,
+                    url="",
+                    checked_at=datetime.combine(proposal.price_updated_at, time.min, tzinfo=UTC),
+                )
+            )
+            session.commit()
+        with app.state.database.session_factory() as session:
+            result = apply_catalog_import_batch(session, batch.id)
+            assert (result.created, result.updated, result.unchanged, result.skipped) == (
+                0,
+                0,
+                1,
+                0,
+            )
         with app.state.database.session_factory() as session:
             price = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
             assert price.msrp == 99.99

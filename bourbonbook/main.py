@@ -1636,6 +1636,7 @@ def register_routes(app: FastAPI) -> None:
         applied: int = 0,
         created: int = 0,
         updated: int = 0,
+        unchanged: int = 0,
         skipped: int = 0,
         retried: int = 0,
     ) -> Response:
@@ -1654,7 +1655,7 @@ def register_routes(app: FastAPI) -> None:
                 if saved
                 else (
                     f"Catalog import batch applied: {created} created, {updated} updated, "
-                    f"{skipped} skipped."
+                    f"{unchanged} unchanged, {skipped} skipped."
                 )
                 if applied
                 else (
@@ -1765,7 +1766,10 @@ def register_routes(app: FastAPI) -> None:
                     admin,
                     batch=batch,
                     page=page,
-                    error=f"Fix the required fields for {', '.join(errors)} before applying.",
+                    error=(
+                        f"{len(errors)} invalid proposal(s). Fix the required fields for "
+                        f"{', '.join(errors)} before applying."
+                    ),
                     status_code=400,
                 )
         try:
@@ -1790,7 +1794,7 @@ def register_routes(app: FastAPI) -> None:
         await sync_applied_catalog_prices_to_qdrant(app, result.catalog_price_ids)
         return RedirectResponse(
             f"/admin/catalog-import/{batch_id}?page={page}&applied=1&created={result.created}"
-            f"&updated={result.updated}&skipped={result.skipped}",
+            f"&updated={result.updated}&unchanged={result.unchanged}&skipped={result.skipped}",
             303,
         )
 

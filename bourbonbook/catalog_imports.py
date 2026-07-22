@@ -46,6 +46,7 @@ class CatalogImportApplyResult:
 
     created: int
     updated: int
+    unchanged: int
     skipped: int
     catalog_price_ids: tuple[int, ...]
 
@@ -141,7 +142,7 @@ def apply_catalog_import_batch(
                 .order_by(CatalogImportProposal.position)
             )
         )
-        created = updated = skipped = 0
+        created = updated = unchanged = skipped = 0
         applied_prices: list[CatalogPrice] = []
         for proposal in proposals:
             if not proposal.included:
@@ -174,8 +175,8 @@ def apply_catalog_import_batch(
                 price_checked_at = price.checked_at
                 if price_checked_at.tzinfo is None:
                     price_checked_at = price_checked_at.replace(tzinfo=UTC)
-                if price_checked_at > proposal_checked_at:
-                    skipped += 1
+                if price_checked_at >= proposal_checked_at:
+                    unchanged += 1
                     continue
                 price.msrp = proposal.msrp
                 price.title = "Local screenshot catalog"
@@ -206,6 +207,7 @@ def apply_catalog_import_batch(
     return CatalogImportApplyResult(
         created=created,
         updated=updated,
+        unchanged=unchanged,
         skipped=skipped,
         catalog_price_ids=tuple(dict.fromkeys(price.id for price in applied_prices)),
     )

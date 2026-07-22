@@ -175,7 +175,9 @@ def apply_catalog_import_batch(
                 price_checked_at = price.checked_at
                 if price_checked_at.tzinfo is None:
                     price_checked_at = price_checked_at.replace(tzinfo=UTC)
-                if price_checked_at >= proposal_checked_at:
+                if price_checked_at > proposal_checked_at or (
+                    price_checked_at == proposal_checked_at and price.msrp == proposal.msrp
+                ):
                     unchanged += 1
                     continue
                 price.msrp = proposal.msrp

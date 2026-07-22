@@ -948,7 +948,7 @@ def test_catalog_import_apply_preserves_newer_catalog_price(tmp_path: Path) -> N
             assert price.msrp == 99.99
 
 
-def test_catalog_import_apply_retains_equal_catalog_price(tmp_path: Path) -> None:
+def test_catalog_import_apply_corrects_equal_date_catalog_price(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:
         register(client, "admin")
@@ -970,13 +970,13 @@ def test_catalog_import_apply_retains_equal_catalog_price(tmp_path: Path) -> Non
             result = apply_catalog_import_batch(session, batch.id)
             assert (result.created, result.updated, result.unchanged, result.skipped) == (
                 0,
-                0,
                 1,
+                0,
                 0,
             )
         with app.state.database.session_factory() as session:
             price = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
-            assert price.msrp == 99.99
+            assert price.msrp == 1.0
 
 
 def test_catalog_import_apply_requires_csrf_admin_and_review_state(tmp_path: Path) -> None:

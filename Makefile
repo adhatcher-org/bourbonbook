@@ -27,7 +27,7 @@ install: ## Install the exact locked application and development dependencies.
 	$(UV) sync --frozen
 
 build: ## Build the production container image.
-	docker build --tag $(IMAGE):$(TAG) .
+	$(UV) run $(PYTHON) scripts/docker_build.py --image $(IMAGE) --tag $(TAG)
 
 build-local: ## Build the local Compose service without pushing it.
 	docker compose build bourbonbook

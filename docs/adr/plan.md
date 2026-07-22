@@ -12,6 +12,18 @@ Ollama embeddings, Qdrant collection management, fixture loading, metadata filte
 vector search before the application commits to production pricing sources or recommendation
 rules. After that prototype is measured, the downstream pricing roadmap must be reviewed again.
 
+## Superseded: Benchmark-Gated Model Selection
+
+[ADR 0003](0003-fixed-local-model-no-benchmark-gate.md) retires P2-00 and P2-01 as blocking
+prerequisites. Local model selection for the photo-analysis and name-reconciliation roles is now a
+fixed operator/configuration decision (`qwen3.6:35b` for both `OLLAMA_VISION_MODEL` and
+`OLLAMA_MODEL`, per README/.env.example) rather than something gated on a passing
+`benchmark_cli`/`model_evaluation` acceptance record. The hardware (RTX 3090) and provider (Ollama)
+were already fixed regardless of any benchmark outcome, so the gate no longer had a decision left to
+inform. P2-00/P2-01 rows below are marked **Retired** rather than deleted, to preserve the record of
+what was attempted; `benchmark_cli.py`/`model_evaluation.py` remain in the repository as optional,
+non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequences.
+
 ## Confirmed Decisions
 
 1. Removing the HTML `capture="environment"` hint will restore the normal iPhone image chooser;
@@ -64,8 +76,8 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
 | --- | --- | --- | --- | --- |
 | A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
 | A02 | Apply Atkinson Hyperlegible Next to edit controls | Complete | `codex/readable-edit-font` | [PR #12](https://github.com/adhatcher-org/bourbonbook/pull/12); desktop/iPhone and missing-font fallback verified; sub-agent clean; `make pr-review` passed. |
-| P2-00 | Repair benchmark semantics, runtime evidence, and local-only enforcement | Validated locally | `feature/p2-benchmark-contract` | `p2_00_benchmark_implementer` and `p2_00_benchmark_validator` passed focused 92.20% coverage and full tests. The repository aggregate is 86.80%; 90% remains required before PR promotion. |
-| P2-01 | Select local model roles on the 3090 | Deterministic validation complete; live selection pending authorization | `feature/p2-model-evaluation` | Offline implementer/validator pass: 149 tests and 90% focused coverage. A private, authorized 3090 report is still required; the repository aggregate is 86.93%, so 90% remains a PR-promotion blocker. |
+| P2-00 | Repair benchmark semantics, runtime evidence, and local-only enforcement | **Retired — no longer required (ADR 0003)** | `feature/p2-benchmark-contract` | Historical: `p2_00_benchmark_implementer`/`validator` passed focused 92.20% coverage; repository aggregate 86.80% never reached the 90% PR-promotion floor. Retired as a blocking prerequisite by ADR 0003; not needed to adopt or change a local model. |
+| P2-01 | Select local model roles on the 3090 | **Retired — no longer required (ADR 0003)** | `feature/p2-model-evaluation` | Historical: offline implementer/validator pass (149 tests, 90% focused coverage); the required "authorized 3090 report" was never produced. Retired by ADR 0003 — model roles are now a fixed config decision (`qwen3.6:35b` for both photo and name), not a benchmark-gated selection. |
 | P2-02A | Harden local evidence-to-catalog analysis contract | Blocked by P2-01 | `feature/p2-local-analysis-contract` | `p2_02a_analysis_implementer` then `p2_02a_analysis_validator`; catalog is authoritative and unresolved facts remain reviewable. |
 | P2-02B | Add bounded GPU scheduling and timing telemetry | Blocked by P2-02A | `feature/p2-gpu-queue-telemetry` | `p2_02b_queue_implementer` then `p2_02b_queue_validator`; one-large-model residency and deterministic timing tests required. |
 | P2-02C | Add durable analysis jobs, progress, and confirmation UI | Blocked by P2-02B | `feature/p2-analysis-jobs-ui` | `p2_02c_jobs_ui_implementer` then `p2_02c_jobs_ui_validator`; fresh/upgrade migrations, owner security, browser tests, and ≥80% focused coverage required. |
@@ -91,13 +103,15 @@ foundations only; it does not satisfy an action's dependencies, completion evide
 
 ### Phase 2 audit
 
-- **P2-00 — Outstanding.** `benchmark_cli.py` writes a v1 report, counts only `complete` status as
-  success, scores all fields for both operations, permits fuzzy name matching, and has no runtime
-  evidence or local-only provider guard. Catalog-backed analysis can return `verified`, so current
-  benchmark results are not decision-ready.
-- **P2-01 — Partial foundation.** Vision/text model settings and photo-aware model selection exist,
-  but defaults have not been accepted through the repaired 3090 role benchmark. No controlled model
-  report or residency evidence is committed.
+- **P2-00 — Outstanding as of this audit; retired by ADR 0003.** `benchmark_cli.py` writes a v1
+  report, counts only `complete` status as success, scores all fields for both operations, permits
+  fuzzy name matching, and has no runtime evidence or local-only provider guard. Catalog-backed
+  analysis can return `verified`, so current benchmark results are not decision-ready. This gap is
+  no longer a blocker for model selection — see [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md).
+- **P2-01 — Partial foundation as of this audit; retired by ADR 0003.** Vision/text model settings
+  and photo-aware model selection exist, but defaults were never accepted through the repaired 3090
+  role benchmark described here. ADR 0003 retires that requirement: model roles are now a fixed
+  config decision (`qwen3.6:35b` for both), not benchmark-gated.
 - **P2-02A/B/C — Partial foundation.** Local extraction, catalog matching, a text reconciliation
   path, and synchronous request handling exist. The confidence/evidence contract, bounded residency
   queue, durable work, progress surface, low-confidence confirmation, and timing lifecycle are
@@ -150,43 +164,49 @@ or evidence-extraction call.
 
 | Order | Action | Scope and acceptance gate |
 | --- | --- | --- |
-| 1 | **P2-00 — Correct benchmark semantics and capture 3090 evidence** | Count validated catalog results as success; score only fields observable for each operation; canonicalize equivalent units; record GPU, Ollama/model digest, image-preprocessing revision, queue/model-load time, and a controlled unloaded cold-start result. Deterministic tests use fakes; the private collection benchmark is opt-in. |
-| 2 | **P2-01 — Select local model roles** | Benchmark `gemma4:26b` for photo/OCR/fill-level work; benchmark `qwen3:30b-a3b` and `qwen3.6:35b` only for catalog-miss name reconciliation. Retain `qwen3-vl:8b` only as a control because its recorded candidate regressed. Accept each role only if it meets the frozen accuracy, reliability, and latency gate. |
+| 1 | **P2-00 — Correct benchmark semantics and capture 3090 evidence (retired, ADR 0003)** | No longer a prerequisite for model selection. The scoring/semantics defects described here (success counting, field observability, cold-start capture) remain real if the benchmark tooling is ever used again for ad hoc comparison, but fixing them is no longer required before adopting or changing a local model. |
+| 2 | **P2-01 — Select local model roles (retired, ADR 0003)** | No longer benchmark-gated. `qwen3.6:35b` is adopted directly for both `OLLAMA_VISION_MODEL` and `OLLAMA_MODEL` (photo and name-reconciliation roles) as a fixed configuration decision — see [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md). `benchmark_cli.py`/`model_evaluation.py` remain available for optional, non-blocking ad hoc comparison only. |
 | 3 | **P2-02 — Build the local photo, catalog, and job pipeline** | Implement the operation-specific local flow below: one VLM photo job followed by local catalog facts; run the general text model only after a catalog miss/ambiguity. Add bounded queue/model-residency telemetry, durable jobs, visible progress, and low-confidence user confirmation. Keep one large application model resident; Continue's `qwen3-coder:30b` is development-only. |
 | 4 | **P2-03 — Replace LLM price lookup with direct evidence** | Preserve the OHLQ cache but replace LLM web search with an exact product/size direct-source or imported-catalog adapter. Store URL, observation date, source basis, and freshness; return unavailable rather than inventing MSRP. Run a separate source-backed price evaluation. |
 | 5 | **P2-04 — Remove OpenAI runtime paths** | Prove fake-provider tests and usage records cannot call OpenAI; remove the fallback, price-search adapter, configuration, client lifecycle, admin controls, dependency, and stale documentation only after P2-02/P2-03 pass. |
 | 6 | **A03 then A04 — Prototype RAG** | Resume the standalone Qdrant/embedding prototype after the local analysis cutover is stable. It remains diagnostic/raw and must not reintroduce OpenAI or production price recommendations. |
-| 7 | **Post-RAG checkpoint, then A05–A13** | Rewrite every deferred pricing action around the local-only provider policy, source governance, direct evidence ingestion, and the completed Phase 2 benchmarks before beginning it. |
+| 7 | **Post-RAG checkpoint, then A05–A13** | Rewrite every deferred pricing action around the local-only provider policy, source governance, and direct evidence ingestion before beginning it. (No longer gated on a completed Phase 2 model benchmark — retired by ADR 0003.) |
 
 ### Phase 2 model and transaction rules
 
-- `gemma4:26b` is the photo-analysis candidate: label text, identity, status, and fill level.
-  OCR text is not evidence of fill level; uncertain visual estimates require review.
-- `qwen3:30b-a3b` is the normal general-model candidate for unknown-name reconciliation only;
-  `qwen3.6:35b` is its benchmark challenger. Exact local catalog matches return without an LLM.
-- `qwen3-coder:30b` belongs in Continue for development, never the application request path. Unload it
-  before app analysis or benchmarks so the 24 GB card does not co-reside competing large models.
+Updated by [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md): model roles are a fixed
+configuration decision, not a benchmark-selected candidate list. The rules below reflect the
+current configuration, not the retired candidate/challenger framing.
+
+- `qwen3.6:35b` is the fixed model for both roles: photo analysis (label text, identity, status,
+  and fill level) and name-only/catalog-miss reconciliation. OCR text is not evidence of fill
+  level; uncertain visual estimates require review. Exact local catalog matches return without an
+  LLM call in either role.
+- `qwen3-coder:30b` belongs in Continue for development, never the application request path. Unload
+  it before app analysis so the 24 GB card does not co-reside competing large models.
 - Pricing is a separate direct-source/cache job and must never delay photo or name analysis.
 
 ### Local operation map and user-transaction timing
 
 | User operation | Normal local path | Exception path | User-visible timing and model residency |
 | --- | --- | --- | --- |
-| Add a bottle from a photo | Normalize image → `gemma4:26b` reads label/identity and visual facts → exact local-catalog match supplies durable product attributes → save a reviewable result. | If the catalog cannot match or the identity is ambiguous, queue `qwen3:30b-a3b` reconciliation using only the image-derived evidence; leave unresolved facts for user correction if it cannot establish a match. | Show photo-analysis progress. Load the VLM for this job only, then release/evict it before any exception reconciliation. A low-confidence fill-level or status estimate requires confirmation rather than an automatic overwrite. |
-| Add or update bottle attributes from a typed name | Exact local-catalog lookup returns durable attributes without an LLM. | `qwen3:30b-a3b` reconciles a miss/ambiguity, then the catalog remains the authority for the saved attributes. `qwen3.6:35b` may replace it only after an independent passing benchmark. | Return catalog matches immediately. Show a distinct reconciliation stage when it is needed; do not load the VLM for a name-only request. |
+| Add a bottle from a photo | Normalize image → `qwen3.6:35b` reads label/identity and visual facts → exact local-catalog match supplies durable product attributes → save a reviewable result. | If the catalog cannot match or the identity is ambiguous, queue `qwen3.6:35b` reconciliation using only the image-derived evidence; leave unresolved facts for user correction if it cannot establish a match. | Show photo-analysis progress. Since photo and reconciliation now share one fixed model (`qwen3.6:35b`, ADR 0003), no load/evict swap is needed between them. A low-confidence fill-level or status estimate still requires confirmation rather than an automatic overwrite. |
+| Add or update bottle attributes from a typed name | Exact local-catalog lookup returns durable attributes without an LLM. | `qwen3.6:35b` reconciles a miss/ambiguity, then the catalog remains the authority for the saved attributes. This is a fixed configuration choice, not a benchmark-selected candidate (ADR 0003). | Return catalog matches immediately. Show a distinct reconciliation stage when it is needed. |
 | Add or refresh MSRP | Apply a fresh exact product-and-size OHLQ cache entry immediately. | Queue/run a direct-source or imported-catalog refresh with URL, source basis, and checked date; return unavailable when there is no verified result. | Never load an LLM or block photo/name analysis. Surface the price source and timestamp separately from bottle analysis. |
 | Continue-assisted coding | No application request-path work. | None. | `qwen3-coder:30b` is development-only and must be unloaded before user analysis or benchmark work so it cannot consume the 3090's model-residency budget. |
 
-Initially, the application may have exactly one large model resident: the VLM during a photo job, or the
-general model during a reconciliation job. P2-02 must record queue wait, model load/eviction,
-inference, catalog-match, and price-refresh durations separately; it may add concurrency or preload
-only after a measured 3090 VRAM and end-to-end latency evaluation.
+Initially, the application may have exactly one large model resident: `qwen3.6:35b`, shared by both
+the photo job and any reconciliation job (no swap between roles since ADR 0003 fixed both roles to
+the same model). P2-02, if resumed, must still record queue wait, model load/eviction, inference,
+catalog-match, and price-refresh durations separately; it may add concurrency or preload only after
+a measured 3090 VRAM and end-to-end latency evaluation.
 
 ### Changes applied to the original Phase 2 direction
 
-- Replaced a generic larger-model recommendation with role-specific selection: `gemma4:26b` for
-  photo analysis; `qwen3:30b-a3b` for exception-only text reconciliation; `qwen3.6:35b` as its
-  measured challenger; and `qwen3-coder:30b` only for Continue development.
+- Replaced a generic larger-model recommendation with role-specific selection, later fixed by
+  [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md) to a single model for both roles:
+  `qwen3.6:35b` for photo analysis and text reconciliation; `qwen3-coder:30b` only for Continue
+  development.
 - Replaced a possible multi-model, synchronous request flow with catalog-first transactions and a
   one-large-model residency rule. Model-load/eviction is now measured separately and exception work
   is visible to the user instead of silently delaying the primary operation.

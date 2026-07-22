@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from bourbonbook.admin_config import CONFIG_FIELDS, read_managed_config, settings_values
 from bourbonbook.auth import hash_password
+from bourbonbook.catalog_import_worker import claim_next_catalog_import
+from bourbonbook.catalog_imports import (
+    CatalogImportApplyStateError,
+    apply_catalog_import_batch,
+)
+from bourbonbook.catalog_uploads import catalog_import_batch_directory
 from bourbonbook.config import Settings
-from bourbonbook.models import ApiUsage, User
+from bourbonbook.main import delete_catalog_import_batch
+from bourbonbook.models import (
+    ApiUsage,
+    CatalogImportBatch,
+    CatalogImportProposal,
+    CatalogPrice,
+    User,
+)
 from tests.test_app import csrf, make_client, register
 
 
@@ -41,6 +58,747 @@ def test_admin_routes_require_admin(tmp_path: Path) -> None:
         register(client)
         assert client.get("/admin/users").status_code == 403
         assert client.get("/admin/config").status_code == 403
+
+
+def test_admin_catalog_lists_filters_updates_and_deletes_prices(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        with app.state.database.session_factory() as session:
+            prices = [
+                CatalogPrice(
+                    product_key=f"example bourbon {number:02}",
+                    size_key="750ml",
+                    msrp=number,
+                    url="",
+                    checked_at=datetime(2026, 7, 21, tzinfo=UTC),
+                )
+                for number in range(1, 27)
+            ]
+            session.add_all(prices)
+            session.commit()
+            update_id, delete_id = prices[0].id, prices[1].id
+
+        listing = client.get("/admin/catalog?q=example&sort=price_desc&page=9&page_size=10")
+        assert listing.status_code == 200
+        assert "example bourbon 06" in listing.text
+        assert "example bourbon 01" in listing.text
+        assert "example bourbon 26" not in listing.text
+        assert "<th>Size</th>" in listing.text
+        assert "<th>Price date</th>" in listing.text
+        assert "750ml" in listing.text
+        assert "2026-07-21" in listing.text
+        assert 'class="catalog-tools catalog-price-toolbar"' in listing.text
+        assert 'class="admin-table catalog-price-table"' in listing.text
+        assert 'class="catalog-name-input"' in listing.text
+        assert 'class="catalog-price-input"' in listing.text
+        styles = Path("bourbonbook/static/app.css").read_text()
+        assert (
+            ".catalog-price-table th:nth-child(2),.catalog-price-table td:nth-child(2){width:48%}"
+            in styles
+        )
+        assert ".catalog-price-table .catalog-name-input{width:100%;min-width:0}" in styles
+        assert client.get("/admin/catalog?sort=unknown&page_size=7").status_code == 200
+
+        response = client.post(
+            "/admin/catalog",
+            data={
+                "csrf_token": csrf(listing),
+                "q": "example",
+                "sort": "name_desc",
+                "page": "1",
+                "page_size": "10",
+                "action": "update",
+                f"name_{update_id}": "Updated Bourbon",
+                f"msrp_{update_id}": "77.25",
+                "name_999999": "Missing",
+                f"name_{delete_id}": "",
+                f"msrp_{delete_id}": "0",
+            },
+            follow_redirects=False,
+        )
+        assert response.headers["location"] == (
+            "/admin/catalog?q=example&sort=name_desc&page=1&page_size=10"
+        )
+
+        with app.state.database.session_factory() as session:
+            updated = session.get(CatalogPrice, update_id)
+            assert updated is not None
+            assert (updated.product_key, updated.msrp) == ("updated bourbon", 77.25)
+
+        delete_page = client.get("/admin/catalog")
+        deleted = client.post(
+            "/admin/catalog",
+            data={
+                "csrf_token": csrf(delete_page),
+                "action": "delete",
+                "selected": [str(delete_id), "999999"],
+            },
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogPrice, delete_id) is None
+
+
+def catalog_png() -> bytes:
+    from PIL import Image
+
+    content = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(content, "PNG")
+    return content.getvalue()
+
+
+def test_admin_catalog_import_stages_validated_uploads(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+
+        import bourbonbook.main as main
+
+        async def provider_call(*_args) -> None:
+            raise AssertionError("catalog staging must not invoke an analysis provider")
+
+        async def qdrant_write(*_args) -> bool:
+            raise AssertionError("catalog staging must not write Qdrant")
+
+        monkeypatch.setattr(main, "analyze_bottle", provider_call)
+        monkeypatch.setattr(main, "analyze_bottle_name", provider_call)
+        monkeypatch.setattr(app.state.qdrant_price_index, "upsert", qdrant_write)
+
+        page = client.get("/admin/catalog-import")
+        assert page.status_code == 200
+        invalid = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+        )
+        assert invalid.status_code == 400
+        assert "Upload PNG, JPEG, or PDF files" in invalid.text
+
+        receipt_page = client.get("/admin/catalog-import")
+        accepted = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(receipt_page)},
+            files=[("pages", ("../../catalog.png", catalog_png(), "image/png"))],
+        )
+        assert accepted.status_code == 200
+        assert "Extraction has been queued" in accepted.text
+        with app.state.database.session_factory() as session:
+            batch = session.query(CatalogImportBatch).one()
+            assert (batch.created_by_user_id, batch.source_file_count, batch.state) == (
+                1,
+                1,
+                "queued",
+            )
+            assert session.query(CatalogPrice).count() == 0
+            source_directory = catalog_import_batch_directory(app.state.settings, batch.id)
+        assert f"Batch #{batch.id}" in accepted.text
+        assert "import-state-queued" in accepted.text
+        assert "Recent import batches" in accepted.text
+        staged_files = list(source_directory.iterdir())
+        assert len(staged_files) == 1
+        assert staged_files[0].suffix == ".png"
+        assert "catalog" not in staged_files[0].name
+
+
+def test_admin_catalog_import_post_requires_csrf_and_verified_admin(tmp_path: Path) -> None:
+    client, _ = make_client(tmp_path)
+    with client:
+        assert client.post("/admin/catalog-import").status_code == 403
+        register(client, "member")
+        profile = client.get("/profile")
+        denied = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(profile)},
+            files=[("pages", ("catalog.png", catalog_png(), "image/png"))],
+        )
+        assert denied.status_code == 403
+
+
+def test_admin_catalog_import_rejects_bad_content_and_cleans_staging_failures(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/catalog-import")
+        mismatch = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+            files=[("pages", ("catalog.png", b"not-a-real-image", "image/png"))],
+        )
+        assert mismatch.status_code == 400
+        assert "does not match its type" in mismatch.text
+        assert not (tmp_path / "catalog-imports").exists()
+
+        import bourbonbook.main as main
+
+        def fail_staging(*_args) -> None:
+            raise OSError
+
+        monkeypatch.setattr(main, "stage_catalog_uploads", fail_staging)
+        page = client.get("/admin/catalog-import")
+        failure = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+            files=[("pages", ("catalog.png", catalog_png(), "image/png"))],
+        )
+        assert failure.status_code == 500
+        with app.state.database.session_factory() as session:
+            assert session.query(CatalogImportBatch).count() == 0
+        assert not list((tmp_path / "catalog-imports").glob("*"))
+
+
+def test_admin_catalog_import_commit_failure_cleans_sources_and_skips_catalog_side_effects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+
+        def fail_commit(self) -> None:
+            raise SQLAlchemyError("database unavailable")
+
+        async def qdrant_write(*_args) -> bool:
+            raise AssertionError("catalog staging must not write Qdrant")
+
+        monkeypatch.setattr(Session, "commit", fail_commit)
+        monkeypatch.setattr(app.state.qdrant_price_index, "upsert", qdrant_write)
+        page = client.get("/admin/catalog-import")
+        failure = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+            files=[("pages", ("catalog.png", catalog_png(), "image/png"))],
+        )
+        assert failure.status_code == 500
+        with app.state.database.session_factory() as session:
+            assert session.query(CatalogImportBatch).count() == 0
+            assert session.query(CatalogPrice).count() == 0
+        assert not list((tmp_path / "catalog-imports").glob("*"))
+
+
+def test_admin_catalog_import_enforces_configured_batch_limits(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    app.state.settings = Settings(**{**vars(app.state.settings), "catalog_import_max_files": 1})
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/catalog-import")
+        limited = client.post(
+            "/admin/catalog-import",
+            data={"csrf_token": csrf(page)},
+            files=[
+                ("pages", ("first.png", catalog_png(), "image/png")),
+                ("pages", ("second.png", catalog_png(), "image/png")),
+            ],
+        )
+        assert limited.status_code == 413
+        assert "at most 1 catalog files" in limited.text
+
+
+def create_review_batch(app, user_id: int, proposal_count: int = 1) -> CatalogImportBatch:
+    with app.state.database.session_factory() as session:
+        batch = CatalogImportBatch(
+            created_by_user_id=user_id,
+            state="review",
+            source_file_count=1,
+        )
+        session.add(batch)
+        session.flush()
+        session.add_all(
+            CatalogImportProposal(
+                batch_id=batch.id,
+                position=position,
+                included=True,
+                name=f"Review Bourbon {position}",
+                product_key=f"review bourbon {position}",
+                size_key="750ml",
+                msrp=float(position),
+                price_updated_at=datetime(2026, 7, 22, tzinfo=UTC).date(),
+            )
+            for position in range(1, proposal_count + 1)
+        )
+        session.commit()
+        return batch
+
+
+def test_admin_catalog_import_review_lists_owned_batches_and_edits_proposals(
+    tmp_path: Path,
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id, proposal_count=26)
+
+        listing = client.get("/admin/catalog-import")
+        assert listing.status_code == 200
+        assert f"Batch #{batch.id}" in listing.text
+        assert "Recent import batches" in listing.text
+        assert f"/admin/catalog-import/{batch.id}" in listing.text
+        assert "Batch #" + str(batch.id) + " review" not in listing.text
+        assert "Review Bourbon 1" not in listing.text
+
+        review = client.get(f"/admin/catalog-import/{batch.id}?page=2")
+        assert review.status_code == 200
+        assert "Back to catalog imports" in review.text
+        assert "Review Bourbon 26" in review.text
+        assert "Review Bourbon 1" not in review.text
+        assert "Review Bourbon 25" not in review.text
+        assert 'aria-label="Proposal pages"' in review.text
+        assert 'for="name-' in review.text
+        assert 'aria-label="Include proposal 26"' in review.text
+        assert "Include proposal 26</label>" not in review.text
+        assert 'class="proposal-name-column"' in review.text
+        assert 'class="proposal-name-input"' in review.text
+        assert 'class="proposal-size-input"' in review.text
+        assert 'class="proposal-price-input"' in review.text
+        assert 'class="proposal-size-input" name="size_' in review.text
+        assert 'required maxlength="10"' in review.text
+        styles = Path("bourbonbook/static/app.css").read_text()
+        assert 'class="app-shell edit-page admin-page catalog-import-review-page"' in review.text
+        assert 'id="catalog-import-review-form"' in review.text
+        assert 'form="catalog-import-review-form">Save review changes</button>' in review.text
+        assert 'class="review-primary-actions"' in review.text
+        assert 'class="proposal-date-input"' in review.text
+        assert ".catalog-import-review-page{width:min(1440px,calc(100% - 48px))}" in styles
+        assert ".import-proposals{min-width:1280px;table-layout:fixed}" in styles
+        assert ".import-proposals .proposal-include-column{width:72px}" in styles
+        assert ".import-proposals th,.import-proposals td{padding:9px 12px}" in styles
+        assert ".import-proposals input{width:100%;min-width:0" in styles
+        assert "padding:7px 9px;outline:0}" in styles
+        assert (
+            ".import-proposals input[type=checkbox]{width:22px;height:22px;min-width:22px" in styles
+        )
+        assert ".import-proposals .proposal-size-input{width:100%;min-width:14ch}" in styles
+        assert ".import-proposals .proposal-price-input{width:100%;min-width:11ch}" in styles
+        assert (
+            ".review-primary-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))"
+            in styles
+        )
+        assert (
+            "@media(max-width:620px){.catalog-import-review-page{width:calc(100% - 28px)}"
+            ".review-primary-actions{grid-template-columns:1fr}" in styles
+        )
+
+        with app.state.database.session_factory() as session:
+            proposal = (
+                session.query(CatalogImportProposal).filter_by(batch_id=batch.id, position=26).one()
+            )
+            proposal_id = proposal.id
+        saved = client.post(
+            f"/admin/catalog-import/{batch.id}/review",
+            data={
+                "csrf_token": csrf(review),
+                "page": "2",
+                "proposal_id": str(proposal_id),
+                f"name_{proposal_id}": "Edited Review Bourbon",
+                f"size_{proposal_id}": "1 L",
+                f"msrp_{proposal_id}": "55.50",
+                f"price_updated_at_{proposal_id}": "2026-07-21",
+            },
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+        assert saved.headers["location"] == f"/admin/catalog-import/{batch.id}?page=2&saved=1"
+        with app.state.database.session_factory() as session:
+            edited = session.get(CatalogImportProposal, proposal_id)
+            assert edited is not None
+            assert (
+                edited.name,
+                edited.product_key,
+                edited.size_key,
+                edited.msrp,
+                edited.included,
+            ) == (
+                "Edited Review Bourbon",
+                "edited review bourbon",
+                "1 l",
+                55.5,
+                False,
+            )
+            assert session.query(CatalogPrice).count() == 0
+
+
+def test_catalog_import_review_page_navigation_renders_the_requested_rows(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id, proposal_count=51)
+
+        first_page = client.get(f"/admin/catalog-import/{batch.id}?page=1")
+        second_page = client.get(f"/admin/catalog-import/{batch.id}?page=2")
+        third_page = client.get(f"/admin/catalog-import/{batch.id}?page=3")
+
+        assert "Review Bourbon 1" in first_page.text
+        assert "Review Bourbon 26" not in first_page.text
+        assert "Review Bourbon 26" in second_page.text
+        assert "Review Bourbon 1" not in second_page.text
+        assert "Review Bourbon 25" not in second_page.text
+        assert "Review Bourbon 50" in second_page.text
+        assert "Review Bourbon 51" in third_page.text
+        assert "Review Bourbon 50" not in third_page.text
+        assert f'href="/admin/catalog-import/{batch.id}?page=2"' in first_page.text
+        assert f'href="/admin/catalog-import/{batch.id}?page=3"' in second_page.text
+
+
+def test_admin_catalog_import_review_rejects_invalid_or_nonreview_edits(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        review = client.get(f"/admin/catalog-import/{batch.id}")
+        with app.state.database.session_factory() as session:
+            proposal = session.query(CatalogImportProposal).filter_by(batch_id=batch.id).one()
+            proposal_id = proposal.id
+        invalid = client.post(
+            f"/admin/catalog-import/{batch.id}/review",
+            data={
+                "csrf_token": csrf(review),
+                "proposal_id": str(proposal_id),
+                f"name_{proposal_id}": "",
+                f"size_{proposal_id}": "750ml",
+                f"msrp_{proposal_id}": "0",
+                f"price_updated_at_{proposal_id}": "not-a-date",
+            },
+        )
+        assert invalid.status_code == 400
+        assert "Fix the required fields" in invalid.text
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportProposal, proposal_id)
+            assert persisted is not None
+            assert persisted.validation_error is not None
+            persisted_batch = session.get(CatalogImportBatch, batch.id)
+            assert persisted_batch is not None
+            persisted_batch.state = "failed"
+            session.commit()
+
+        locked_page = client.get(f"/admin/catalog-import/{batch.id}")
+        locked = client.post(
+            f"/admin/catalog-import/{batch.id}/review",
+            data={"csrf_token": csrf(locked_page), "proposal_id": str(proposal_id)},
+        )
+        assert locked.status_code == 409
+        assert "Only batches awaiting review can be edited" in locked.text
+
+
+def test_catalog_import_review_shows_current_price_context_and_apply_is_atomic(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id, proposal_count=2)
+        prior_checked_at = datetime(2026, 7, 1, tzinfo=UTC)
+        with app.state.database.session_factory() as session:
+            session.add(
+                CatalogPrice(
+                    product_key="review bourbon 1",
+                    size_key="750ml",
+                    msrp=25.0,
+                    title="Prior catalog",
+                    url="https://example.test/prior",
+                    checked_at=prior_checked_at,
+                )
+            )
+            session.commit()
+
+        review = client.get(f"/admin/catalog-import/{batch.id}")
+        assert 'id="current-price-' in review.text
+        assert 'value="25.00" readonly' in review.text
+        assert 'value="2026-07-01" readonly' in review.text
+        assert "No current price" in review.text
+        assert "Apply included proposals to catalog" in review.text
+
+        async def qdrant_write(*_args) -> bool:
+            raise AssertionError("applying a batch must not write Qdrant")
+
+        monkeypatch.setattr(app.state.qdrant_price_index, "upsert", qdrant_write)
+        applied = client.post(
+            f"/admin/catalog-import/{batch.id}/apply",
+            data={"csrf_token": csrf(review)},
+            follow_redirects=False,
+        )
+        assert applied.status_code == 303
+        assert "created=1" in applied.headers["location"]
+        assert "updated=1" in applied.headers["location"]
+        assert "skipped=0" in applied.headers["location"]
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None and persisted.state == "applied"
+            existing = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
+            created = session.query(CatalogPrice).filter_by(product_key="review bourbon 2").one()
+            assert existing.msrp == 1.0
+            assert existing.checked_at.date().isoformat() == "2026-07-22"
+            assert created.msrp == 2.0
+            assert created.title == "Local screenshot catalog"
+            assert created.url == ""
+
+
+def test_catalog_import_apply_exclusion_rollback_and_state_rejection(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id, proposal_count=2)
+        with app.state.database.session_factory() as session:
+            old_price = CatalogPrice(
+                product_key="review bourbon 1", size_key="750ml", msrp=30.0, url=""
+            )
+            session.add(old_price)
+            proposal = (
+                session.query(CatalogImportProposal).filter_by(batch_id=batch.id, position=1).one()
+            )
+            proposal.included = False
+            session.commit()
+        with app.state.database.session_factory() as session:
+            result = apply_catalog_import_batch(session, batch.id)
+            assert (result.created, result.updated, result.skipped) == (1, 0, 1)
+        with app.state.database.session_factory() as session:
+            retained = session.query(CatalogPrice).filter_by(product_key="review bourbon 1").one()
+            assert retained.msrp == 30.0
+            assert session.get(CatalogImportBatch, batch.id).state == "applied"
+        with (
+            app.state.database.session_factory() as session,
+            pytest.raises(CatalogImportApplyStateError),
+        ):
+            apply_catalog_import_batch(session, batch.id)
+
+        rollback_batch = create_review_batch(app, admin_id, proposal_count=2)
+        with app.state.database.session_factory() as session:
+
+            def fail_on_second(proposal: CatalogImportProposal) -> None:
+                if proposal.position == 2:
+                    raise RuntimeError("injected write failure")
+
+            with pytest.raises(RuntimeError, match="injected write failure"):
+                apply_catalog_import_batch(
+                    session, rollback_batch.id, before_persist=fail_on_second
+                )
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, rollback_batch.id).state == "review"
+            assert (
+                session.query(CatalogPrice)
+                .filter(CatalogPrice.product_key.in_(["review bourbon 1", "review bourbon 2"]))
+                .count()
+                == 2
+            )
+
+
+def test_catalog_import_apply_requires_csrf_admin_and_review_state(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        assert client.post(f"/admin/catalog-import/{batch.id}/apply").status_code == 403
+
+        page = client.get(f"/admin/catalog-import/{batch.id}")
+        with app.state.database.session_factory() as session:
+            session.get(CatalogImportBatch, batch.id).state = "failed"
+            session.commit()
+        denied = client.post(
+            f"/admin/catalog-import/{batch.id}/apply", data={"csrf_token": csrf(page)}
+        )
+        assert denied.status_code == 409
+        assert "Only batches awaiting review can be applied" in denied.text
+
+
+def test_admin_deletes_only_a_safe_catalog_import_batch_and_its_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        target = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            persisted_target = session.get(CatalogImportBatch, target.id)
+            assert persisted_target is not None
+            persisted_target.state = "queued"
+            duplicate = CatalogImportBatch(
+                created_by_user_id=admin_id,
+                state="queued",
+                source_file_count=1,
+            )
+            session.add(duplicate)
+            session.commit()
+            duplicate_id = duplicate.id
+        for batch_id in (target.id, duplicate_id):
+            source = catalog_import_batch_directory(app.state.settings, batch_id)
+            source.mkdir(parents=True)
+            (source / "catalog.png").write_bytes(b"staged source")
+
+        import bourbonbook.main as main
+
+        async def provider_call(*_args) -> None:
+            raise AssertionError("deleting a batch must not call a provider")
+
+        async def qdrant_write(*_args) -> bool:
+            raise AssertionError("deleting a batch must not write Qdrant")
+
+        monkeypatch.setattr(main, "analyze_bottle", provider_call)
+        monkeypatch.setattr(main, "analyze_bottle_name", provider_call)
+        monkeypatch.setattr(app.state.qdrant_price_index, "upsert", qdrant_write)
+        page = client.get(f"/admin/catalog-import/{target.id}")
+        assert 'aria-label="Delete catalog import batch' in page.text
+        assert "Delete this batch" in page.text
+
+        deleted = client.post(
+            f"/admin/catalog-import/{target.id}/delete",
+            data={"csrf_token": csrf(page)},
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303
+        assert deleted.headers["location"] == "/admin/catalog-import?deleted=1"
+        assert not catalog_import_batch_directory(app.state.settings, target.id).exists()
+        assert catalog_import_batch_directory(app.state.settings, duplicate_id).exists()
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, target.id) is None
+            assert session.query(CatalogImportProposal).filter_by(batch_id=target.id).count() == 0
+            assert session.get(CatalogImportBatch, duplicate_id) is not None
+            assert session.query(CatalogPrice).count() == 0
+
+
+def test_admin_catalog_import_delete_requires_csrf_and_verified_admin(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        assert client.post(f"/admin/catalog-import/{batch.id}/delete").status_code == 403
+
+        admin_profile = client.get("/profile")
+        logout = client.post("/logout", data={"csrf_token": csrf(admin_profile)})
+        assert logout.status_code == 200
+        register(client, "member")
+        profile = client.get("/profile")
+        denied = client.post(
+            f"/admin/catalog-import/{batch.id}/delete",
+            data={"csrf_token": csrf(profile)},
+        )
+        assert denied.status_code == 403
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, batch.id) is not None
+
+
+def test_admin_catalog_import_delete_blocks_extracting_batches(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            persisted.state = "extracting"
+            session.commit()
+        page = client.get(f"/admin/catalog-import/{batch.id}")
+        assert "Delete this batch" not in page.text
+        blocked = client.post(
+            f"/admin/catalog-import/{batch.id}/delete",
+            data={"csrf_token": csrf(page)},
+        )
+        assert blocked.status_code == 409
+        assert "in-process or completed catalog import cannot be deleted" in blocked.text
+        with app.state.database.session_factory() as session:
+            assert session.get(CatalogImportBatch, batch.id) is not None
+
+
+def test_admin_catalog_import_delete_control_visibility_matches_batch_state(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        for state, expected in (
+            ("queued", True),
+            ("failed", True),
+            ("review", True),
+            ("extracting", False),
+            ("applied", False),
+            ("expired", False),
+        ):
+            with app.state.database.session_factory() as session:
+                persisted = session.get(CatalogImportBatch, batch.id)
+                assert persisted is not None
+                persisted.state = state
+                session.commit()
+            page = client.get(f"/admin/catalog-import/{batch.id}")
+            assert ("Delete this batch" in page.text) is expected
+
+
+def test_admin_catalog_import_delete_rejects_applied_and_expired_batches(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        for state in ("applied", "expired"):
+            with app.state.database.session_factory() as session:
+                persisted = session.get(CatalogImportBatch, batch.id)
+                assert persisted is not None
+                persisted.state = state
+                session.commit()
+            page = client.get(f"/admin/catalog-import/{batch.id}")
+            blocked = client.post(
+                f"/admin/catalog-import/{batch.id}/delete",
+                data={"csrf_token": csrf(page)},
+            )
+            assert blocked.status_code == 409
+            with app.state.database.session_factory() as session:
+                assert session.get(CatalogImportBatch, batch.id) is not None
+
+
+def test_catalog_import_delete_is_safe_against_a_claim_from_another_session(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None
+            persisted.state = "queued"
+            session.commit()
+
+        with app.state.database.session_factory() as claim_session:
+            claimed = claim_next_catalog_import(
+                claim_session, app.state.settings, datetime.now(UTC)
+            )
+            claim_session.commit()
+        assert claimed is not None and claimed.id == batch.id
+        with app.state.database.session_factory() as delete_session:
+            assert not delete_catalog_import_batch(delete_session, batch.id)
+            delete_session.commit()
+        with app.state.database.session_factory() as session:
+            persisted = session.get(CatalogImportBatch, batch.id)
+            assert persisted is not None and persisted.state == "extracting"
+
+
+def test_admin_catalog_import_delete_succeeds_when_staged_source_is_already_missing(
+    tmp_path: Path,
+) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        admin_id = promote_admin(app, "admin@example.com")
+        batch = create_review_batch(app, admin_id)
+        page = client.get(f"/admin/catalog-import/{batch.id}")
+        deleted = client.post(
+            f"/admin/catalog-import/{batch.id}/delete",
+            data={"csrf_token": csrf(page)},
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303
+        assert not catalog_import_batch_directory(app.state.settings, batch.id).exists()
 
 
 def test_admin_account_menu_lists_all_admin_screens_in_order(tmp_path: Path) -> None:

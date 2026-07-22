@@ -1,0 +1,196 @@
+"""State rules shared by catalog-import persistence and future worker orchestration."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time
+from enum import StrEnum
+
+from sqlalchemy import Date, DateTime, func, insert, literal, select, update
+from sqlalchemy.orm import Session
+
+from bourbonbook.models import CatalogImportBatch, CatalogImportProposal, CatalogPrice
+
+
+class CatalogImportState(StrEnum):
+    QUEUED = "queued"
+    EXTRACTING = "extracting"
+    REVIEW = "review"
+    APPLIED = "applied"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
+_ALLOWED_TRANSITIONS = {
+    CatalogImportState.QUEUED: {
+        CatalogImportState.EXTRACTING,
+        CatalogImportState.FAILED,
+        CatalogImportState.EXPIRED,
+    },
+    CatalogImportState.EXTRACTING: {
+        CatalogImportState.QUEUED,
+        CatalogImportState.REVIEW,
+        CatalogImportState.FAILED,
+    },
+    CatalogImportState.REVIEW: {CatalogImportState.APPLIED, CatalogImportState.EXPIRED},
+    CatalogImportState.FAILED: {CatalogImportState.QUEUED, CatalogImportState.EXPIRED},
+    CatalogImportState.APPLIED: set(),
+    CatalogImportState.EXPIRED: set(),
+}
+
+
+@dataclass(frozen=True)
+class CatalogImportApplyResult:
+    """The durable outcome of applying one reviewed import batch."""
+
+    created: int
+    updated: int
+    skipped: int
+
+
+class CatalogImportApplyStateError(ValueError):
+    """Raised when a batch is no longer eligible for catalog application."""
+
+
+def apply_catalog_import_batch(
+    session: Session,
+    batch_id: int,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    before_persist: Callable[[CatalogImportProposal], None] | None = None,
+) -> CatalogImportApplyResult:
+    """Apply included reviewed proposals in one SQLite transaction.
+
+    This deliberately owns no provider or vector-index work.  A failure while creating or
+    updating any price rolls back every price and leaves the batch awaiting review.
+    """
+    with session.begin():
+        batch = session.get(CatalogImportBatch, batch_id)
+        if batch is None:
+            raise LookupError("Catalog import batch not found.")
+        if batch.state != CatalogImportState.REVIEW.value:
+            raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
+
+        proposals = list(
+            session.scalars(
+                select(CatalogImportProposal)
+                .where(CatalogImportProposal.batch_id == batch.id)
+                .order_by(CatalogImportProposal.position)
+            )
+        )
+        created = updated = skipped = 0
+        for proposal in proposals:
+            if not proposal.included:
+                skipped += 1
+                continue
+            if before_persist is not None:
+                before_persist(proposal)
+            price = session.scalar(
+                select(CatalogPrice).where(
+                    CatalogPrice.product_key == proposal.product_key,
+                    CatalogPrice.size_key == proposal.size_key,
+                )
+            )
+            if price is None:
+                price = CatalogPrice(
+                    product_key=proposal.product_key,
+                    size_key=proposal.size_key,
+                    msrp=proposal.msrp,
+                    title="Local screenshot catalog",
+                    url="",
+                    basis=f"Approved catalog import batch #{batch.id}.",
+                    checked_at=datetime.combine(proposal.price_updated_at, time.min, tzinfo=UTC),
+                )
+                session.add(price)
+                created += 1
+            else:
+                price.msrp = proposal.msrp
+                price.title = "Local screenshot catalog"
+                price.url = ""
+                price.basis = f"Approved catalog import batch #{batch.id}."
+                price.checked_at = datetime.combine(proposal.price_updated_at, time.min, tzinfo=UTC)
+                updated += 1
+        timestamp = now()
+        transitioned = session.execute(
+            update(CatalogImportBatch)
+            .where(
+                CatalogImportBatch.id == batch.id,
+                CatalogImportBatch.state == CatalogImportState.REVIEW.value,
+            )
+            .values(
+                state=CatalogImportState.APPLIED.value,
+                updated_at=timestamp,
+                applied_at=timestamp,
+                lease_expires_at=None,
+            )
+        )
+        if transitioned.rowcount != 1:
+            raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
+    return CatalogImportApplyResult(created=created, updated=updated, skipped=skipped)
+
+
+def transition_batch(
+    batch: CatalogImportBatch,
+    target: CatalogImportState,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> None:
+    """Move a batch through its durable lifecycle or reject an invalid transition."""
+    current = CatalogImportState(batch.state)
+    if target not in _ALLOWED_TRANSITIONS[current]:
+        raise ValueError(f"Cannot transition catalog import batch from {current} to {target}")
+
+    batch.state = target.value
+    batch.updated_at = now()
+    if target is CatalogImportState.APPLIED:
+        batch.applied_at = batch.updated_at
+    if target is not CatalogImportState.EXTRACTING:
+        batch.lease_expires_at = None
+
+
+def reserve_catalog_import_batch(
+    session: Session,
+    *,
+    created_by_user_id: int,
+    requested_price_updated_at: date | None,
+    source_file_count: int,
+    queue_capacity: int,
+    now: datetime | None = None,
+) -> int | None:
+    """Atomically reserve a queued-batch slot or return ``None`` when it is full.
+
+    The count predicate lives in the same INSERT statement as the reservation, so separate
+    request sessions cannot both observe a free final slot and over-admit work.
+    """
+    timestamp = now or datetime.now(UTC)
+    queued_count = (
+        select(func.count(CatalogImportBatch.id))
+        .where(CatalogImportBatch.state == CatalogImportState.QUEUED.value)
+        .scalar_subquery()
+    )
+    statement = (
+        insert(CatalogImportBatch)
+        .from_select(
+            [
+                CatalogImportBatch.created_by_user_id,
+                CatalogImportBatch.state,
+                CatalogImportBatch.requested_price_updated_at,
+                CatalogImportBatch.source_file_count,
+                CatalogImportBatch.attempt_count,
+                CatalogImportBatch.created_at,
+                CatalogImportBatch.updated_at,
+            ],
+            select(
+                literal(created_by_user_id),
+                literal(CatalogImportState.QUEUED.value),
+                literal(requested_price_updated_at, type_=Date()),
+                literal(source_file_count),
+                literal(0),
+                literal(timestamp, type_=DateTime(timezone=True)),
+                literal(timestamp, type_=DateTime(timezone=True)),
+            ).where(queued_count < queue_capacity),
+        )
+        .returning(CatalogImportBatch.id)
+    )
+    return session.scalar(statement)

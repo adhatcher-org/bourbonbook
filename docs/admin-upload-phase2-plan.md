@@ -151,6 +151,89 @@ ORM, repository/state contract, and fresh/upgrade migration tests. Do not reuse
 the untracked migration: its location, revision ancestry, database type, and
 ORM integration are invalid.
 
+## Build and test-environment remediation plan
+
+These independent maintenance fixes unblock reliable local validation. They do not alter the
+catalog-import product workflow or authorize a provider call.
+
+### R-01 — Remove the Starlette TestClient deprecation warning
+
+**Diagnosis:** the locked environment resolves FastAPI 0.138.1, Starlette 1.3.1, and httpx
+0.28.1, but no `httpx2`. Starlette 1.3.1's `testclient.py` first tries the separately namespaced
+`httpx2` package and falls back to `httpx` only when it is absent, emitting
+`StarletteDeprecationWarning` at import time. `fastapi.testclient.TestClient` is imported by
+`tests/test_account_flows.py`, `tests/test_admin.py`, `tests/test_app.py`, `tests/test_logging.py`,
+`tests/test_profile.py`, and `tests/test_quality_routes.py`. Application modules and the OpenAI
+SDK use normal `httpx`; it must remain a production dependency and must not be replaced.
+
+**Implementation:** add `httpx2>=2,<3` to the `dev` dependency group in `pyproject.toml` and
+regenerate `uv.lock`. Leave application and TestClient imports unchanged. This is test-only:
+Starlette uses the `httpx2` import for TestClient while application code continues using the
+existing production `httpx>=0.28,<1` requirement. Do not add `starlette[full]`; that extra would
+also change unrelated optional dependency resolution.
+
+**Validation and acceptance criteria:** after `uv sync --frozen`, run
+`uv run python -c 'import warnings; from starlette.exceptions import StarletteDeprecationWarning; warnings.simplefilter("error", StarletteDeprecationWarning); from fastapi.testclient import TestClient'`
+to exercise the import in a fresh interpreter, then run the full suite with
+`uv run pytest -W error::starlette.exceptions.StarletteDeprecationWarning`. Confirm from
+`pyproject.toml` and `uv.lock` that `httpx` remains in the main production dependency set and
+`httpx2` is present only through the `dev` group, then run `make coverage`. No application source
+or existing TestClient import is changed, and the fresh-interpreter import must emit no warning.
+
+### R-02 — Make transient Docker Hub metadata failures diagnosable and retryable
+
+**Diagnosis:** `make build` failed while Docker/OrbStack resolved the first `Dockerfile` base image
+(`docker.io/astral/uv:0.11.28`), before project files, lock resolution, or image build steps ran.
+A Docker Hub 502 at this phase is infrastructure/transient until repeated unchanged pulls prove
+otherwise; changing base-image versions or application dependencies would mask the cause.
+
+**Implementation:** add a small, unit-testable helper (for example,
+`scripts/docker_build.py`) and make `build` invoke it instead of invoking `docker build` directly.
+The helper must read the exact external base images from the existing `Dockerfile` (`docker.io/astral/uv:0.11.28`
+and `python:3.14-slim` today), retry **only** `docker pull <base-image>`, then run one
+`docker build --pull=false --tag $(IMAGE):$(TAG) .`. This makes registry contact an explicit,
+isolated preflight and guarantees no Dockerfile `RUN`, dependency resolution, source copy, or
+application build failure is retried.
+
+For a pull, retry only narrowly classified transient registry/transport output: HTTP 429, HTTP
+5xx, network timeout, connection reset, or temporary DNS-resolution failure. Use at most four
+pull attempts with 30, 60, and 120-second delays between failed attempts; do not sleep after the
+last attempt. Surface the complete command output and fail immediately for authentication/denied,
+manifest-not-found, TLS/certificate, daemon, disk, parsing, or any unrecognized failure. Never
+classify or retry the subsequent `docker build` result. Keep the two-stage Dockerfile and its
+frozen `uv sync` unchanged; do not add a registry mirror or cache fallback. Because CI's container
+job calls `make build`, this policy applies consistently to local Docker/OrbStack and CI rather
+than only to local builds.
+
+**Validation and acceptance criteria:** add deterministic tests in
+`tests/test_docker_build.py` that inject a command runner and sleeper; they must cover (1) extracting
+both current external `FROM` images, (2) transient pull failure followed by success with the exact
+30/60/120 backoff sequence as applicable, (3) exhaustion after four attempts with no final sleep,
+(4) a non-transient pull failure with one attempt and no sleep, and (5) a successful preflight
+calling `docker build --pull=false` exactly once. A test must also prove a simulated non-zero
+`docker build` result is returned immediately and is never retried, even if its text contains a
+retry keyword. These tests must neither invoke Docker nor access the network.
+
+Run the focused helper tests, `make lint`, `make coverage`, and `make pr-check`. A later successful
+clean `make build` plus container healthcheck is operational evidence, not a test substitute.
+If an unchanged direct pull from the same Docker engine still exhausts retries, retain its output
+and investigate Docker Hub/OrbStack separately. Base-image digest pinning and CI cache changes
+remain separate, explicit hardening work.
+
+### Execution order and ownership
+
+1. **`validation-remediation-plan-reviewer`** reviews this plan against the actual lockfile,
+   Makefile, Dockerfile, and CI setup, updating it only for incorrect assumptions or missing
+   deterministic validation.
+2. **`validation-remediation-implementer`** owns `pyproject.toml`, `uv.lock`, the smallest
+   build-retry helper/Makefile wiring, focused tests, and documentation. It must not alter the
+   catalog-import migration or runtime provider configuration.
+3. A fresh **`validation-remediation-validator`** then runs the warning-as-error test, focused retry
+   tests, `make coverage`, lint, and `make pr-check`; it may make only test-backed contained fixes.
+
+The temporary repository-wide 80% coverage gate applies during this sequence. AUP2-13 restores the
+90% final gate.
+
 ## Promotion policy
 
 Deterministic tests must use generated fixtures and fakes—never a GPU, model

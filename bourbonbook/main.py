@@ -6,7 +6,7 @@ import secrets
 import signal
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Annotated, Any
@@ -19,8 +19,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openai import AsyncOpenAI
-from sqlalchemy import func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, joinedload
 from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.middleware.sessions import SessionMiddleware
@@ -46,6 +47,18 @@ from bourbonbook.auth import (
     verify_password,
 )
 from bourbonbook.catalog import catalog_price_key, verified_product
+from bourbonbook.catalog_import_worker import CatalogImportWorker
+from bourbonbook.catalog_imports import (
+    CatalogImportApplyStateError,
+    apply_catalog_import_batch,
+    reserve_catalog_import_batch,
+)
+from bourbonbook.catalog_uploads import (
+    cleanup_expired_catalog_import_sources,
+    remove_catalog_import_batch_sources,
+    stage_catalog_uploads,
+    validate_catalog_uploads,
+)
 from bourbonbook.config import Settings
 from bourbonbook.database import Database
 from bourbonbook.email import create_email_sender, security_message
@@ -58,7 +71,16 @@ from bourbonbook.logging_config import (
     valid_request_id,
 )
 from bourbonbook.migrations import HEAD_REVISION, bootstrap_database
-from bourbonbook.models import ApiUsage, Bottle, CatalogPrice, PriceSource, User, UserToken
+from bourbonbook.models import (
+    ApiUsage,
+    Bottle,
+    CatalogImportBatch,
+    CatalogImportProposal,
+    CatalogPrice,
+    PriceSource,
+    User,
+    UserToken,
+)
 from bourbonbook.observability import (
     HTTP_IN_PROGRESS,
     AIUsageRecorder,
@@ -93,6 +115,7 @@ ROOT = Path(__file__).parent
 templates = Jinja2Templates(directory=ROOT / "templates")
 PRICE_CACHE_TTL = timedelta(days=90)
 USER_PRICE_OVERRIDE_TTL = timedelta(days=183)
+DELETABLE_CATALOG_IMPORT_STATES = frozenset({"queued", "failed", "review"})
 
 
 def money(value: float | None) -> str:
@@ -118,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        cleanup_expired_catalog_import_sources(settings)
         async with AsyncExitStack() as stack:
             app.state.openai_client = None
             if settings.openai_api_key:
@@ -142,6 +166,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             with database.session_factory() as session:
                 await bootstrap_admin(session, settings, app.state.email_sender)
+            app.state.catalog_import_worker = CatalogImportWorker(
+                database.session_factory, settings, app.state.ollama_client
+            )
+            await app.state.catalog_import_worker.start()
+            stack.push_async_callback(app.state.catalog_import_worker.stop)
             yield
         log_event(logger, logging.INFO, "app_stopping", "Bourbon Book stopping")
         database.engine.dispose()
@@ -151,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.database = database
     app.state.usage_recorder = usage_recorder
     app.state.qdrant_price_index = None
+    app.state.catalog_import_worker = None
     app.state.email_sender = ObservedEmailSender(
         create_email_sender(settings), metrics_enabled=settings.metrics_enabled
     )
@@ -260,6 +290,17 @@ def parse_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         return max(minimum, min(maximum, int(float(value))))
     except (TypeError, ValueError):
         return default
+
+
+def delete_catalog_import_batch(session: Session, batch_id: int) -> bool:
+    """Delete only a batch that has not been claimed or finalized by the worker."""
+    result = session.execute(
+        delete(CatalogImportBatch).where(
+            CatalogImportBatch.id == batch_id,
+            CatalogImportBatch.state.in_(DELETABLE_CATALOG_IMPORT_STATES),
+        )
+    )
+    return bool(result.rowcount)
 
 
 TEXT_FIELDS = (
@@ -1290,9 +1331,9 @@ def register_routes(app: FastAPI) -> None:
         verify_csrf(request, str(form.get("csrf_token", "")))
         q = str(form.get("q", ""))
         sort = str(form.get("sort", "name_asc"))
-        page = parse_int(form.get("page"), 1, 1)
+        page = parse_int(form.get("page"), 1, 1, 100_000)
         page_size = parse_int(form.get("page_size"), 25, 10, 100)
-        selected = {parse_int(value, 0, 1) for value in form.getlist("selected")}
+        selected = {parse_int(value, 0, 1, 2_147_483_647) for value in form.getlist("selected")}
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)
             if str(form.get("action")) == "delete":
@@ -1303,7 +1344,7 @@ def register_routes(app: FastAPI) -> None:
                 for key, value in form.items():
                     if not key.startswith("name_"):
                         continue
-                    price_id = parse_int(key.removeprefix("name_"), 0, 1)
+                    price_id = parse_int(key.removeprefix("name_"), 0, 1, 2_147_483_647)
                     price = session.get(CatalogPrice, price_id)
                     if price is None:
                         continue
@@ -1321,11 +1362,300 @@ def register_routes(app: FastAPI) -> None:
             f"/admin/catalog?q={q}&sort={sort}&page={page}&page_size={page_size}", 303
         )
 
+    def catalog_import_pages(page: int, max_page: int) -> range:
+        """Keep a compact, stable page window around the selected proposal page."""
+        return range(max(1, page - 2), min(max_page, page + 2) + 1)
+
+    def catalog_import_message(batch: CatalogImportBatch) -> str:
+        messages = {
+            "queued": "Extraction is queued and will start when the local processing lane is free.",
+            "extracting": "Extraction is in progress. Refresh this page for its review status.",
+            "review": "Review the proposed rows below. Saving changes does not update the catalog.",
+            "applied": "This batch has already been applied; its proposal rows are read-only.",
+            "failed": "Extraction did not complete. No catalog prices were changed.",
+            "expired": (
+                "This batch has expired. Its proposal rows are retained only as audit evidence."
+            ),
+        }
+        return messages.get(batch.state, "This batch has an unrecognized status.")
+
+    def render_catalog_import(
+        request: Request,
+        admin: User,
+        *,
+        error: str | None = None,
+        notice: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        with app.state.database.session_factory() as session:
+            recent_batches = list(
+                session.scalars(
+                    select(CatalogImportBatch)
+                    .options(joinedload(CatalogImportBatch.created_by))
+                    .order_by(CatalogImportBatch.created_at.desc(), CatalogImportBatch.id.desc())
+                    .limit(20)
+                )
+            )
+            return render(
+                request,
+                "admin/catalog_import.html",
+                user=admin,
+                error=error,
+                notice=notice,
+                batches=recent_batches,
+                status_code=status_code,
+            )
+
+    def render_catalog_import_review(
+        request: Request,
+        admin: User,
+        *,
+        batch: CatalogImportBatch | None,
+        page: int = 1,
+        error: str | None = None,
+        notice: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+        with app.state.database.session_factory() as session:
+            selected_batch = session.scalar(
+                select(CatalogImportBatch)
+                .options(joinedload(CatalogImportBatch.created_by))
+                .where(CatalogImportBatch.id == batch.id)
+            )
+            if selected_batch is None:
+                raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+            total = int(
+                session.scalar(
+                    select(func.count(CatalogImportProposal.id)).where(
+                        CatalogImportProposal.batch_id == selected_batch.id
+                    )
+                )
+                or 0
+            )
+            max_page = max(1, (total + 24) // 25)
+            page = min(max(1, page), max_page)
+            proposals = list(
+                session.scalars(
+                    select(CatalogImportProposal)
+                    .where(CatalogImportProposal.batch_id == selected_batch.id)
+                    .order_by(CatalogImportProposal.position)
+                    .offset((page - 1) * 25)
+                    .limit(25)
+                )
+            )
+            current_catalog_prices: dict[int, CatalogPrice] = {}
+            if proposals:
+                matches = [
+                    (CatalogPrice.product_key == proposal.product_key)
+                    & (CatalogPrice.size_key == proposal.size_key)
+                    for proposal in proposals
+                ]
+                prices_by_key = {
+                    (price.product_key, price.size_key): price
+                    for price in session.scalars(select(CatalogPrice).where(or_(*matches)))
+                }
+                current_catalog_prices = {
+                    proposal.id: prices_by_key.get((proposal.product_key, proposal.size_key))
+                    for proposal in proposals
+                }
+            return render(
+                request,
+                "admin/catalog_import_review.html",
+                user=admin,
+                error=error,
+                notice=notice,
+                batch=selected_batch,
+                proposals=proposals,
+                current_catalog_prices=current_catalog_prices,
+                proposal_total=total,
+                page=page,
+                max_page=max_page,
+                pages=catalog_import_pages(page, max_page),
+                batch_message=catalog_import_message(selected_batch),
+                status_code=status_code,
+            )
+
     @app.get("/admin/catalog-import", response_class=HTMLResponse)
-    def admin_catalog_import(request: Request, error: str | None = None) -> Response:
+    def admin_catalog_import(
+        request: Request, error: str | None = None, saved: int = 0, deleted: int = 0
+    ) -> Response:
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)
-            return render(request, "admin/catalog_import.html", user=admin, error=error)
+        return render_catalog_import(
+            request,
+            admin,
+            error=error,
+            notice=(
+                "Review changes saved. No catalog prices have been updated."
+                if saved
+                else "Catalog import batch deleted. No catalog prices were changed."
+                if deleted
+                else None
+            ),
+        )
+
+    @app.get("/admin/catalog-import/{batch_id}", response_class=HTMLResponse)
+    def admin_catalog_import_review(
+        request: Request,
+        batch_id: int,
+        page: int = 1,
+        saved: int = 0,
+        applied: int = 0,
+        created: int = 0,
+        updated: int = 0,
+        skipped: int = 0,
+    ) -> Response:
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            batch = session.get(CatalogImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+        return render_catalog_import_review(
+            request,
+            admin,
+            batch=batch,
+            page=page,
+            notice=(
+                "Review changes saved. No catalog prices have been updated."
+                if saved
+                else (
+                    f"Catalog import batch applied: {created} created, {updated} updated, "
+                    f"{skipped} skipped."
+                )
+                if applied
+                else None
+            ),
+        )
+
+    @app.post("/admin/catalog-import/{batch_id}/review", response_class=HTMLResponse)
+    async def admin_catalog_import_save_review(request: Request, batch_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        page = parse_int(form.get("page"), 1, 1, 100_000)
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            batch = session.get(CatalogImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+            if batch.state != "review":
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    page=page,
+                    error="Only batches awaiting review can be edited.",
+                    status_code=409,
+                )
+            proposal_ids = {
+                parse_int(value, 0, 1, 2_147_483_647) for value in form.getlist("proposal_id")
+            }
+            proposals = list(
+                session.scalars(
+                    select(CatalogImportProposal).where(
+                        CatalogImportProposal.batch_id == batch.id,
+                        CatalogImportProposal.id.in_(proposal_ids),
+                    )
+                )
+            )
+            errors: list[str] = []
+            for proposal in proposals:
+                name = str(form.get(f"name_{proposal.id}", "")).strip()
+                size = str(form.get(f"size_{proposal.id}", "")).strip()
+                msrp = parse_float(form.get(f"msrp_{proposal.id}"))
+                raw_date = str(form.get(f"price_updated_at_{proposal.id}", "")).strip()
+                try:
+                    price_updated_at = date.fromisoformat(raw_date)
+                except ValueError:
+                    price_updated_at = None
+                product_key, size_key = catalog_price_key(name, size)
+                if (
+                    not product_key
+                    or not size_key
+                    or msrp is None
+                    or msrp <= 0
+                    or price_updated_at is None
+                ):
+                    proposal.validation_error = (
+                        "Use a bottle name, package size, positive displayed price, and valid "
+                        "update date."
+                    )
+                    errors.append(f"Proposal {proposal.position}")
+                    continue
+                proposal.name = name[:240]
+                proposal.product_key = product_key
+                proposal.size_key = size_key[:80]
+                proposal.msrp = msrp
+                proposal.price_updated_at = price_updated_at
+                proposal.included = str(form.get(f"included_{proposal.id}", "")) == "on"
+                proposal.validation_error = None
+            session.commit()
+            if errors:
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    page=page,
+                    error=f"Fix the required fields for {', '.join(errors)} before saving.",
+                    status_code=400,
+                )
+        return RedirectResponse(f"/admin/catalog-import/{batch_id}?page={page}&saved=1", 303)
+
+    @app.post("/admin/catalog-import/{batch_id}/apply", response_class=HTMLResponse)
+    async def admin_catalog_import_apply(request: Request, batch_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        page = parse_int(form.get("page"), 1, 1, 100_000)
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+        try:
+            with app.state.database.session_factory() as session:
+                result = apply_catalog_import_batch(session, batch_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CatalogImportApplyStateError as exc:
+            with app.state.database.session_factory() as session:
+                admin = require_admin(request, session)
+                batch = session.get(CatalogImportBatch, batch_id)
+            return render_catalog_import_review(
+                request,
+                admin,
+                batch=batch,
+                page=page,
+                error=str(exc),
+                status_code=409,
+            )
+        return RedirectResponse(
+            f"/admin/catalog-import/{batch_id}?page={page}&applied=1&created={result.created}"
+            f"&updated={result.updated}&skipped={result.skipped}",
+            303,
+        )
+
+    @app.post("/admin/catalog-import/{batch_id}/delete", response_class=HTMLResponse)
+    async def admin_catalog_import_delete(request: Request, batch_id: int) -> Response:
+        form = await request.form()
+        verify_csrf(request, str(form.get("csrf_token", "")))
+        with app.state.database.session_factory() as session:
+            admin = require_admin(request, session)
+            if not delete_catalog_import_batch(session, batch_id):
+                session.rollback()
+                batch = session.get(CatalogImportBatch, batch_id)
+                if batch is None:
+                    raise HTTPException(status_code=404, detail="Catalog import batch not found.")
+                return render_catalog_import_review(
+                    request,
+                    admin,
+                    batch=batch,
+                    error=(
+                        "An in-process or completed catalog import cannot be deleted. "
+                        "Wait for extraction to finish before deleting it."
+                    ),
+                    status_code=409,
+                )
+            session.commit()
+        remove_catalog_import_batch_sources(app.state.settings, batch_id)
+        return RedirectResponse("/admin/catalog-import?deleted=1", 303)
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:
@@ -1334,12 +1664,7 @@ def register_routes(app: FastAPI) -> None:
         with app.state.database.session_factory() as session:
             admin = require_admin(request, session)
             pages = form.getlist("pages")
-            allowed = {"image/png", "image/jpeg", "application/pdf"}
-            valid = pages and all(
-                isinstance(page, StarletteUploadFile) and page.content_type in allowed
-                for page in pages
-            )
-            if not valid:
+            if not pages or not all(isinstance(page, StarletteUploadFile) for page in pages):
                 return render(
                     request,
                     "admin/catalog_import.html",
@@ -1347,12 +1672,58 @@ def register_routes(app: FastAPI) -> None:
                     error="Upload PNG, JPEG, or PDF files.",
                     status_code=400,
                 )
-            return render(
-                request,
-                "admin/catalog_import.html",
-                user=admin,
-                error="Upload received; extraction review will be available in the next update.",
+            max_file_bytes = app.state.settings.max_upload_mb * 1024 * 1024
+            uploads = [(page.content_type, await page.read(max_file_bytes + 1)) for page in pages]
+            try:
+                staged = validate_catalog_uploads(uploads, app.state.settings)
+                raw_date = str(form.get("price_updated_at", "")).strip()
+                requested_date = date.fromisoformat(raw_date) if raw_date else None
+            except (HTTPException, ValueError) as exc:
+                status_code = exc.status_code if isinstance(exc, HTTPException) else 400
+                detail = "Invalid price update date."
+                if isinstance(exc, HTTPException):
+                    detail = exc.detail
+                return render(
+                    request,
+                    "admin/catalog_import.html",
+                    user=admin,
+                    error=str(detail),
+                    status_code=status_code,
+                )
+            batch_id = reserve_catalog_import_batch(
+                session,
+                created_by_user_id=admin.id,
+                requested_price_updated_at=requested_date,
+                source_file_count=len(staged),
+                queue_capacity=app.state.settings.catalog_import_queue_capacity,
             )
+            if batch_id is None:
+                return render(
+                    request,
+                    "admin/catalog_import.html",
+                    user=admin,
+                    error="Catalog import queue is full. Wait for an existing import to start.",
+                    status_code=429,
+                )
+
+            try:
+                stage_catalog_uploads(app.state.settings, batch_id, staged)
+                session.commit()
+            except (OSError, RuntimeError, SQLAlchemyError):
+                session.rollback()
+                remove_catalog_import_batch_sources(app.state.settings, batch_id)
+                return render(
+                    request,
+                    "admin/catalog_import.html",
+                    user=admin,
+                    error="Catalog upload could not be staged. Please try again.",
+                    status_code=500,
+                )
+        return render_catalog_import(
+            request,
+            admin,
+            notice=f"{len(staged)} catalog file(s) staged securely. Extraction has been queued.",
+        )
 
     def render_admin_config(
         request: Request,

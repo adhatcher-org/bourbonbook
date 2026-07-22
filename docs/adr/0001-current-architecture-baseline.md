@@ -4,8 +4,11 @@ Status: Accepted
 Date: 2026-06-30
 
 This ADR records the architecture that exists in the checked-out Bourbon Book codebase today. It is
-intended as a baseline record, not as a roadmap document. Planned RAG/Qdrant work remains out of
-scope here and is not depicted as current architecture.
+intended as a baseline record, not as a roadmap document. The larger Phase 2 RAG/evidence-pipeline
+work described in `docs/adr/plan.md` remains out of scope here and is not depicted as current
+architecture. The smaller, already-shipped local-first pricing cache and optional Qdrant fuzzy-match
+index are recorded separately in [ADR 0002](0002-local-first-pricing-catalog.md), which narrows this
+ADR's Qdrant exclusion.
 
 Related architecture views:
 
@@ -13,6 +16,12 @@ Related architecture views:
 - [C2 Containers](../architecture/c2-containers.md)
 - [C3 Components](../architecture/c3-components.md)
 - [C4 Code](../architecture/c4-code.md)
+- [HLDD: High-Level Design Document](../architecture/hldd.md)
+
+Related ADR:
+
+- [ADR 0002: Local-First Pricing Catalog with Optional Qdrant Fuzzy Match](0002-local-first-pricing-catalog.md)
+- [ADR 0003: Fixed Local Model Selection (RTX 3090 + Ollama), No Benchmark Acceptance Gate](0003-fixed-local-model-no-benchmark-gate.md)
 
 ## Context
 

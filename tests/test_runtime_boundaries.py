@@ -103,6 +103,7 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     assert settings.analysis_provider == "openai"
     assert settings.ollama_url == "http://ollama.invalid"
     assert settings.max_users == 7
+    assert settings.catalog_import_max_total_mb == 50
     assert settings.proxy_headers is True
     assert settings.email_verification_required is False
     assert settings.ollama_vision_model == "qwen3-vl:30b"

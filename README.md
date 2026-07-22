@@ -122,9 +122,9 @@ the value actually configured in Unraid.
 | `FORWARDED_ALLOW_IPS` | Variable | `FORWARDED_ALLOW_IPS` | SWAG fixed IP or smallest proxy CIDR | Yes | No |
 | `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama` or `openai` | Yes | No |
 | `OLLAMA_URL` | Variable | `OLLAMA_URL` | `http://ollama:11434` | If using Ollama | No |
-| `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `gemma3:4b` | Fallback for either Ollama task | No |
-| `OLLAMA_VISION_MODEL` | Variable | `OLLAMA_VISION_MODEL` | `qwen3-vl:30b` | Photo analysis | No |
-| `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | `qwen3:30b-a3b` | Name-only analysis | No |
+| `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `qwen3.6:35b` | Fallback for either Ollama task | No |
+| `OLLAMA_VISION_MODEL` | Variable | `OLLAMA_VISION_MODEL` | `qwen3.6:35b` | Photo analysis | No |
+| `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | unset (falls back to `OLLAMA_MODEL`) | Name-only analysis | No |
 | `QDRANT_URL` | Variable | `QDRANT_URL` | `http://qdrant:6333` | Local price search index | No |
 | `QDRANT_API_KEY` | Variable | `QDRANT_API_KEY` | masked value | If Qdrant requires authentication | Yes |
 | `QDRANT_PRICE_COLLECTION` | Variable | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Local price-search collection | No |
@@ -165,7 +165,10 @@ are marked verified without sending an email.
 
 For Ollama, photo analysis uses `OLLAMA_VISION_MODEL` and name-only analysis uses
 `OLLAMA_TEXT_MODEL`. Either setting falls back to `OLLAMA_MODEL` when unset, preserving existing
-deployments. A vision-capable model is required for uploaded bottle photos.
+deployments. A vision-capable model is required for uploaded bottle photos. The default,
+`qwen3.6:35b`, reports `completion`, `vision`, `tools`, and `thinking` capabilities and can serve
+both `OLLAMA_VISION_MODEL` and `OLLAMA_MODEL`/`OLLAMA_TEXT_MODEL` from a single resident model
+instead of loading a separate model per task.
 
 Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
 are process-local; add a shared limiter before scaling workers or replicas.
@@ -341,7 +344,7 @@ Make command line when needed.
 Evaluate either analysis provider against the bottle-image fixtures:
 
 ```bash
-uv run --env-file .env python -m scripts.evaluate_ollama --provider ollama --model gemma3:4b
+uv run --env-file .env python -m scripts.evaluate_ollama --provider ollama --model qwen3.6:35b
 uv run --env-file .env python -m scripts.evaluate_ollama --provider openai --model gpt-5.5
 ```
 

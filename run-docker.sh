@@ -1,3 +1,10 @@
+#stop docker container
+docker stop bourbonbook
+
+#build new image
+make build
+
+#run new image
 docker run -d \
   --name bourbonbook \
   --rm \

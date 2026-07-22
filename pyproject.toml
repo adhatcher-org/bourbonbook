@@ -24,6 +24,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "bandit[toml]>=1.8,<2",
+  "httpx2>=2,<3",
   "pip-audit>=2.9,<3",
   "pytest>=9.0.3,<10",
   "pytest-cov>=6,<8",
@@ -34,6 +35,9 @@ dev = [
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+filterwarnings = [
+  "error::starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.ruff]
 target-version = "py312"

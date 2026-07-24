@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -296,7 +297,7 @@ def test_ollama_price_search_failure_attributes_cloud_endpoint(tmp_path, monkeyp
     class FailingClient(FakeClient):
         async def post(self, url: str, json: dict, headers: dict | None = None):
             self.calls.append((url, json, headers))
-            if "ollama.com" in url:
+            if urlsplit(url).hostname == "ollama.com":
                 raise httpx.ConnectError("connection refused")
             return self._responses.pop(0)
 

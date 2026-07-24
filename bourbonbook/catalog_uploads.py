@@ -116,18 +116,16 @@ def validate_catalog_uploads(
                         except CatalogInputLimitError as e:
                             raise CatalogInputLimitError(f"Page {page_index}: {str(e)}") from e
             except CatalogInputLimitError as exc:
-                raise HTTPException(
-                    status_code=413, detail=str(exc)
-                ) from exc
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
             except fitz.FileDataError as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail="PDF file is corrupted or not a valid PDF. Please check the file."
+                    detail="PDF file is corrupted or not a valid PDF. Please check the file.",
                 ) from exc
             except (RuntimeError, ValueError) as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"PDF processing error: {str(exc)}. Try a different PDF file."
+                    detail=f"PDF processing error: {str(exc)}. Try a different PDF file.",
                 ) from exc
             if page_count < 1:
                 raise HTTPException(
@@ -154,34 +152,31 @@ def validate_catalog_uploads(
                         )
                         image.verify()
             except CatalogInputLimitError as exc:
-                raise HTTPException(
-                    status_code=413, detail=str(exc)
-                ) from exc
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
             except Image.DecompressionBombError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail="Image is too large or complex (potential decompression bomb). "
                     "Try a smaller or simpler image, or increase CATALOG_IMPORT_MAX_IMAGE_PIXELS "
-                    "and CATALOG_IMPORT_MAX_IMAGE_DIMENSION in your config."
+                    "and CATALOG_IMPORT_MAX_IMAGE_DIMENSION in your config.",
                 ) from exc
             except Image.DecompressionBombWarning as exc:
                 raise HTTPException(
                     status_code=400,
                     detail="Image is unusually large. Try a smaller image, or increase "
-                    "CATALOG_IMPORT_MAX_IMAGE_PIXELS and CATALOG_IMPORT_MAX_IMAGE_DIMENSION."
+                    "CATALOG_IMPORT_MAX_IMAGE_PIXELS and CATALOG_IMPORT_MAX_IMAGE_DIMENSION.",
                 ) from exc
             except UnidentifiedImageError as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail="File is not a valid PNG or JPEG image. Please check the file format."
+                    detail="File is not a valid PNG or JPEG image. Please check the file format.",
                 ) from exc
             except OSError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Unable to read image file: {str(exc)}. "
-                        "Ensure the file is not corrupted."
-                    )
+                        f"Unable to read image file: {str(exc)}. Ensure the file is not corrupted."
+                    ),
                 ) from exc
         staged.append(StagedCatalogFile(extension=extension, content=content))
     return staged

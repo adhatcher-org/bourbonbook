@@ -90,9 +90,7 @@ class Settings:
             catalog_import_max_total_mb=int(get("CATALOG_IMPORT_MAX_TOTAL_MB", "50")),
             catalog_import_max_pdf_pages=int(get("CATALOG_IMPORT_MAX_PDF_PAGES", "10")),
             catalog_import_max_image_pixels=int(get("CATALOG_IMPORT_MAX_IMAGE_PIXELS", "50000000")),
-            catalog_import_max_image_dimension=int(
-                get("CATALOG_IMPORT_MAX_IMAGE_DIMENSION", "0")
-            ),
+            catalog_import_max_image_dimension=int(get("CATALOG_IMPORT_MAX_IMAGE_DIMENSION", "0")),
             catalog_import_max_pdf_render_pixels=int(
                 get("CATALOG_IMPORT_MAX_PDF_RENDER_PIXELS", "50000000")
             ),

@@ -17,6 +17,7 @@ RESET = "\033[0m"
 CHECKMARK = "✅"
 CROSS = "❌"
 
+
 def run_command(cmd: list, description: str) -> bool:
     """Run a command and return success status."""
     print(f"\n{YELLOW}🔍 {description}...{RESET}")
@@ -26,7 +27,7 @@ def run_command(cmd: list, description: str) -> bool:
             cwd=Path(__file__).parent.parent,
             capture_output=True,
             text=True,
-            timeout=600  # 10 minute timeout
+            timeout=600,  # 10 minute timeout
         )
 
         if result.returncode == 0:
@@ -49,13 +50,18 @@ def run_command(cmd: list, description: str) -> bool:
         print(f"{RED}{CROSS} Error running {description}: {e}{RESET}")
         return False
 
+
 def main() -> int:
     """Run all pre-commit checks."""
     print(f"\n{YELLOW}═══════════════════════════════════════{RESET}")
     print(f"{YELLOW}  Pre-Commit Validation (Isolated){RESET}")
     print(f"{YELLOW}═══════════════════════════════════════{RESET}")
 
+    # Lint runs first as a fast gate: `make lint` runs both `ruff check` and
+    # `ruff format --check`, so style/format regressions are caught before the
+    # slower coverage and full PR-review (which includes a Docker build) run.
     checks = [
+        (["make", "lint"], "Lint & format check"),
         (["make", "coverage"], "Coverage check (80% minimum)"),
         (["make", "pr-review"], "PR review checks"),
     ]
@@ -74,6 +80,7 @@ def main() -> int:
         print("Fix the issues above and try committing again.")
         print(f"{YELLOW}═══════════════════════════════════════{RESET}\n")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

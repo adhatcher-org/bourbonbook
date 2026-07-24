@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
-from bourbonbook.analysis import analyze_bottle, analyze_bottle_name, search_bottle_prices
+from bourbonbook.analysis import (
+    analyze_bottle,
+    analyze_bottle_name,
+    enrich_from_verified_catalog,
+    merge_analysis,
+    search_bottle_prices,
+)
 from bourbonbook.config import Settings
 
 
@@ -60,8 +66,25 @@ def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) ->
         assert size == "750ml"
         return {"msrp": 50.0}, [], "complete"
 
-    monkeypatch.setattr("bourbonbook.openai_provider.search_prices", fake_prices)
+    monkeypatch.setattr("bourbonbook.ollama_search.search_prices", fake_prices)
     assert asyncio.run(search_bottle_prices("Bottle", settings, size="750ml"))[0] == {"msrp": 50.0}
+
+
+def test_openai_price_provider_is_selected(tmp_path, monkeypatch) -> None:
+    settings = settings_for(tmp_path, "openai")
+
+    async def fake_prices(name, settings, *, size=None):
+        assert size == "750ml"
+        return {"msrp": 42.0}, [], "complete"
+
+    monkeypatch.setattr("bourbonbook.openai_provider.search_prices", fake_prices)
+    assert asyncio.run(search_bottle_prices("Bottle", settings, size="750ml"))[0] == {"msrp": 42.0}
+
+
+def test_unknown_price_provider_is_unavailable(tmp_path) -> None:
+    settings = settings_for(tmp_path, "other")
+
+    assert asyncio.run(search_bottle_prices("Bottle", settings)) == ({}, [], "unavailable")
 
 
 def test_partial_ollama_photo_analysis_refines_with_text_model_only(tmp_path, monkeypatch) -> None:
@@ -83,3 +106,26 @@ def test_partial_ollama_photo_analysis_refines_with_text_model_only(tmp_path, mo
     assert status == "complete"
     assert values["ocr_text"] == "UNCATALOGUED BOTTLE 100 PROOF"
     assert calls == ["vision", "text"]
+
+
+def test_merge_analysis_drops_msrp_by_default() -> None:
+    merged = merge_analysis({"name": "Example"}, {"msrp": 69.99, "brand": "Example Brand"})
+
+    assert "msrp" not in merged
+    assert merged["brand"] == "Example Brand"
+
+
+def test_verified_catalog_match_carries_its_curated_msrp() -> None:
+    values, matched = enrich_from_verified_catalog({"name": "New Riff 8 Years"})
+
+    assert matched is True
+    assert values["msrp"] == 69.99
+
+
+def test_analyze_bottle_name_returns_verified_catalog_msrp(tmp_path) -> None:
+    values, status = asyncio.run(
+        analyze_bottle_name("New Riff 8 Years", settings_for(tmp_path, "ollama"))
+    )
+
+    assert status == "verified"
+    assert values["msrp"] == 69.99

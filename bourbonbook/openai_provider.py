@@ -5,12 +5,12 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from openai import APIError, AsyncOpenAI  # noqa: F401
 from pydantic import BaseModel
 
-from bourbonbook.analysis import normalize_analysis
+from bourbonbook.analysis import canonical_url, normalize_analysis, price_search_prompt
 from bourbonbook.config import Settings
 from bourbonbook.logging_config import log_event
 from bourbonbook.observability import (
@@ -54,11 +54,6 @@ class PriceAnalysis(BaseModel):
     msrp_basis: str | None
 
 
-def canonical_url(value: str) -> str:
-    parts = urlsplit(value)
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
-
-
 def web_source_urls(response: Any) -> set[str]:
     urls: set[str] = set()
     for item in response.output:
@@ -78,20 +73,7 @@ async def search_prices(
         logger.warning("OpenAI price search unavailable: OPENAI_API_KEY is not configured")
         return {}, [], "unavailable"
 
-    size_requirement = f" in the {size!r} bottle size" if size else ""
-    product = f"the exact whiskey {name!r}{size_requirement}"
-    prompt = f"""Research the current Ohio retail price for {product}.
-
-Search OHLQ.com first and use its Sizes & Pricing value when an exact product and bottle-size match
-is available. When a bottle size is supplied, reject prices for every other size. Treat that Ohio
-retail price as MSRP for this collection. If OHLQ is inaccessible or
-has no exact match, broaden the web search and use the producer, another official state price book,
-or a reputable whiskey publication.
-Do not use retailer asking prices, search snippets, Reddit estimates, secondary-market prices, or
-an edition/store pick that does not exactly match. Use a single USD value rather than a range.
-Return null when reliable evidence is unavailable or conflicting. Select one best direct source;
-its title and URL must come from the web results. Keep the basis to one short sentence in plain text
-without Markdown."""
+    prompt = price_search_prompt(name, size=size)
 
     recorder = current_usage_recorder()
     start = time.perf_counter()

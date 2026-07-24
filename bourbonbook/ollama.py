@@ -60,10 +60,16 @@ def connection_reason(exc: httpx.ConnectError) -> str:
 
 
 def failure_context(
-    exc: BaseException, settings: Settings, operation: str, model: str, duration_ms: int
+    exc: BaseException,
+    settings: Settings,
+    operation: str,
+    model: str,
+    duration_ms: int,
+    *,
+    endpoint_url: str | None = None,
 ) -> dict[str, str | int]:
     """Return safe, operational details for an Ollama request failure."""
-    endpoint = urlsplit(settings.ollama_url)
+    endpoint = urlsplit(endpoint_url or settings.ollama_url)
     context: dict[str, str | int] = {
         "provider": "ollama",
         "operation": operation,

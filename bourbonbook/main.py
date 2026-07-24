@@ -384,9 +384,11 @@ def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
         setattr(bottle, field, parse_float(form.get(field)))
 
 
-def apply_analysis(bottle: Bottle, analysis: dict[str, Any]) -> None:
+def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool = False) -> None:
     for key, value in analysis.items():
-        if key != "msrp" and hasattr(bottle, key) and value is not None:
+        if key == "msrp" and not allow_msrp:
+            continue
+        if hasattr(bottle, key) and value is not None:
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
@@ -481,7 +483,9 @@ def catalog_price_source(price: CatalogPrice) -> dict[str, Any]:
     }
 
 
-def cached_catalog_price(session: Session, bottle: Bottle) -> CatalogPrice | None:
+def cached_catalog_price(
+    session: Session, bottle: Bottle, *, require_fresh: bool = True
+) -> CatalogPrice | None:
     product_key, size_key = catalog_price_key(bottle.name, bottle.size)
     if not product_key:
         return None
@@ -491,7 +495,11 @@ def cached_catalog_price(session: Session, bottle: Bottle) -> CatalogPrice | Non
             CatalogPrice.size_key == size_key,
         )
     )
-    return price if price and catalog_price_is_fresh(price) else None
+    if price is None:
+        return None
+    if require_fresh and not catalog_price_is_fresh(price):
+        return None
+    return price
 
 
 async def apply_user_purchase_price(
@@ -580,7 +588,11 @@ async def sync_applied_catalog_prices_to_qdrant(
 
 
 async def qdrant_catalog_price(
-    session: Session, bottle: Bottle, price_index: QdrantPriceIndex | None
+    session: Session,
+    bottle: Bottle,
+    price_index: QdrantPriceIndex | None,
+    *,
+    require_fresh: bool = True,
 ) -> CatalogPrice | None:
     if price_index is None:
         return None
@@ -591,7 +603,9 @@ async def qdrant_catalog_price(
     if match is None or match.score < 0.82:
         return None
     price = session.get(CatalogPrice, match.catalog_price_id)
-    if price is None or not catalog_price_is_fresh(price):
+    if price is None:
+        return None
+    if require_fresh and not catalog_price_is_fresh(price):
         return None
     if SequenceMatcher(None, product_key, price.product_key).ratio() < 0.82:
         return None
@@ -650,15 +664,14 @@ async def refresh_prices(
 ) -> str:
     if not bottle.name or bottle.name == "Untitled bottle":
         return "unavailable"
-    if not force:
-        cached = cached_catalog_price(session, bottle)
-        if cached:
-            apply_price_search(bottle, {"msrp": cached.msrp}, [catalog_price_source(cached)])
-            return "cached"
-        matched = await qdrant_catalog_price(session, bottle, price_index)
-        if matched:
-            apply_price_search(bottle, {"msrp": matched.msrp}, [catalog_price_source(matched)])
-            return "local_match"
+    cached = cached_catalog_price(session, bottle, require_fresh=not force)
+    if cached:
+        apply_price_search(bottle, {"msrp": cached.msrp}, [catalog_price_source(cached)])
+        return "cached"
+    matched = await qdrant_catalog_price(session, bottle, price_index, require_fresh=not force)
+    if matched:
+        apply_price_search(bottle, {"msrp": matched.msrp}, [catalog_price_source(matched)])
+        return "local_match"
     prices, sources, status = await search_bottle_prices(bottle.name, settings, size=bottle.size)
     apply_price_search(bottle, prices, sources)
     if status == "complete":
@@ -2494,14 +2507,14 @@ def register_routes(app: FastAPI) -> None:
                 photo_name=photo_name,
                 analysis_status=analysis_status,
             )
-            apply_analysis(bottle, analysis)
+            apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")
             bottle.purchase_price = parse_float(purchase_price)
             bottle.quantity = parse_int(quantity, 1, 1, 99)
             if bottle.name and bottle.name != "Untitled bottle":
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, app.state.settings, allow_provider=False
                 )
-                apply_analysis(bottle, enrichment)
+                apply_analysis(bottle, enrichment, allow_msrp=enrichment_status == "verified")
                 if enrichment:
                     bottle.analysis_status = normalized_analysis_status(enrichment_status)
                 user_price_applied = await apply_user_purchase_price(
@@ -2651,12 +2664,12 @@ def register_routes(app: FastAPI) -> None:
                     )
             else:
                 analysis, analysis_status = {}, "unavailable"
-            apply_analysis(bottle, analysis)
+            apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")
             if mode == "photo" and bottle.name:
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, app.state.settings, allow_provider=False
                 )
-                apply_analysis(bottle, enrichment)
+                apply_analysis(bottle, enrichment, allow_msrp=enrichment_status == "verified")
                 if enrichment:
                     analysis_status = enrichment_status
             if mode in {"name", "photo"} and bottle.name and not user_price_applied:

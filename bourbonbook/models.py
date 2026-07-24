@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bourbonbook.database import Base
@@ -33,6 +43,9 @@ class User(Base):
     bottles: Mapped[list[Bottle]] = relationship(back_populates="owner", cascade="all, delete")
     tokens: Mapped[list[UserToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
+    )
+    catalog_import_batches: Mapped[list[CatalogImportBatch]] = relationship(
+        back_populates="created_by", cascade="all, delete-orphan"
     )
 
 
@@ -114,7 +127,7 @@ class PriceSource(Base):
 
 
 class CatalogPrice(Base):
-    """An OHLQ-backed MSRP cache shared by all bottles of the same product and size."""
+    """A reusable local MSRP cache shared by all bottles of the same product and size."""
 
     __tablename__ = "catalog_prices"
     __table_args__ = (UniqueConstraint("product_key", "size_key"),)
@@ -127,6 +140,59 @@ class CatalogPrice(Base):
     url: Mapped[str] = mapped_column(Text)
     basis: Mapped[str] = mapped_column(Text, default="")
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CatalogImportBatch(Base):
+    """A durable, review-first local catalog import job and its audit state."""
+
+    __tablename__ = "catalog_import_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    state: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    requested_price_updated_at: Mapped[date | None] = mapped_column(Date)
+    source_file_count: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[User] = relationship(back_populates="catalog_import_batches")
+    proposals: Mapped[list[CatalogImportProposal]] = relationship(
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="CatalogImportProposal.position",
+    )
+
+
+class CatalogImportProposal(Base):
+    """One editable extracted catalog-price proposal; it never represents a user bottle."""
+
+    __tablename__ = "catalog_import_proposals"
+    __table_args__ = (UniqueConstraint("batch_id", "position"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("catalog_import_batches.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    included: Mapped[bool] = mapped_column(Boolean, default=True)
+    name: Mapped[str] = mapped_column(String(240))
+    product_key: Mapped[str] = mapped_column(String(240), index=True)
+    size_key: Mapped[str] = mapped_column(String(80))
+    msrp: Mapped[float] = mapped_column(Float)
+    price_updated_at: Mapped[date] = mapped_column(Date)
+    validation_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    batch: Mapped[CatalogImportBatch] = relationship(back_populates="proposals")
 
 
 class ApiUsage(Base):

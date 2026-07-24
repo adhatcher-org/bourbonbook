@@ -2,9 +2,11 @@
 
 Rendered SVG: [c4-code.svg](diagrams/c4-code.svg)  
 Baseline ADR: [ADR 0001](../adr/0001-current-architecture-baseline.md)
+Pricing-catalog ADR: [ADR 0002](../adr/0002-local-first-pricing-catalog.md)
 
 This code view shows the principal modules and symbols that make the current application work. It
-is intentionally focused on the implemented runtime path, not roadmap-only features.
+is intentionally focused on the implemented runtime path, not roadmap-only features (see
+`docs/adr/plan.md` for the deferred Phase 2 RAG/evidence-pipeline direction).
 
 ```mermaid
 flowchart LR
@@ -21,7 +23,7 @@ flowchart LR
     register_obs["main.register_observability()"]
   end
 
-  subgraph identity["Identity and auth"]
+  subgraph identity["Identity, auth, and abuse guards"]
     current_user["auth.current_user()"]
     authenticate_session["auth.authenticate_session()"]
     require_verified["auth.require_verified_user()"]
@@ -31,10 +33,12 @@ flowchart LR
     issue_verification["identity.issue_verification()"]
     issue_reset["identity.issue_reset()"]
     issue_token["tokens.issue_token()"]
+    rate_allow["rate_limit.RateLimiter.allow()"]
   end
 
-  subgraph bottles["Bottle workflow"]
+  subgraph bottles["Bottle / shopping-list / sharing workflow"]
     save_photo["photos.save_photo()"]
+    save_avatar["photos.save_avatar()"]
     analyze_bottle["analysis.analyze_bottle()"]
     analyze_name["analysis.analyze_bottle_name()"]
     search_prices["analysis.search_bottle_prices()"]
@@ -46,6 +50,18 @@ flowchart LR
     ollama_request["ollama.request_analysis()"]
     openai_request["openai_provider.request_analysis()"]
     openai_prices["openai_provider.search_prices()"]
+    web_source_urls["openai_provider.web_source_urls()"]
+  end
+
+  subgraph pricing["Pricing / catalog orchestration"]
+    refresh_prices["main.refresh_prices()"]
+    cached_catalog_price["main.cached_catalog_price()"]
+    qdrant_catalog_price["main.qdrant_catalog_price()"]
+    cache_catalog_price["main.cache_catalog_price()"]
+    apply_user_price["main.apply_user_purchase_price()"]
+    qdrant_find["qdrant_prices.QdrantPriceIndex.find()"]
+    qdrant_upsert["qdrant_prices.QdrantPriceIndex.upsert()"]
+    catalog_price_key["catalog.catalog_price_key()"]
   end
 
   subgraph admin["Admin and config"]
@@ -60,6 +76,7 @@ flowchart LR
     bootstrap_migrations["migrations.bootstrap_database()"]
     user_model["models.User"]
     bottle_model["models.Bottle"]
+    catalog_model["models.CatalogPrice"]
     usage_model["models.ApiUsage"]
   end
 
@@ -76,6 +93,7 @@ flowchart LR
   logs[(Logs / /data/logs)]
   ollama[Ollama]
   openai[OpenAI web search]
+  qdrant[(Qdrant - optional)]
   smtp[SMTP relay]
 
   entrypoint_main --> settings_from_env
@@ -94,12 +112,15 @@ flowchart LR
   register_routes --> require_admin
   register_routes --> authenticate_session
   register_routes --> verify_csrf
+  register_routes --> rate_allow
   register_routes --> issue_verification
   register_routes --> issue_reset
   register_routes --> save_photo
+  register_routes --> save_avatar
   register_routes --> analyze_bottle
   register_routes --> analyze_name
-  register_routes --> search_prices
+  register_routes --> refresh_prices
+  register_routes --> apply_user_price
   register_routes --> parse_config_form
   register_routes --> settings_values
   register_routes --> write_managed_config
@@ -109,10 +130,23 @@ flowchart LR
   create_app --> bootstrap_admin
   analyze_bottle --> ollama_request
   analyze_bottle --> openai_request
+  analyze_bottle --> verified_product
   analyze_name --> ollama_request
   analyze_name --> openai_request
-  search_prices --> openai_prices
+  analyze_name --> verified_product
   openai_request --> normalize_analysis
+
+  refresh_prices --> cached_catalog_price
+  refresh_prices --> qdrant_catalog_price
+  refresh_prices --> search_prices
+  refresh_prices --> cache_catalog_price
+  cached_catalog_price --> catalog_price_key
+  qdrant_catalog_price --> qdrant_find
+  cache_catalog_price --> qdrant_upsert
+  apply_user_price --> catalog_price_key
+  apply_user_price --> qdrant_upsert
+  search_prices --> openai_prices
+  openai_prices --> web_source_urls
 
   bootstrap_admin --> issue_verification
   issue_verification --> issue_token
@@ -122,6 +156,7 @@ flowchart LR
   bootstrap_migrations --> create_engine
   bootstrap_migrations --> sqlite
   save_photo --> uploads
+  save_avatar --> uploads
   parse_config_form --> config
   write_managed_config --> config
   recorder --> sqlite
@@ -134,20 +169,33 @@ flowchart LR
   ollama_request --> ollama
   openai_request --> openai
   openai_prices --> openai
+  qdrant_find --> qdrant
+  qdrant_upsert --> qdrant
   user_model --> sqlite
   bottle_model --> sqlite
+  catalog_model --> sqlite
   usage_model --> sqlite
 ```
 
 ## Notes
 
 - `entrypoint.py` is the process bootstrap that prepares logging and migrations before Uvicorn
-  starts.
-- `main.create_app()` assembles the FastAPI app and binds the supporting services.
-- The identity path is session-based, CSRF-protected, and bootstrap-aware.
-- Bottle analysis can use either Ollama or OpenAI, while price search is OpenAI-only.
-- Admin configuration writes to `/data/.env` and expects a restart to take effect.
-- Telemetry uses local SQLite usage records, Prometheus metrics, and JSON log output.
+  starts (`os.execvp` replaces the process image so a later admin-triggered `SIGTERM` targets the
+  same PID uvicorn runs as).
+- `main.create_app()` assembles the FastAPI app and binds the supporting services (database,
+  usage recorder, email sender, rate limiter, Qdrant price index) onto `app.state`.
+- The identity path is session-based (signed cookie, no server-side session store), CSRF-protected
+  via a per-session synchronizer token checked manually in every mutating handler, rate-limited by
+  `rate_limit.RateLimiter.allow()`, and bootstrap-aware (`identity.bootstrap_admin()`).
+- Bottle analysis can use either Ollama or OpenAI (selected by `ANALYSIS_PROVIDER`); price search is
+  always OpenAI-grounded-web-search and only runs after `refresh_prices()` finds no fresh SQLite
+  catalog hit and no sufficiently-similar Qdrant fuzzy match. Every accepted OpenAI price is written
+  back into `CatalogPrice` (and, if enabled, upserted into Qdrant) so future bottles of the same
+  product/size resolve locally.
+- Admin configuration writes to `/data/.env` and expects a restart to take effect; the restart is a
+  self-`SIGTERM`, not a respawn — the container's `restart: unless-stopped` policy does the respawn.
+- Telemetry uses local SQLite usage records (`ApiUsage`, no prompts/responses/PII), Prometheus
+  metrics, and redacted JSON log output.
 
 ## Cross-links
 

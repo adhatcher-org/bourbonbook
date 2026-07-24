@@ -50,6 +50,7 @@ STANDARD_ATTRS = {
     "processName",
     "relativeCreated",
     "stack_info",
+    "taskName",
     "thread",
     "threadName",
 }
@@ -109,6 +110,22 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(event, default=str, separators=(",", ":"))
 
 
+class TextFormatter(logging.Formatter):
+    """Render structured event fields in container-friendly text logs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        fields: list[str] = []
+        for key, value in record.__dict__.items():
+            if key in STANDARD_ATTRS or key in {"event", "request_id"}:
+                continue
+            fields.append(f"{key}={json.dumps(_redact(key, value), default=str)}")
+        request_id = getattr(record, "request_id", None) or current_request_id()
+        if request_id:
+            fields.append(f"request_id={request_id}")
+        return f"{message} {' '.join(fields)}" if fields else message
+
+
 def configure_logging(settings: Settings) -> None:
     root = logging.getLogger()
     for existing_handler in root.handlers:
@@ -122,7 +139,7 @@ def configure_logging(settings: Settings) -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter(
+            TextFormatter(
                 "%(asctime)s %(levelname)s %(name)s [%(event)s] %(message)s",
                 defaults={"event": "log"},
             )

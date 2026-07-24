@@ -10,3 +10,7 @@ data/
 *.py[cod]
 .DS_Store
 .continue/.env
+.continue/
+.playwright-cli/
+AmericanWhiskey*.png
+new-riff*

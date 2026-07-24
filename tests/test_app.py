@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,9 +13,10 @@ from PIL import Image
 from sqlalchemy import select, text
 
 from bourbonbook.config import Settings
-from bourbonbook.main import apply_analysis, create_app, refresh_prices
+from bourbonbook.main import apply_analysis, apply_user_purchase_price, create_app, refresh_prices
 from bourbonbook.migrations import bootstrap_database
 from bourbonbook.models import Bottle, CatalogPrice, User
+from bourbonbook.qdrant_prices import PriceMatch
 from bourbonbook.tokens import token_digest
 
 
@@ -79,6 +81,44 @@ def test_health_and_auth_redirect(tmp_path: Path) -> None:
         assert response.headers["location"] == "/login"
 
 
+def test_fresh_database_bootstrap_admin_can_log_in_without_verification(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        session_secret="test-secret-that-is-long-enough!",
+        secure_cookies=False,
+        ollama_url="http://ollama.invalid",
+        ollama_model="test",
+        max_users=10,
+        max_upload_mb=2,
+        default_admin_email="owner@example.com",
+        default_admin_password="temporary-admin-password",
+        email_verification_required=False,
+    )
+    bootstrap_database(settings)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        login = client.get("/login")
+        response = client.post(
+            "/login",
+            data={
+                "csrf_token": csrf(login),
+                "email": "owner@example.com",
+                "password": "temporary-admin-password",
+            },
+            follow_redirects=False,
+        )
+        assert response.headers["location"] == "/"
+        with app.state.database.session_factory() as session:
+            admin = session.scalar(select(User).where(User.email == "owner@example.com"))
+            assert admin is not None
+            assert admin.is_admin
+            assert admin.email_verified_at is not None
+
+
 def test_ohlq_price_cache_is_shared_between_matching_bottles(tmp_path: Path, monkeypatch) -> None:
     client, app = make_client(tmp_path)
     with client:
@@ -125,6 +165,127 @@ def test_ohlq_price_cache_is_shared_between_matching_bottles(tmp_path: Path, mon
             assert asyncio.run(refresh_prices(session, second, app.state.settings)) == "cached"
             assert second.msrp == 49.99
             assert second.price_sources[0].url == cached.url
+
+
+def test_openai_fallback_price_is_persisted_for_local_reuse(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            first = Bottle(owner_id=owner.id, name="Fallback Bourbon", size="750ml")
+            session.add(first)
+            session.flush()
+
+            async def fallback_lookup(*args, **kwargs):
+                return (
+                    {"msrp": 54.99},
+                    [
+                        {
+                            "kind": "msrp",
+                            "title": "Producer store",
+                            "url": "https://producer.example/bourbon",
+                            "basis": "Validated exact product listing.",
+                        }
+                    ],
+                    "complete",
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", fallback_lookup)
+            assert asyncio.run(refresh_prices(session, first, app.state.settings)) == "complete"
+            session.commit()
+
+            cached = session.scalar(select(CatalogPrice))
+            assert cached is not None
+            assert cached.title == "Producer store"
+            assert cached.msrp == 54.99
+
+            second = Bottle(owner_id=owner.id, name="Fallback Bourbon", size="750ml")
+            session.add(second)
+            session.flush()
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError(
+                    "A locally persisted fallback should prevent another OpenAI call"
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+            assert asyncio.run(refresh_prices(session, second, app.state.settings)) == "cached"
+            assert second.msrp == 54.99
+
+
+def test_user_purchase_price_creates_or_replaces_only_stale_catalog_price(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            bottle = Bottle(
+                owner_id=owner.id,
+                name="Example Bourbon",
+                size="750ml",
+                purchase_price=49.99,
+            )
+            session.add(bottle)
+            session.flush()
+
+            assert asyncio.run(apply_user_purchase_price(session, bottle)) is True
+            cached = session.scalar(select(CatalogPrice))
+            assert cached is not None
+            assert cached.msrp == 49.99
+            assert bottle.msrp == 49.99
+            assert cached.title == "User-entered purchase price"
+
+            bottle.purchase_price = 54.99
+            assert asyncio.run(apply_user_purchase_price(session, bottle)) is False
+            assert cached.msrp == 49.99
+
+            cached.checked_at = datetime.now(UTC) - timedelta(days=184)
+            assert asyncio.run(apply_user_purchase_price(session, bottle)) is True
+            assert cached.msrp == 54.99
+            assert bottle.msrp == 54.99
+
+
+def test_qdrant_match_reuses_a_fresh_local_catalog_price(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            cached = CatalogPrice(
+                product_key="example bourbon whiskey limited",
+                size_key="750ml",
+                msrp=59.99,
+                title="Local catalog",
+                url="https://example.com/product",
+            )
+            session.add(cached)
+            session.flush()
+            bottle = Bottle(owner_id=owner.id, name="Example Bourbon Whiskey", size="750ml")
+            session.add(bottle)
+            session.flush()
+
+            class FakePriceIndex:
+                async def find(self, product_key, size_key):
+                    assert (product_key, size_key) == ("example bourbon whiskey", "750ml")
+                    return PriceMatch(catalog_price_id=cached.id, score=1.0)
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError("A Qdrant local match should prevent an OpenAI call")
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+            assert (
+                asyncio.run(
+                    refresh_prices(
+                        session, bottle, app.state.settings, price_index=FakePriceIndex()
+                    )
+                )
+                == "local_match"
+            )
+            assert bottle.msrp == 59.99
 
 
 def test_analysis_does_not_accept_an_inferred_msrp() -> None:
@@ -314,7 +475,7 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert response.headers["location"].endswith("/edit?new=1")
 
         edit_page = client.get(response.headers["location"])
-        assert "Label analysis complete" in edit_page.text
+        assert "Verified bottle details applied" in edit_page.text
         assert "Eagle Rare 10 Year" in edit_page.text
         assert '<input type="file" name="photo" accept="image/*">' in edit_page.text
         assert 'name="photo" accept="image/*" capture=' not in edit_page.text
@@ -343,9 +504,9 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
             follow_redirects=False,
         )
         assert refresh_photo.status_code == 303
-        assert refresh_photo.headers["location"].endswith("?analysis=complete")
+        assert refresh_photo.headers["location"].endswith("?analysis=verified")
         refreshed_page = client.get(refresh_photo.headers["location"])
-        assert "Bottle details updated" in refreshed_page.text
+        assert "Verified bottle details applied" in refreshed_page.text
         refreshed_photo = re.search(r'/media/([^"?]+)', refreshed_page.text)
         assert refreshed_photo
         assert refreshed_photo.group(1) != initial_photo.group(1)

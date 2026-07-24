@@ -92,6 +92,9 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     monkeypatch.setenv("OLLAMA_URL", "http://ollama.invalid/")
     monkeypatch.setenv("MAX_USERS", "7")
     monkeypatch.setenv("PROXY_HEADERS", "true")
+    monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
+    monkeypatch.setenv("OLLAMA_VISION_MODEL", "qwen3-vl:30b")
+    monkeypatch.setenv("OLLAMA_TEXT_MODEL", "qwen3:30b-a3b")
 
     settings = Settings.from_env()
 
@@ -100,7 +103,11 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     assert settings.analysis_provider == "openai"
     assert settings.ollama_url == "http://ollama.invalid"
     assert settings.max_users == 7
+    assert settings.catalog_import_max_total_mb == 50
     assert settings.proxy_headers is True
+    assert settings.email_verification_required is False
+    assert settings.ollama_vision_model == "qwen3-vl:30b"
+    assert settings.ollama_text_model == "qwen3:30b-a3b"
 
 
 class FakeSMTP:

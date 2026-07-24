@@ -9,7 +9,9 @@ from bourbonbook.config import Settings
 from bourbonbook.database import Base, create_database_engine
 
 config = context.config
-if config.config_file_name is not None:
+# Application startup supplies the database URL explicitly and owns logging configuration. Keep
+# Alembic's CLI logging setup for standalone commands without lowering the running app to WARN.
+if config.config_file_name is not None and "database_url" not in config.attributes:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

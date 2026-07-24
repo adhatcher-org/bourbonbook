@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -161,29 +160,15 @@ async def _request_provider_analysis(
     return {}, "unavailable"
 
 
-def _settings_for_provider(settings: Settings, provider: str) -> Settings:
-    return replace(settings, analysis_provider=provider)
-
-
 async def _refine_analysis(
-    values: dict[str, Any], settings: Settings, photo: Path | None, *, source: str
+    values: dict[str, Any], settings: Settings, *, source: str
 ) -> tuple[dict[str, Any], str]:
     prompt = analysis_prompt(values, source=source)
-    refined, status = await _request_provider_analysis(prompt, settings, photo)
+    refined, status = await _request_provider_analysis(prompt, settings)
     values = merge_analysis(values, refined)
     values, matched = enrich_from_verified_catalog(values)
     if matched or not missing_fields(values):
         return values, "verified" if matched else "complete"
-    if settings.openai_api_key:
-        fallback_settings = _settings_for_provider(settings, "openai")
-        fallback, fallback_status = await _request_provider_analysis(
-            prompt, fallback_settings, photo
-        )
-        values = merge_analysis(values, fallback)
-        values, matched = enrich_from_verified_catalog(values)
-        if matched or not missing_fields(values):
-            return values, "verified" if matched else "complete"
-        return values, fallback_status if fallback_status == "complete" else status
     return values, status
 
 
@@ -195,9 +180,7 @@ async def analyze_bottle(photo: Path, settings: Settings) -> tuple[dict[str, Any
     if matched:
         return values, "verified"
     if settings.analysis_provider == "ollama" and missing_fields(values):
-        return await _refine_analysis(
-            values, settings, photo, source="photo and transcribed bottle-label text"
-        )
+        return await _refine_analysis(values, settings, source="transcribed bottle-label text")
     return values, status
 
 
@@ -213,7 +196,7 @@ async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, 
     if matched:
         return values, "verified"
     if values and settings.analysis_provider == "ollama" and missing_fields(values):
-        return await _refine_analysis(values, settings, None, source="known bottle name")
+        return await _refine_analysis(values, settings, source="known bottle name")
     return values, status
 
 

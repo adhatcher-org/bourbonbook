@@ -89,6 +89,20 @@ PRICE_JOB_STATE = Gauge(
     "Current price jobs by state.",
     ("state",),
 )
+CATALOG_IMPORTS = Counter(
+    "bourbonbook_catalog_imports_total",
+    "Catalog-import lifecycle outcomes.",
+    ("result",),
+)
+CATALOG_IMPORT_QUEUE_WAIT = Histogram(
+    "bourbonbook_catalog_import_queue_wait_seconds",
+    "Time a catalog import waited before extraction.",
+)
+CATALOG_IMPORT_DURATION = Histogram(
+    "bourbonbook_catalog_import_duration_seconds",
+    "Catalog-import extraction duration by bounded outcome.",
+    ("result",),
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +190,13 @@ def observe_http(method: str, route: str, status_code: int, duration_seconds: fl
     status_class = f"{status_code // 100}xx"
     HTTP_REQUESTS.labels(method, route, status_class).inc()
     HTTP_DURATION.labels(method, route).observe(duration_seconds)
+
+
+def observe_catalog_import(result: str, queue_wait_seconds: float, duration_seconds: float) -> None:
+    """Record only bounded lifecycle fields; never include batch IDs or source names."""
+    CATALOG_IMPORTS.labels(result).inc()
+    CATALOG_IMPORT_QUEUE_WAIT.observe(max(0, queue_wait_seconds))
+    CATALOG_IMPORT_DURATION.labels(result).observe(max(0, duration_seconds))
 
 
 def observe_auth_event(event: str, result: str) -> None:

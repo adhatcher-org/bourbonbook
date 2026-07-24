@@ -12,6 +12,18 @@ Ollama embeddings, Qdrant collection management, fixture loading, metadata filte
 vector search before the application commits to production pricing sources or recommendation
 rules. After that prototype is measured, the downstream pricing roadmap must be reviewed again.
 
+## Superseded: Benchmark-Gated Model Selection
+
+[ADR 0003](0003-fixed-local-model-no-benchmark-gate.md) retires P2-00 and P2-01 as blocking
+prerequisites. Local model selection for the photo-analysis and name-reconciliation roles is now a
+fixed operator/configuration decision (`qwen3.6:35b` for both `OLLAMA_VISION_MODEL` and
+`OLLAMA_MODEL`, per README/.env.example) rather than something gated on a passing
+`benchmark_cli`/`model_evaluation` acceptance record. The hardware (RTX 3090) and provider (Ollama)
+were already fixed regardless of any benchmark outcome, so the gate no longer had a decision left to
+inform. P2-00/P2-01 rows below are marked **Retired** rather than deleted, to preserve the record of
+what was attempted; `benchmark_cli.py`/`model_evaluation.py` remain in the repository as optional,
+non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequences.
+
 ## Confirmed Decisions
 
 1. Removing the HTML `capture="environment"` hint will restore the normal iPhone image chooser;
@@ -41,6 +53,22 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
     discovery, crawling, production ingestion, and user-visible recommendations remain deferred.
 14. Development supports Aaron's external Unraid Qdrant by URL plus an optional local Compose
     service. Qdrant must not be exposed through the public Bourbon Book route.
+15. Admin catalog imports use a SQLite-backed durable queue with one lifespan-owned worker in the
+    existing single-Uvicorn-worker process. The database is the source of truth: a request commits
+    a queued batch before responding; a leased worker claims it; startup recovers expired leases.
+    Redis, Celery, RQ, extra workers, and replicas are out of scope while SQLite is the write store.
+16. Local-model work has one GPU lane with capacity one. Catalog imports do not run concurrent
+    model calls, do not preempt active work, and must later yield priority to interactive analysis.
+    The approved catalog-import defaults are: five waiting batches; five files, 50 MiB total, and
+    ten PDF pages per batch; 120-second chunk timeout; 15-minute batch deadline; one automatic
+    retry for transient failures; and a 20-minute leased job with heartbeat/recovery.
+17. Catalog-import source files are retained only while queued or extracting and are deleted
+    immediately after normalized proposals or a terminal failure are persisted. Reprocessing is not
+    in scope. Batch audit summaries (without source files, raw model output, or prompts) are
+    retained for 90 days.
+18. The repository-wide branch-coverage gate is temporarily **80%** while the approved AUP2 upload
+    sequence is under implementation. AUP2-13 must restore and pass the **90%** gate before final
+    validation, pull-request promotion, or release.
 
 ## Action Tracker
 
@@ -48,17 +76,145 @@ rules. After that prototype is measured, the downstream pricing roadmap must be 
 | --- | --- | --- | --- | --- |
 | A01 | Restore iPhone Photo Library selection | Complete | `codex/iphone-photo-picker` | [PR #11](https://github.com/adhatcher-org/bourbonbook/pull/11); sub-agent clean; `make pr-review` passed. |
 | A02 | Apply Atkinson Hyperlegible Next to edit controls | Complete | `codex/readable-edit-font` | [PR #12](https://github.com/adhatcher-org/bourbonbook/pull/12); desktop/iPhone and missing-font fallback verified; sub-agent clean; `make pr-review` passed. |
-| A03 | Configure prototype RAG infrastructure | Incomplete | `codex/rag-infrastructure` | — |
-| A04 | Load and search the prototype corpus | Incomplete | `codex/rag-prototype-index` | — |
-| A05 | Reconcile and extend the pricing evaluation fixtures | Deferred | `codex/pricing-evaluation-fixtures` | Pending post-RAG design checkpoint. |
-| A06 | Add the pricing evidence schema and separate provider roles | Deferred | `codex/pricing-evidence-foundation` | Pending post-RAG design checkpoint. |
-| A07 | Add governed source administration and user preferences | Deferred | `codex/pricing-source-registry` | Pending post-RAG design checkpoint. |
-| A08 | Add durable refresh jobs and automatic manual-price replacement | Deferred | `codex/pricing-refresh-jobs` | Pending post-RAG design checkpoint. |
-| A09 | Add OpenAI-assisted source discovery | Deferred | `codex/pricing-source-discovery` | Pending post-RAG design checkpoint. |
-| A10 | Add scheduled fetching and OpenAI evidence extraction | Deferred | `codex/pricing-evidence-ingestion` | Pending post-RAG design checkpoint. |
-| A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Pending post-RAG design checkpoint. |
-| A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | Pending post-RAG design checkpoint. |
-| A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Pending post-RAG design checkpoint. |
+| P2-00 | Repair benchmark semantics, runtime evidence, and local-only enforcement | **Retired — no longer required (ADR 0003)** | `feature/p2-benchmark-contract` | Historical: `p2_00_benchmark_implementer`/`validator` passed focused 92.20% coverage; repository aggregate 86.80% never reached the 90% PR-promotion floor. Retired as a blocking prerequisite by ADR 0003; not needed to adopt or change a local model. |
+| P2-01 | Select local model roles on the 3090 | **Retired — no longer required (ADR 0003)** | `feature/p2-model-evaluation` | Historical: offline implementer/validator pass (149 tests, 90% focused coverage); the required "authorized 3090 report" was never produced. Retired by ADR 0003 — model roles are now a fixed config decision (`qwen3.6:35b` for both photo and name), not a benchmark-gated selection. |
+| P2-02A | Harden local evidence-to-catalog analysis contract | Blocked by P2-01 | `feature/p2-local-analysis-contract` | `p2_02a_analysis_implementer` then `p2_02a_analysis_validator`; catalog is authoritative and unresolved facts remain reviewable. |
+| P2-02B | Add bounded GPU scheduling and timing telemetry | Blocked by P2-02A | `feature/p2-gpu-queue-telemetry` | `p2_02b_queue_implementer` then `p2_02b_queue_validator`; one-large-model residency and deterministic timing tests required. |
+| P2-02C | Add durable analysis jobs, progress, and confirmation UI | Blocked by P2-02B | `feature/p2-analysis-jobs-ui` | `p2_02c_jobs_ui_implementer` then `p2_02c_jobs_ui_validator`; fresh/upgrade migrations, owner security, browser tests, and ≥80% focused coverage required. |
+| P2-03A | Establish exact source-backed price evaluation contract | Blocked by P2-02C | `feature/p2-price-evaluation-contract` | `p2_03a_price_contract_implementer` then `p2_03a_price_contract_validator`; separate pricing fixture and provenance gate required. |
+| P2-03B | Replace runtime LLM price lookup with direct evidence | Blocked by P2-03A | `feature/p2-direct-price-refresh` | `p2_03b_price_source_implementer` then `p2_03b_price_source_validator`; exact matching and no-OpenAI-path tests required. |
+| P2-04 | Remove OpenAI runtime paths | Blocked by P2-02C / P2-03B | `feature/p2-remove-openai` | `p2_04_openai_removal_implementer` then `p2_04_openai_removal_validator`; prove local-only operation and ≥80% focused coverage. |
+| A03 | Configure prototype RAG infrastructure | Incomplete | `codex/rag-infrastructure` | No Qdrant/Ollama embedding module, configuration, CLI, dependency, or Compose profile is present. |
+| A04 | Load and search the prototype corpus | Incomplete | `codex/rag-prototype-index` | No prototype corpus, loader, raw search command, or Qdrant substrate is present; blocked by A03. |
+| A05 | Reconcile and extend the pricing evaluation fixtures | Deferred | `codex/pricing-evaluation-fixtures` | Phase 1 added a private benchmark fixture/CLI, but MSRP is reference-only and unscored; production pricing evaluation remains deferred. |
+| A06 | Add the pricing evidence schema and separate provider roles | Deferred | `codex/pricing-evidence-foundation` | `CatalogPrice` cache/migration and local/OpenAI analysis roles exist, but the governed evidence, job, and provider-role schema is not implemented. |
+| A07 | Add governed source administration and user preferences | Deferred | `codex/pricing-source-registry` | No source registry, user preferences, administrator source UI, or source-governance validation is present. |
+| A08 | Add durable refresh jobs and automatic manual-price replacement | Deferred | `codex/pricing-refresh-jobs` | A synchronous 90-day OHLQ cache/refresh exists; no durable job, worker, priority, retry, or price-history replacement is present. |
+| A09 | Add OpenAI-assisted source discovery | Deferred | `codex/pricing-source-discovery` | Existing OpenAI use is a per-bottle grounded price search; no discovery, candidate approval, or decision history is present. |
+| A10 | Add scheduled fetching and OpenAI evidence extraction | Deferred | `codex/pricing-evidence-ingestion` | Existing synchronous price search is not scheduled fetching, source adaptation, or durable evidence ingestion. |
+| A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Local catalog/OHLQ cache exists, but no Qdrant embedding, index, filtered retrieval, or Ollama evidence synthesis is present. |
+| A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
+| A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
+
+## Implementation Audit
+
+Audited against committed `4e70330` on 2026-07-21. “Partial” below identifies reusable
+foundations only; it does not satisfy an action's dependencies, completion evidence, or lifecycle.
+
+### Phase 2 audit
+
+- **P2-00 — Outstanding as of this audit; retired by ADR 0003.** `benchmark_cli.py` writes a v1
+  report, counts only `complete` status as success, scores all fields for both operations, permits
+  fuzzy name matching, and has no runtime evidence or local-only provider guard. Catalog-backed
+  analysis can return `verified`, so current benchmark results are not decision-ready. This gap is
+  no longer a blocker for model selection — see [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md).
+- **P2-01 — Partial foundation as of this audit; retired by ADR 0003.** Vision/text model settings
+  and photo-aware model selection exist, but defaults were never accepted through the repaired 3090
+  role benchmark described here. ADR 0003 retires that requirement: model roles are now a fixed
+  config decision (`qwen3.6:35b` for both), not benchmark-gated.
+- **P2-02A/B/C — Partial foundation.** Local extraction, catalog matching, a text reconciliation
+  path, and synchronous request handling exist. The confidence/evidence contract, bounded residency
+  queue, durable work, progress surface, low-confidence confirmation, and timing lifecycle are
+  outstanding.
+- **P2-03A/B — Partial foundation.** `CatalogPrice`, an import CLI, and optional Qdrant lookup exist,
+  but the lookup is fuzzy and a cache miss can use OpenAI web search. The separate source-backed
+  pricing benchmark, exact canonical identity/provenance gate, and direct-only refresh are
+  outstanding.
+- **P2-04 — Outstanding.** OpenAI provider/runtime/configuration/admin/docs/dependency paths remain.
+
+Uncommitted work in `bourbonbook/catalog_extract.py`, `bourbonbook/migrations/`, `tests/tmp/`, and
+`.vscode/` is excluded from this audit and must not be treated as Phase 2 completion evidence.
+
+- **A03 — Outstanding.** No application Qdrant client, `/api/embed` boundary, RAG settings/admin
+  fields, RAG command module, Qdrant dependency, or Compose `rag` profile exists.
+- **A04 — Outstanding.** There is no versioned synthetic prototype corpus, validator, loader,
+  raw filtered-search service, or smoke workflow. A03 has not supplied the required collection.
+- **A05 — Partial foundation; deferred.** [`bourbonbook/benchmark_cli.py`](../../bourbonbook/benchmark_cli.py)
+  exports a private owner-scoped fixture and scores photo/name fields, while MSRP is explicitly
+  reference-only. It is not a source-backed pricing-evaluation corpus or provenance contract.
+- **A06 — Partial foundation; deferred.** [`CatalogPrice`](../../bourbonbook/models.py) and migration
+  `0007_catalog_prices` provide a shared OHLQ MSRP cache; [`PriceSource`](../../bourbonbook/models.py)
+  remains bottle-scoped URL metadata. There are no durable product/evidence observations, currency
+  fields, refresh jobs, or finalized local-only provider interfaces.
+- **A07 — Outstanding.** No global source records, per-user blocks/suggestions, administrator
+  source controls, source audit trail, or SSRF-aware source-administration boundary exists.
+- **A08 — Partial foundation; deferred.** [`refresh_prices`](../../bourbonbook/main.py) performs an
+  immediate cache lookup or synchronous provider request. It has no durable queue, lease/retry
+  worker, generation check, manual-value history, or automatic replacement workflow.
+- **A09 — Outstanding.** [`bourbonbook/openai_provider.py`](../../bourbonbook/openai_provider.py)
+  supports a current per-bottle price search only; it does not discover, validate, queue, or require
+  approval for source candidates.
+- **A10 — Outstanding.** No scheduled worker, per-source fetch adapter, robots/rate policy,
+  fixture-page extractor, evidence fingerprint, or observation ingestion exists.
+- **A11 — Partial local cache only; deferred.** The verified product catalog and OHLQ cache reduce
+  repeated lookups, but the repository contains no Qdrant client, embedding calls, vector index,
+  evidence filter, or Ollama-grounded price retrieval.
+- **A12 — Outstanding.** No manual-import model, one-time import token, authorized artifact upload,
+  import parser, or Playwright helper exists.
+- **A13 — Partial foundation; deferred.** The private benchmark commands and existing Docker health
+  check are usable inputs, but no end-to-end pricing-pipeline suite, operational runbook, Qdrant
+  recovery test, rollout checklist, or final acceptance report exists.
+
+## Phase 2 Local-AI Direction and Ordered Implementation
+
+This direction supersedes the unimplemented OpenAI-dependent guidance in confirmed decisions 8 and
+13 and in the historical A06/A09/A10/A11/A13 text. Those actions remain deferred and must be
+rewritten before implementation; no new Phase 2 branch may add an OpenAI fallback, discovery call,
+or evidence-extraction call.
+
+| Order | Action | Scope and acceptance gate |
+| --- | --- | --- |
+| 1 | **P2-00 — Correct benchmark semantics and capture 3090 evidence (retired, ADR 0003)** | No longer a prerequisite for model selection. The scoring/semantics defects described here (success counting, field observability, cold-start capture) remain real if the benchmark tooling is ever used again for ad hoc comparison, but fixing them is no longer required before adopting or changing a local model. |
+| 2 | **P2-01 — Select local model roles (retired, ADR 0003)** | No longer benchmark-gated. `qwen3.6:35b` is adopted directly for both `OLLAMA_VISION_MODEL` and `OLLAMA_MODEL` (photo and name-reconciliation roles) as a fixed configuration decision — see [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md). `benchmark_cli.py`/`model_evaluation.py` remain available for optional, non-blocking ad hoc comparison only. |
+| 3 | **P2-02 — Build the local photo, catalog, and job pipeline** | Implement the operation-specific local flow below: one VLM photo job followed by local catalog facts; run the general text model only after a catalog miss/ambiguity. Add bounded queue/model-residency telemetry, durable jobs, visible progress, and low-confidence user confirmation. Keep one large application model resident; Continue's `qwen3-coder:30b` is development-only. |
+| 4 | **P2-03 — Replace LLM price lookup with direct evidence** | Preserve the OHLQ cache but replace LLM web search with an exact product/size direct-source or imported-catalog adapter. Store URL, observation date, source basis, and freshness; return unavailable rather than inventing MSRP. Run a separate source-backed price evaluation. |
+| 5 | **P2-04 — Remove OpenAI runtime paths** | Prove fake-provider tests and usage records cannot call OpenAI; remove the fallback, price-search adapter, configuration, client lifecycle, admin controls, dependency, and stale documentation only after P2-02/P2-03 pass. |
+| 6 | **A03 then A04 — Prototype RAG** | Resume the standalone Qdrant/embedding prototype after the local analysis cutover is stable. It remains diagnostic/raw and must not reintroduce OpenAI or production price recommendations. |
+| 7 | **Post-RAG checkpoint, then A05–A13** | Rewrite every deferred pricing action around the local-only provider policy, source governance, and direct evidence ingestion before beginning it. (No longer gated on a completed Phase 2 model benchmark — retired by ADR 0003.) |
+
+### Phase 2 model and transaction rules
+
+Updated by [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md): model roles are a fixed
+configuration decision, not a benchmark-selected candidate list. The rules below reflect the
+current configuration, not the retired candidate/challenger framing.
+
+- `qwen3.6:35b` is the fixed model for both roles: photo analysis (label text, identity, status,
+  and fill level) and name-only/catalog-miss reconciliation. OCR text is not evidence of fill
+  level; uncertain visual estimates require review. Exact local catalog matches return without an
+  LLM call in either role.
+- `qwen3-coder:30b` belongs in Continue for development, never the application request path. Unload
+  it before app analysis so the 24 GB card does not co-reside competing large models.
+- Pricing is a separate direct-source/cache job and must never delay photo or name analysis.
+
+### Local operation map and user-transaction timing
+
+| User operation | Normal local path | Exception path | User-visible timing and model residency |
+| --- | --- | --- | --- |
+| Add a bottle from a photo | Normalize image → `qwen3.6:35b` reads label/identity and visual facts → exact local-catalog match supplies durable product attributes → save a reviewable result. | If the catalog cannot match or the identity is ambiguous, queue `qwen3.6:35b` reconciliation using only the image-derived evidence; leave unresolved facts for user correction if it cannot establish a match. | Show photo-analysis progress. Since photo and reconciliation now share one fixed model (`qwen3.6:35b`, ADR 0003), no load/evict swap is needed between them. A low-confidence fill-level or status estimate still requires confirmation rather than an automatic overwrite. |
+| Add or update bottle attributes from a typed name | Exact local-catalog lookup returns durable attributes without an LLM. | `qwen3.6:35b` reconciles a miss/ambiguity, then the catalog remains the authority for the saved attributes. This is a fixed configuration choice, not a benchmark-selected candidate (ADR 0003). | Return catalog matches immediately. Show a distinct reconciliation stage when it is needed. |
+| Add or refresh MSRP | Apply a fresh exact product-and-size OHLQ cache entry immediately. | Queue/run a direct-source or imported-catalog refresh with URL, source basis, and checked date; return unavailable when there is no verified result. | Never load an LLM or block photo/name analysis. Surface the price source and timestamp separately from bottle analysis. |
+| Continue-assisted coding | No application request-path work. | None. | `qwen3-coder:30b` is development-only and must be unloaded before user analysis or benchmark work so it cannot consume the 3090's model-residency budget. |
+
+Initially, the application may have exactly one large model resident: `qwen3.6:35b`, shared by both
+the photo job and any reconciliation job (no swap between roles since ADR 0003 fixed both roles to
+the same model). P2-02, if resumed, must still record queue wait, model load/eviction, inference,
+catalog-match, and price-refresh durations separately; it may add concurrency or preload only after
+a measured 3090 VRAM and end-to-end latency evaluation.
+
+### Changes applied to the original Phase 2 direction
+
+- Replaced a generic larger-model recommendation with role-specific selection, later fixed by
+  [ADR 0003](0003-fixed-local-model-no-benchmark-gate.md) to a single model for both roles:
+  `qwen3.6:35b` for photo analysis and text reconciliation; `qwen3-coder:30b` only for Continue
+  development.
+- Replaced a possible multi-model, synchronous request flow with catalog-first transactions and a
+  one-large-model residency rule. Model-load/eviction is now measured separately and exception work
+  is visible to the user instead of silently delaying the primary operation.
+- Replaced LLM-generated MSRP with a source-backed OHLQ cache/direct-import operation. It may use
+  network evidence when a refresh is needed, but it may never use OpenAI or any LLM to infer a price.
+- Established P2-04 as the only cutover endpoint: after P2-02 and P2-03 meet their gates, production
+  runtime paths must make no OpenAI API calls and remove the associated fallback, configuration,
+  client, dependency, and documentation.
 
 ## Required Lifecycle for Every Action
 
@@ -73,10 +229,14 @@ the tracker is updated with an approved scope.
 5. Implement only the named action and its documentation/tests. Prefer extending existing modules
    over adding parallel implementations.
 6. Run focused tests throughout development, followed by the relevant full local checks.
-7. Spawn a sub-agent with instructions to inspect the final diff, run or inspect focused tests, and
-   report correctness, regressions, missing coverage, security concerns, and scope creep. The
-   reviewer must not modify files unless explicitly asked after its report.
-8. Resolve every actionable sub-agent finding and rerun affected tests.
+7. After the implementation agent finishes, start a **new validation/fix agent**. It must inspect
+   the final diff, run focused tests and `make coverage`, report correctness/regressions/missing
+   coverage/security/scope findings, and make only contained fixes in the named action. Every fix
+   requires a regression test and a rerun of affected checks.
+8. Do not begin the next action until the validation/fix agent reports passing tests and ≥80% focused
+   coverage. Before a PR, the temporary repository-wide 80% `make coverage` gate and the separate read-only
+   `bourbonbook_reviewer` and `pr_validator`
+   commit-bound checks required by the project instructions.
 9. Run `make pr-review`. Fix failures and rerun until it passes. This target includes lint,
    formatting checks, branch coverage, Bandit, dependency audit, repository-integrity checks,
    migration tests, Compose validation, and a production image build.

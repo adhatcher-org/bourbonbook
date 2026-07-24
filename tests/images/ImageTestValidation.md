@@ -39,25 +39,6 @@ fill_level: 100%
 msrp: $110
 secondary_price: $260
 
-## Blantons Straight from the barrel
-
-image: ![Blantons Straight from the Barrels](BlantonsStraightFromTheBarrel2.jpeg)
-name: Blantons Original Single Barrel
-brand: Blantons
-release: Straight From The Barrel
-spirit_type: Bourbon
-distilled_by: Buffalo Trace Distillery
-mash_bill: corn, rye, malted barley
-proof: 128.8
-abv: 64.4
-size: 750ml
-barrel_number: 2149
-warehouse: H
-floor: 46
-status: Unopened
-fill_level: 100%
-msrp: $110
-secondary_price: $260
 
 ## Weller Full Proof
 

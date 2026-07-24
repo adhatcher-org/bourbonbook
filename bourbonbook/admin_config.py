@@ -37,7 +37,31 @@ CONFIG_FIELDS = (
         ("ollama", "openai"),
     ),
     ConfigField("OLLAMA_URL", "ollama_url", "Ollama URL", "Analysis", "url"),
-    ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama model", "Analysis"),
+    ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama fallback model", "Analysis"),
+    ConfigField(
+        "OLLAMA_VISION_MODEL",
+        "ollama_vision_model",
+        "Ollama vision model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField(
+        "OLLAMA_TEXT_MODEL",
+        "ollama_text_model",
+        "Ollama text model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField("QDRANT_URL", "qdrant_url", "Qdrant URL", "Pricing", "url", optional=True),
+    ConfigField(
+        "QDRANT_API_KEY", "qdrant_api_key", "Qdrant API key", "Pricing", secret=True, optional=True
+    ),
+    ConfigField(
+        "QDRANT_PRICE_COLLECTION",
+        "qdrant_price_collection",
+        "Qdrant price collection",
+        "Pricing",
+    ),
     ConfigField(
         "OPENAI_API_KEY", "openai_api_key", "OpenAI API key", "Analysis", secret=True, optional=True
     ),
@@ -51,6 +75,42 @@ CONFIG_FIELDS = (
         "integer",
         minimum=1,
         maximum=100,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_MAX_FILES",
+        "catalog_import_max_files",
+        "Catalog import maximum files",
+        "Catalog import",
+        "integer",
+        minimum=1,
+        maximum=20,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_MAX_TOTAL_MB",
+        "catalog_import_max_total_mb",
+        "Catalog import maximum total (MB)",
+        "Catalog import",
+        "integer",
+        minimum=1,
+        maximum=500,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_MAX_PDF_PAGES",
+        "catalog_import_max_pdf_pages",
+        "Catalog import maximum PDF pages",
+        "Catalog import",
+        "integer",
+        minimum=1,
+        maximum=100,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_SOURCE_EXPIRY_HOURS",
+        "catalog_import_source_expiry_hours",
+        "Catalog import source expiry (hours)",
+        "Catalog import",
+        "integer",
+        minimum=1,
+        maximum=720,
     ),
     ConfigField(
         "APP_ENV", "app_env", "Environment", "Application", "choice", ("development", "production")
@@ -89,6 +149,13 @@ CONFIG_FIELDS = (
         "Email",
         "integer",
         minimum=1,
+    ),
+    ConfigField(
+        "EMAIL_VERIFICATION_REQUIRED",
+        "email_verification_required",
+        "Require email verification",
+        "Email",
+        "boolean",
     ),
     ConfigField(
         "RESET_TTL_MINUTES",

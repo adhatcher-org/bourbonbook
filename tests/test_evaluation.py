@@ -8,7 +8,7 @@ def test_validation_file_maps_expected_images() -> None:
 
     assert records["WellerFullProof.jpeg"]["proof"] == "114.0"
     assert records["WellerFullProof.jpeg"]["abv"] == "57.0"
-    assert records["BlantonsStraightFromTheBarrel2.jpeg"]["barrel_number"] == "2149"
+    assert records["BlantonsStraightFromTheBarrel.jpeg"]["barrel_number"] == "2149"
 
 
 def test_validation_comparison_normalizes_units_and_text() -> None:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
 from alembic import command
-from sqlalchemy import inspect, select, text
+from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from bourbonbook.config import Settings
@@ -16,7 +17,14 @@ from bourbonbook.migrations import (
     alembic_config,
     bootstrap_database,
 )
-from bourbonbook.models import Bottle, CatalogPrice, PriceSource, User
+from bourbonbook.models import (
+    Bottle,
+    CatalogImportBatch,
+    CatalogImportProposal,
+    CatalogPrice,
+    PriceSource,
+    User,
+)
 
 
 def migration_settings(tmp_path: Path) -> Settings:
@@ -49,6 +57,8 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             "alembic_version",
             "api_usage",
             "bottles",
+            "catalog_import_batches",
+            "catalog_import_proposals",
             "catalog_prices",
             "price_sources",
             "user_tokens",
@@ -67,6 +77,90 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
         assert current_revision(database) == HEAD_REVISION
     finally:
         database.engine.dispose()
+
+
+def test_catalog_import_tables_enforce_batch_ownership_and_proposal_position(
+    tmp_path: Path,
+) -> None:
+    settings = migration_settings(tmp_path)
+    bootstrap_database(settings)
+    database = Database(settings)
+    try:
+        with database.session_factory() as session:
+            user = User(
+                username="catalog-admin", display_name="Catalog Admin", password_hash="hash"
+            )
+            session.add(user)
+            session.flush()
+            batch = CatalogImportBatch(created_by_user_id=user.id)
+            batch.proposals.append(
+                CatalogImportProposal(
+                    position=0,
+                    name="Example Bourbon",
+                    product_key="example bourbon",
+                    size_key="750ml",
+                    msrp=49.99,
+                    price_updated_at=date(2026, 7, 22),
+                )
+            )
+            session.add(batch)
+            session.commit()
+
+        with database.session_factory() as session:
+            batch = session.scalar(select(CatalogImportBatch))
+            assert batch is not None
+            assert batch.state == "queued"
+            assert batch.proposals[0].included is True
+            session.add(
+                CatalogImportProposal(
+                    batch_id=batch.id,
+                    position=0,
+                    name="Duplicate position",
+                    product_key="duplicate position",
+                    size_key="750ml",
+                    msrp=1.0,
+                    price_updated_at=date(2026, 7, 22),
+                )
+            )
+            with pytest.raises(IntegrityError):
+                session.commit()
+            session.rollback()
+            session.execute(delete(CatalogImportBatch).where(CatalogImportBatch.id == batch.id))
+            session.commit()
+
+        with database.session_factory() as session:
+            assert session.scalar(select(CatalogImportProposal)) is None
+    finally:
+        database.engine.dispose()
+
+
+def test_catalog_import_migration_upgrades_existing_catalog_price_head(tmp_path: Path) -> None:
+    settings = migration_settings(tmp_path)
+    config = alembic_config(settings.database_url)
+    command.upgrade(config, "0007_catalog_prices")
+
+    database = Database(settings)
+    try:
+        with database.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users (username, display_name, password_hash, created_at) "
+                    "VALUES ('existing-admin', 'Existing Admin', 'hash', CURRENT_TIMESTAMP)"
+                )
+            )
+    finally:
+        database.engine.dispose()
+
+    command.upgrade(config, "head")
+    upgraded = Database(settings)
+    try:
+        inspector = inspect(upgraded.engine)
+        assert {"catalog_import_batches", "catalog_import_proposals"} <= set(
+            inspector.get_table_names()
+        )
+        assert current_revision(upgraded) == HEAD_REVISION
+    finally:
+        upgraded.engine.dispose()
 
 
 def test_legacy_database_is_stamped_without_losing_catalog_data(tmp_path: Path) -> None:

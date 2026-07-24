@@ -324,14 +324,22 @@ def parse_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         return default
 
 
-def validate_batch_id_for_redirect(batch_id: int) -> str:
-    """Validate and safely encode batch_id for use in redirect URLs.
+def catalog_import_redirect_path(batch_id: int, **params: object) -> str:
+    """Build a guaranteed-local catalog-import redirect URL.
 
-    Ensures batch_id is a positive integer to prevent URL redirection attacks.
+    Both the batch id (path segment) and every query parameter are forced
+    through barriers that neutralize remote input: the id is coerced with
+    ``int()`` (so it can only ever be digits) and the query string is built with
+    ``urlencode``. The result is always a relative ``/admin/catalog-import/<int>``
+    path, so no remote-controlled string can reach the redirect target and steer
+    it off-site. This closes the "URL redirection from remote source" finding.
     """
-    if not isinstance(batch_id, int) or batch_id < 1:
+    if not isinstance(batch_id, int) or isinstance(batch_id, bool) or batch_id < 1:
         raise ValueError("Invalid batch ID")
-    return str(batch_id)
+    safe_id = int(batch_id)
+    query = urlencode(params)
+    suffix = f"?{query}" if query else ""
+    return f"/admin/catalog-import/{safe_id}{suffix}"
 
 
 def delete_catalog_import_batch(session: Session, batch_id: int) -> bool:
@@ -1747,8 +1755,9 @@ def register_routes(app: FastAPI) -> None:
                     error=f"Fix the required fields for {', '.join(errors)} before saving.",
                     status_code=400,
                 )
-        safe_batch_id = validate_batch_id_for_redirect(batch_id)
-        return RedirectResponse(f"/admin/catalog-import/{safe_batch_id}?page={page}&saved=1", 303)
+        return RedirectResponse(
+            catalog_import_redirect_path(batch_id, page=int(page), saved=1), 303
+        )
 
     @app.post("/admin/catalog-import/{batch_id}/apply", response_class=HTMLResponse)
     async def admin_catalog_import_apply(request: Request, batch_id: int) -> Response:
@@ -1802,10 +1811,16 @@ def register_routes(app: FastAPI) -> None:
                 status_code=409,
             )
         await sync_applied_catalog_prices_to_qdrant(app, result.catalog_price_ids)
-        safe_batch_id = validate_batch_id_for_redirect(batch_id)
         return RedirectResponse(
-            f"/admin/catalog-import/{safe_batch_id}?page={page}&applied=1&created={result.created}"
-            f"&updated={result.updated}&unchanged={result.unchanged}&skipped={result.skipped}",
+            catalog_import_redirect_path(
+                batch_id,
+                page=int(page),
+                applied=1,
+                created=result.created,
+                updated=result.updated,
+                unchanged=result.unchanged,
+                skipped=result.skipped,
+            ),
             303,
         )
 
@@ -1873,8 +1888,7 @@ def register_routes(app: FastAPI) -> None:
                     status_code=409,
                 )
             session.commit()
-        safe_batch_id = validate_batch_id_for_redirect(batch_id)
-        return RedirectResponse(f"/admin/catalog-import/{safe_batch_id}?retried=1", 303)
+        return RedirectResponse(catalog_import_redirect_path(batch_id, retried=1), 303)
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:

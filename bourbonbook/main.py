@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -1479,9 +1479,8 @@ def register_routes(app: FastAPI) -> None:
                         price.checked_at = datetime.now(UTC)
             session.commit()
             log_admin_action(admin.id, admin.id, f"catalog_{form.get('action', 'update')}", True)
-        return RedirectResponse(
-            f"/admin/catalog?q={q}&sort={sort}&page={page}&page_size={page_size}", 303
-        )
+        query = urlencode({"q": q, "sort": sort, "page": page, "page_size": page_size})
+        return RedirectResponse(f"/admin/catalog?{query}", 303)
 
     def catalog_import_pages(page: int, max_page: int) -> range:
         """Keep a compact, stable page window around the selected proposal page."""

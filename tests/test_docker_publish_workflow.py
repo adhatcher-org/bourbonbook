@@ -9,6 +9,7 @@ def test_docker_publish_uses_the_versioned_shared_workflow() -> None:
 
     assert "workflow_run:" in workflow
     assert "- CI" in workflow
+    assert "github.event.workflow_run.event == 'push'" in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
     assert "github.event.workflow_run.head_branch == github.event.repository.default_branch" in workflow
     assert "adhatcher-org/shared-workflows/.github/workflows/docker-publish.yml@8189d4131e5b4b78d9b6f947e4a3bc8a28d4fdc8" in workflow

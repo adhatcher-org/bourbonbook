@@ -1,6 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Batch #{{ batch.id }} review · Bourbon Book{% endblock %}
 {% block page %}
+<style>
+  /* Full-width layout for catalog import review */
+  .catalog-import-review-page {
+    width: calc(100% - 40px);
+    max-width: none;
+  }
+
+  /* Make name column flexible to fill available space */
+  .proposal-name-column {
+    width: auto;
+    min-width: 200px;
+  }
+
+  /* Fixed widths for static columns */
+  .proposal-include-column { width: 60px; }
+  .proposal-size-column { width: 65px; }
+  .proposal-price-column { width: 85px; }
+  .proposal-date-column { width: 90px; }
+  .proposal-current-price-column { width: 120px; }
+  .proposal-current-date-column { width: 110px; }
+  .proposal-action-column { width: 90px; }
+
+  /* Allow table to scroll horizontally on smaller screens */
+  .admin-table-wrap {
+    overflow-x: auto;
+  }
+
+  /* Make name input field readable */
+  .proposal-name-input {
+    width: 100%;
+    min-width: 200px;
+  }
+</style>
 {% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page admin-page catalog-import-review-page">
   <section class="collection-head"><div><p class="eyebrow">Administration</p><h1>Batch #{{ batch.id }} review</h1><p class="muted">Review extracted catalog prices before explicitly applying included rows to the catalog.</p><a class="secondary-button" href="/admin/catalog-import">Back to catalog imports</a></div></section>

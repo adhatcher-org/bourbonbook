@@ -324,6 +324,16 @@ def parse_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         return default
 
 
+def validate_batch_id_for_redirect(batch_id: int) -> str:
+    """Validate and safely encode batch_id for use in redirect URLs.
+
+    Ensures batch_id is a positive integer to prevent URL redirection attacks.
+    """
+    if not isinstance(batch_id, int) or batch_id < 1:
+        raise ValueError("Invalid batch ID")
+    return str(batch_id)
+
+
 def delete_catalog_import_batch(session: Session, batch_id: int) -> bool:
     """Delete only a batch that has not been claimed or finalized by the worker."""
     result = session.execute(
@@ -1737,7 +1747,8 @@ def register_routes(app: FastAPI) -> None:
                     error=f"Fix the required fields for {', '.join(errors)} before saving.",
                     status_code=400,
                 )
-        return RedirectResponse(f"/admin/catalog-import/{batch_id}?page={page}&saved=1", 303)
+        safe_batch_id = validate_batch_id_for_redirect(batch_id)
+        return RedirectResponse(f"/admin/catalog-import/{safe_batch_id}?page={page}&saved=1", 303)
 
     @app.post("/admin/catalog-import/{batch_id}/apply", response_class=HTMLResponse)
     async def admin_catalog_import_apply(request: Request, batch_id: int) -> Response:
@@ -1791,8 +1802,9 @@ def register_routes(app: FastAPI) -> None:
                 status_code=409,
             )
         await sync_applied_catalog_prices_to_qdrant(app, result.catalog_price_ids)
+        safe_batch_id = validate_batch_id_for_redirect(batch_id)
         return RedirectResponse(
-            f"/admin/catalog-import/{batch_id}?page={page}&applied=1&created={result.created}"
+            f"/admin/catalog-import/{safe_batch_id}?page={page}&applied=1&created={result.created}"
             f"&updated={result.updated}&unchanged={result.unchanged}&skipped={result.skipped}",
             303,
         )
@@ -1820,6 +1832,7 @@ def register_routes(app: FastAPI) -> None:
                 )
             session.commit()
         remove_catalog_import_batch_sources(app.state.settings, batch_id)
+        # batch_id is validated in the DELETE check above; safe to use for redirect
         return RedirectResponse("/admin/catalog-import?deleted=1", 303)
 
     @app.post("/admin/catalog-import/{batch_id}/retry", response_class=HTMLResponse)
@@ -1860,7 +1873,8 @@ def register_routes(app: FastAPI) -> None:
                     status_code=409,
                 )
             session.commit()
-        return RedirectResponse(f"/admin/catalog-import/{batch_id}?retried=1", 303)
+        safe_batch_id = validate_batch_id_for_redirect(batch_id)
+        return RedirectResponse(f"/admin/catalog-import/{safe_batch_id}?retried=1", 303)
 
     @app.post("/admin/catalog-import", response_class=HTMLResponse)
     async def admin_catalog_import_upload(request: Request) -> Response:

@@ -20,10 +20,10 @@ class Settings:
     catalog_import_max_files: int = 5
     catalog_import_max_total_mb: int = 50
     catalog_import_max_pdf_pages: int = 10
-    catalog_import_max_image_pixels: int = 20_000_000
-    catalog_import_max_image_dimension: int = 10_000
-    catalog_import_max_pdf_render_pixels: int = 20_000_000
-    catalog_import_max_pdf_render_dimension: int = 10_000
+    catalog_import_max_image_pixels: int = 50_000_000  # ~50MP; 0 to disable
+    catalog_import_max_image_dimension: int = 0  # 0=disabled; set to limit (e.g., 10000)
+    catalog_import_max_pdf_render_pixels: int = 50_000_000  # ~50MP; 0 to disable
+    catalog_import_max_pdf_render_dimension: int = 0  # 0=disabled; set to limit (e.g., 10000)
     catalog_import_source_expiry_hours: int = 24
     catalog_import_queue_capacity: int = 5
     catalog_import_chunk_timeout_seconds: int = 120
@@ -85,19 +85,17 @@ class Settings:
             qdrant_api_key=get("QDRANT_API_KEY") or None,
             qdrant_price_collection=get("QDRANT_PRICE_COLLECTION", "bourbonbook_prices"),
             max_users=int(get("MAX_USERS", "10")),
-            max_upload_mb=int(get("MAX_UPLOAD_MB", "50")),
+            max_upload_mb=int(get("MAX_UPLOAD_MB", "30")),
             catalog_import_max_files=int(get("CATALOG_IMPORT_MAX_FILES", "5")),
             catalog_import_max_total_mb=int(get("CATALOG_IMPORT_MAX_TOTAL_MB", "50")),
             catalog_import_max_pdf_pages=int(get("CATALOG_IMPORT_MAX_PDF_PAGES", "10")),
-            catalog_import_max_image_pixels=int(get("CATALOG_IMPORT_MAX_IMAGE_PIXELS", "20000000")),
-            catalog_import_max_image_dimension=int(
-                get("CATALOG_IMPORT_MAX_IMAGE_DIMENSION", "10000")
-            ),
+            catalog_import_max_image_pixels=int(get("CATALOG_IMPORT_MAX_IMAGE_PIXELS", "50000000")),
+            catalog_import_max_image_dimension=int(get("CATALOG_IMPORT_MAX_IMAGE_DIMENSION", "0")),
             catalog_import_max_pdf_render_pixels=int(
-                get("CATALOG_IMPORT_MAX_PDF_RENDER_PIXELS", "20000000")
+                get("CATALOG_IMPORT_MAX_PDF_RENDER_PIXELS", "50000000")
             ),
             catalog_import_max_pdf_render_dimension=int(
-                get("CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION", "10000")
+                get("CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION", "0")
             ),
             catalog_import_source_expiry_hours=int(get("CATALOG_IMPORT_SOURCE_EXPIRY_HOURS", "24")),
             catalog_import_queue_capacity=int(get("CATALOG_IMPORT_QUEUE_CAPACITY", "5")),
@@ -175,12 +173,12 @@ class Settings:
             raise ValueError("CATALOG_IMPORT_MAX_PDF_PAGES must be at least 1")
         if self.catalog_import_max_image_pixels < 1:
             raise ValueError("CATALOG_IMPORT_MAX_IMAGE_PIXELS must be at least 1")
-        if self.catalog_import_max_image_dimension < 1:
-            raise ValueError("CATALOG_IMPORT_MAX_IMAGE_DIMENSION must be at least 1")
+        if self.catalog_import_max_image_dimension < 0:
+            raise ValueError("CATALOG_IMPORT_MAX_IMAGE_DIMENSION must be >= 0 (0 = disabled)")
         if self.catalog_import_max_pdf_render_pixels < 1:
             raise ValueError("CATALOG_IMPORT_MAX_PDF_RENDER_PIXELS must be at least 1")
-        if self.catalog_import_max_pdf_render_dimension < 1:
-            raise ValueError("CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION must be at least 1")
+        if self.catalog_import_max_pdf_render_dimension < 0:
+            raise ValueError("CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION must be >= 0 (0 = disabled)")
         if self.catalog_import_source_expiry_hours < 1:
             raise ValueError("CATALOG_IMPORT_SOURCE_EXPIRY_HOURS must be at least 1")
         if self.catalog_import_queue_capacity < 1:

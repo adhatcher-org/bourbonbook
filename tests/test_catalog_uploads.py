@@ -93,8 +93,8 @@ def test_catalog_upload_validation_accepts_jpeg_and_pdf(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("content_type", "content", "message"),
     [
-        ("image/jpeg", b"\xff\xd8\xffnot-an-image", "valid catalog image"),
-        ("application/pdf", b"%PDF-not-a-document", "valid PDF"),
+        ("image/jpeg", b"\xff\xd8\xffnot-an-image", "not a valid PNG or JPEG image"),
+        ("application/pdf", b"%PDF-not-a-document", "corrupted or not a valid PDF"),
     ],
 )
 def test_catalog_upload_validation_rejects_malformed_decodable_types(
@@ -139,7 +139,7 @@ def test_catalog_upload_validation_counts_pdf_pages_across_files(tmp_path: Path)
 def test_catalog_upload_validation_rejects_decodable_image_pixel_bomb(tmp_path: Path) -> None:
     configured = settings(tmp_path, catalog_import_max_image_pixels=100)
 
-    with pytest.raises(HTTPException, match="exceeds the allowed dimensions") as error:
+    with pytest.raises(HTTPException, match="exceeds max") as error:
         validate_catalog_uploads([("image/jpeg", jpeg(size=(11, 10)))], configured)
 
     assert error.value.status_code == 413
@@ -154,7 +154,7 @@ def test_catalog_upload_validation_rejects_pdf_before_oversized_rasterization(
     document.close()
     configured = settings(tmp_path, catalog_import_max_pdf_render_dimension=100)
 
-    with pytest.raises(HTTPException, match="exceeds the allowed render dimensions") as error:
+    with pytest.raises(HTTPException, match="exceeds max") as error:
         validate_catalog_uploads([("application/pdf", content)], configured)
 
     assert error.value.status_code == 413

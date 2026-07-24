@@ -125,7 +125,7 @@ def test_document_chunks_rejects_oversized_image_before_conversion(tmp_path: Pat
     image_path = tmp_path / "oversized.png"
     Image.new("RGB", (11, 10), "white").save(image_path)
 
-    with pytest.raises(ValueError, match="dimensions"):
+    with pytest.raises(ValueError, match="exceeds max"):
         document_chunks(image_path, max_image_pixels=100)
 
 
@@ -136,7 +136,7 @@ def test_document_chunks_rejects_pdf_before_oversized_rasterization(tmp_path: Pa
     document.save(pdf_path)
     document.close()
 
-    with pytest.raises(ValueError, match="render dimensions"):
+    with pytest.raises(ValueError, match="exceeds max"):
         document_chunks(pdf_path, max_pdf_render_dimension=100)
 
 

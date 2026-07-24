@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from bourbonbook.catalog import verified_product, verified_product_from_text
 from bourbonbook.config import Settings
@@ -84,14 +85,40 @@ barrel-specific information, mash-bill percentages, or facts you are not highly 
 This is an ungrounded lookup, so MSRP must always be null."""
 
 
+def canonical_url(value: str) -> str:
+    parts = urlsplit(value)
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+
+
+def price_search_prompt(name: str, *, size: str | None = None) -> str:
+    size_requirement = f" in the {size!r} bottle size" if size else ""
+    product = f"the exact whiskey {name!r}{size_requirement}"
+    return f"""Research the current Ohio retail price for {product}.
+
+Search OHLQ.com first and use its Sizes & Pricing value when an exact product and bottle-size match
+is available. When a bottle size is supplied, reject prices for every other size. Treat that Ohio
+retail price as MSRP for this collection. If OHLQ is inaccessible or
+has no exact match, broaden the web search and use the producer, another official state price book,
+or a reputable whiskey publication.
+Do not use retailer asking prices, search snippets, Reddit estimates, secondary-market prices, or
+an edition/store pick that does not exactly match. Use a single USD value rather than a range.
+Return null when reliable evidence is unavailable or conflicting. Select one best direct source;
+its title and URL must come from the web results. Keep the basis to one short sentence in plain text
+without Markdown."""
+
+
 def missing_fields(values: dict[str, Any]) -> list[str]:
     return [field for field in MISSING_FIELDS if values.get(field) in (None, "")]
 
 
-def merge_analysis(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+def merge_analysis(
+    base: dict[str, Any], extra: dict[str, Any], *, allow_msrp: bool = False
+) -> dict[str, Any]:
     merged = dict(base)
     for key, value in extra.items():
-        if key == "msrp" or value in (None, ""):
+        if key == "msrp" and not allow_msrp:
+            continue
+        if value in (None, ""):
             continue
         if merged.get(key) in (None, ""):
             merged[key] = value
@@ -107,7 +134,7 @@ def enrich_from_verified_catalog(values: dict[str, Any]) -> tuple[dict[str, Any]
             break
     if not match:
         return values, False
-    return merge_analysis(values, match), True
+    return merge_analysis(values, match, allow_msrp=True), True
 
 
 def analysis_prompt(values: dict[str, Any], *, source: str) -> str:
@@ -203,8 +230,12 @@ async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, 
 async def search_bottle_prices(
     name: str, settings: Settings, *, size: str | None = None
 ) -> tuple[dict[str, float], list[dict[str, str]], str]:
-    if not settings.openai_api_key:
-        return {}, [], "unavailable"
-    from bourbonbook.openai_provider import search_prices
+    if settings.analysis_provider == "openai":
+        from bourbonbook.openai_provider import search_prices
 
-    return await search_prices(name, settings, size=size)
+        return await search_prices(name, settings, size=size)
+    if settings.analysis_provider == "ollama":
+        from bourbonbook.ollama_search import search_prices
+
+        return await search_prices(name, settings, size=size)
+    return {}, [], "unavailable"

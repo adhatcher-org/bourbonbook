@@ -37,6 +37,7 @@ class Settings:
     qdrant_api_key: str | None = None
     qdrant_price_collection: str = "bourbonbook_prices"
     analysis_provider: str = "ollama"
+    ollama_api_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.5"
     public_base_url: str = "http://localhost:8000"
@@ -111,6 +112,7 @@ class Settings:
             ),
             catalog_import_poll_seconds=float(get("CATALOG_IMPORT_POLL_SECONDS", "1")),
             analysis_provider=get("ANALYSIS_PROVIDER", "ollama").strip().lower(),
+            ollama_api_key=get("OLLAMA_API_KEY") or None,
             openai_api_key=get("OPENAI_API_KEY") or None,
             openai_model=get("OPENAI_MODEL", "gpt-5.5"),
             public_base_url=get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),

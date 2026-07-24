@@ -288,6 +288,107 @@ def test_qdrant_match_reuses_a_fresh_local_catalog_price(tmp_path: Path, monkeyp
             assert bottle.msrp == 59.99
 
 
+def test_force_refresh_reuses_a_stale_cached_local_price(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            cached = CatalogPrice(
+                product_key="stale bourbon",
+                size_key="750ml",
+                msrp=39.99,
+                title="Local catalog",
+                url="https://example.com/stale",
+                checked_at=datetime.now(UTC) - timedelta(days=200),
+            )
+            session.add(cached)
+            session.flush()
+            bottle = Bottle(owner_id=owner.id, name="Stale Bourbon", size="750ml")
+            session.add(bottle)
+            session.flush()
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError(
+                    "force=True should still reuse a stale local catalog price before the web"
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+            assert (
+                asyncio.run(refresh_prices(session, bottle, app.state.settings, force=True))
+                == "cached"
+            )
+            assert bottle.msrp == 39.99
+
+
+def test_force_refresh_still_reuses_fresh_local_data(tmp_path: Path, monkeypatch) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+
+            async def unexpected_lookup(*args, **kwargs):
+                raise AssertionError(
+                    "force=True should still reuse fresh local catalog/Qdrant data before the web"
+                )
+
+            monkeypatch.setattr("bourbonbook.main.search_bottle_prices", unexpected_lookup)
+
+            fresh_cached = CatalogPrice(
+                product_key="fresh cached bourbon",
+                size_key="750ml",
+                msrp=44.99,
+                title="Local catalog",
+                url="https://example.com/fresh-cached",
+            )
+            session.add(fresh_cached)
+            session.flush()
+            cached_bottle = Bottle(owner_id=owner.id, name="Fresh Cached Bourbon", size="750ml")
+            session.add(cached_bottle)
+            session.flush()
+            assert (
+                asyncio.run(refresh_prices(session, cached_bottle, app.state.settings, force=True))
+                == "cached"
+            )
+            assert cached_bottle.msrp == 44.99
+
+            qdrant_price = CatalogPrice(
+                product_key="fresh qdrant bourbon whiskey limited",
+                size_key="750ml",
+                msrp=59.99,
+                title="Local catalog",
+                url="https://example.com/fresh-qdrant",
+            )
+            session.add(qdrant_price)
+            session.flush()
+            qdrant_bottle = Bottle(
+                owner_id=owner.id, name="Fresh Qdrant Bourbon Whiskey", size="750ml"
+            )
+            session.add(qdrant_bottle)
+            session.flush()
+
+            class FakePriceIndex:
+                async def find(self, product_key, size_key):
+                    return PriceMatch(catalog_price_id=qdrant_price.id, score=1.0)
+
+            assert (
+                asyncio.run(
+                    refresh_prices(
+                        session,
+                        qdrant_bottle,
+                        app.state.settings,
+                        force=True,
+                        price_index=FakePriceIndex(),
+                    )
+                )
+                == "local_match"
+            )
+            assert qdrant_bottle.msrp == 59.99
+
+
 def test_analysis_does_not_accept_an_inferred_msrp() -> None:
     bottle = Bottle(name="Example", msrp=49.99)
 
@@ -295,6 +396,15 @@ def test_analysis_does_not_accept_an_inferred_msrp() -> None:
 
     assert bottle.msrp == 49.99
     assert bottle.brand == "Example Brand"
+
+
+def test_analysis_accepts_verified_catalog_msrp_when_allowed() -> None:
+    bottle = Bottle(name="Example")
+
+    apply_analysis(bottle, {"msrp": 69.99, "brand": "New Riff"}, allow_msrp=True)
+
+    assert bottle.msrp == 69.99
+    assert bottle.brand == "New Riff"
 
 
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:

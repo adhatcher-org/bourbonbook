@@ -27,7 +27,7 @@ def result(returncode: int, output: str = "") -> subprocess.CompletedProcess[str
 
 def test_dockerfile_base_images_extracts_current_external_images() -> None:
     assert dockerfile_base_images(ROOT / "Dockerfile") == [
-        "docker.io/astral/uv:0.11.28",
+        "docker.io/astral/uv:0.11.29",
         "python:3.14-slim",
     ]
 
@@ -85,9 +85,9 @@ def test_transient_pull_retries_with_backoff_then_builds_once() -> None:
     assert outcome.returncode == 0
     assert delays == [30, 60]
     assert runner.commands == [
-        ("docker", "pull", "docker.io/astral/uv:0.11.28"),
-        ("docker", "pull", "docker.io/astral/uv:0.11.28"),
-        ("docker", "pull", "docker.io/astral/uv:0.11.28"),
+        ("docker", "pull", "docker.io/astral/uv:0.11.29"),
+        ("docker", "pull", "docker.io/astral/uv:0.11.29"),
+        ("docker", "pull", "docker.io/astral/uv:0.11.29"),
         ("docker", "pull", "python:3.14-slim"),
         ("docker", "build", "--pull=false", "--tag", "test-image:test", "."),
     ]
@@ -124,7 +124,7 @@ def test_non_transient_pull_failure_does_not_retry_or_sleep() -> None:
 
     assert outcome.returncode == 1
     assert delays == []
-    assert runner.commands == [("docker", "pull", "docker.io/astral/uv:0.11.28")]
+    assert runner.commands == [("docker", "pull", "docker.io/astral/uv:0.11.29")]
 
 
 def test_build_failure_is_returned_once_without_retry_even_with_timeout_text() -> None:

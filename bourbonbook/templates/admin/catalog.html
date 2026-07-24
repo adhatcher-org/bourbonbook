@@ -1,6 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Catalog · Bourbon Book{% endblock %}
 {% block page %}
+<style>
+  /* Catalog table column widths */
+  .catalog-price-table { table-layout: fixed; }
+  .catalog-price-table th:nth-child(1),
+  .catalog-price-table td:nth-child(1) { width: 50px; }
+  .catalog-price-table th:nth-child(2),
+  .catalog-price-table td:nth-child(2) { width: auto; min-width: 250px; }
+  .catalog-price-table th:nth-child(3),
+  .catalog-price-table td:nth-child(3) { width: 80px; }
+  .catalog-price-table th:nth-child(4),
+  .catalog-price-table td:nth-child(4) { width: 70px; }
+  .catalog-price-table th:nth-child(5),
+  .catalog-price-table td:nth-child(5) { width: 110px; }
+
+  .catalog-name-input { width: 100%; }
+  .catalog-price-input { width: 100%; }
+</style>
 {% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page admin-page">
   <section class="collection-head"><div><p class="eyebrow">Administration</p><h1>Price catalog</h1><p class="muted">{{ total }} bottle{{ '' if total == 1 else 's' }} in the shared local catalog.</p></div></section>

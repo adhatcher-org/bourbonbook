@@ -106,18 +106,29 @@ def validate_catalog_uploads(
             try:
                 with fitz.open(stream=content, filetype="pdf") as document:
                     page_count = document.page_count
-                    for page in document:
-                        _validate_pdf_render_dimensions(
-                            page,
-                            max_pixels=settings.catalog_import_max_pdf_render_pixels,
-                            max_dimension=settings.catalog_import_max_pdf_render_dimension,
-                        )
+                    for page_index, page in enumerate(document, start=1):
+                        try:
+                            _validate_pdf_render_dimensions(
+                                page,
+                                max_pixels=settings.catalog_import_max_pdf_render_pixels,
+                                max_dimension=settings.catalog_import_max_pdf_render_dimension,
+                            )
+                        except CatalogInputLimitError as e:
+                            raise CatalogInputLimitError(f"Page {page_index}: {str(e)}") from e
             except CatalogInputLimitError as exc:
                 raise HTTPException(
-                    status_code=413, detail="Catalog PDF exceeds the allowed render dimensions."
+                    status_code=413, detail=str(exc)
                 ) from exc
-            except (fitz.FileDataError, RuntimeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="Please choose a valid PDF.") from exc
+            except fitz.FileDataError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="PDF file is corrupted or not a valid PDF. Please check the file."
+                ) from exc
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"PDF processing error: {str(exc)}. Try a different PDF file."
+                ) from exc
             if page_count < 1:
                 raise HTTPException(
                     status_code=400, detail="PDF files must contain at least one page."
@@ -144,16 +155,33 @@ def validate_catalog_uploads(
                         image.verify()
             except CatalogInputLimitError as exc:
                 raise HTTPException(
-                    status_code=413, detail="Catalog image exceeds the allowed dimensions."
+                    status_code=413, detail=str(exc)
                 ) from exc
-            except (
-                Image.DecompressionBombError,
-                Image.DecompressionBombWarning,
-                UnidentifiedImageError,
-                OSError,
-            ) as exc:
+            except Image.DecompressionBombError as exc:
                 raise HTTPException(
-                    status_code=400, detail="Please choose a valid catalog image."
+                    status_code=400,
+                    detail="Image is too large or complex (potential decompression bomb). "
+                    "Try a smaller or simpler image, or increase CATALOG_IMPORT_MAX_IMAGE_PIXELS "
+                    "and CATALOG_IMPORT_MAX_IMAGE_DIMENSION in your config."
+                ) from exc
+            except Image.DecompressionBombWarning as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Image is unusually large. Try a smaller image, or increase "
+                    "CATALOG_IMPORT_MAX_IMAGE_PIXELS and CATALOG_IMPORT_MAX_IMAGE_DIMENSION."
+                ) from exc
+            except UnidentifiedImageError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File is not a valid PNG or JPEG image. Please check the file format."
+                ) from exc
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Unable to read image file: {str(exc)}. "
+                        "Ensure the file is not corrupted."
+                    )
                 ) from exc
         staged.append(StagedCatalogFile(extension=extension, content=content))
     return staged
@@ -175,8 +203,27 @@ def validate_catalog_pdf_render_dimensions(
 
 def _validate_image_dimensions(image: Image.Image, *, max_pixels: int, max_dimension: int) -> None:
     width, height = image.size
-    if width > max_dimension or height > max_dimension or width * height > max_pixels:
-        raise CatalogInputLimitError("catalog image dimensions exceed configured limit")
+    total_pixels = width * height
+
+    # max_dimension = 0 disables the dimension check
+    if max_dimension > 0:
+        if width > max_dimension:
+            raise CatalogInputLimitError(
+                f"Image width {width}px exceeds max {max_dimension}px. "
+                f"Set CATALOG_IMPORT_MAX_IMAGE_DIMENSION to at least {width} in your config."
+            )
+        if height > max_dimension:
+            raise CatalogInputLimitError(
+                f"Image height {height}px exceeds max {max_dimension}px. "
+                f"Set CATALOG_IMPORT_MAX_IMAGE_DIMENSION to at least {height} in your config."
+            )
+
+    # max_pixels = 0 disables the pixel count check
+    if max_pixels > 0 and total_pixels > max_pixels:
+        raise CatalogInputLimitError(
+            f"Image total pixels {total_pixels:,} ({width}x{height}) exceeds max {max_pixels:,}. "
+            f"Set CATALOG_IMPORT_MAX_IMAGE_PIXELS to at least {total_pixels:,} in your config."
+        )
 
 
 def _validate_pdf_render_dimensions(
@@ -185,10 +232,34 @@ def _validate_pdf_render_dimensions(
     bounds = page.bound()
     width = int(bounds.width * PDF_RENDER_SCALE + 0.999999)
     height = int(bounds.height * PDF_RENDER_SCALE + 0.999999)
+    total_pixels = width * height
+
     if width < 1 or height < 1:
-        raise CatalogInputLimitError("catalog PDF page has invalid dimensions")
-    if width > max_dimension or height > max_dimension or width * height > max_pixels:
-        raise CatalogInputLimitError("catalog PDF render dimensions exceed configured limit")
+        raise CatalogInputLimitError(
+            f"PDF page has invalid dimensions: {width}x{height}px. "
+            "The page may be blank or corrupted."
+        )
+
+    # max_dimension = 0 disables the dimension check
+    if max_dimension > 0:
+        if width > max_dimension:
+            raise CatalogInputLimitError(
+                f"PDF page width {width}px exceeds max {max_dimension}px. "
+                f"Set CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION to at least {width} in your config."
+            )
+        if height > max_dimension:
+            raise CatalogInputLimitError(
+                f"PDF page height {height}px exceeds max {max_dimension}px. "
+                f"Set CATALOG_IMPORT_MAX_PDF_RENDER_DIMENSION to at least {height} in your config."
+            )
+
+    # max_pixels = 0 disables the pixel count check
+    if max_pixels > 0 and total_pixels > max_pixels:
+        raise CatalogInputLimitError(
+            f"PDF page render size {total_pixels:,} pixels "
+            f"({width}x{height}px) exceeds max {max_pixels:,}. "
+            f"Set CATALOG_IMPORT_MAX_PDF_RENDER_PIXELS to at least {total_pixels:,} in your config."
+        )
 
 
 def stage_catalog_uploads(

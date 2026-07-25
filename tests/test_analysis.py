@@ -7,6 +7,7 @@ from bourbonbook.analysis import (
     analyze_bottle_name,
     enrich_from_verified_catalog,
     merge_analysis,
+    normalize_analysis,
     search_bottle_prices,
 )
 from bourbonbook.config import Settings
@@ -129,3 +130,56 @@ def test_analyze_bottle_name_returns_verified_catalog_msrp(tmp_path) -> None:
 
     assert status == "verified"
     assert values["msrp"] == 69.99
+
+
+def test_normalize_analysis_derives_missing_abv_from_proof() -> None:
+    values = normalize_analysis({"proof": 90})
+
+    assert values["abv"] == 45.0
+
+
+def test_normalize_analysis_derives_missing_proof_from_abv() -> None:
+    values = normalize_analysis({"abv": 45.0})
+
+    assert values["proof"] == 90.0
+
+
+def test_normalize_analysis_resolves_a_disagreeing_proof_and_abv_to_the_higher_reading() -> None:
+    values = normalize_analysis({"proof": 90, "abv": 43.0})
+
+    assert values["proof"] == 90.0
+    assert values["abv"] == 45.0
+
+
+def test_normalize_analysis_leaves_a_consistent_proof_and_abv_untouched() -> None:
+    values = normalize_analysis({"proof": 107.0, "abv": 53.5})
+
+    assert values["proof"] == 107.0
+    assert values["abv"] == 53.5
+
+
+def test_normalize_analysis_reconciles_proof_and_abv_even_without_a_fill_level() -> None:
+    """Proof/ABV reconciliation must not be skipped just because fill_level is absent,
+    which is the normal case for a typed-name lookup rather than a photo."""
+    values = normalize_analysis({"proof": 90})
+
+    assert values["abv"] == 45.0
+    assert "fill_level" not in values
+
+
+def test_normalize_analysis_snaps_size_to_the_nearest_standard_bottle() -> None:
+    values = normalize_analysis({"size": "751ml"})
+
+    assert values["size"] == "750ml"
+
+
+def test_normalize_analysis_converts_size_units_before_snapping() -> None:
+    values = normalize_analysis({"size": "1L"})
+
+    assert values["size"] == "1000ml"
+
+
+def test_normalize_analysis_leaves_a_non_standard_size_untouched() -> None:
+    values = normalize_analysis({"size": "620ml"})
+
+    assert values["size"] == "620ml"

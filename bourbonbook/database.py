@@ -19,10 +19,15 @@ def create_database_engine(database_url: str) -> Engine:
     if engine.dialect.name == "sqlite":
 
         @event.listens_for(engine, "connect")
-        def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+        def configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
             cursor = dbapi_connection.cursor()
             try:
                 cursor.execute("PRAGMA foreign_keys=ON")
+                # WAL lets readers and a writer proceed concurrently instead of the default
+                # rollback journal's exclusive lock; busy_timeout retries briefly instead of
+                # raising "database is locked" the instant two writers overlap.
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=5000")
             finally:
                 cursor.close()
 

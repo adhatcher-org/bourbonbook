@@ -545,6 +545,21 @@ def test_rejects_bad_csrf(tmp_path: Path) -> None:
         assert response.status_code == 403
 
 
+def test_new_bottle_page_schedules_a_vision_model_warm_up(tmp_path: Path, monkeypatch) -> None:
+    calls: list[object] = []
+
+    async def fake_warm(settings):
+        calls.append(settings)
+
+    monkeypatch.setattr("bourbonbook.main.warm_analysis_model", fake_warm)
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        client.get("/bottles/new")
+
+    assert calls == [app.state.settings]
+
+
 def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     async def fake_analysis(photo, settings):
         return (

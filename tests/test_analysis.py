@@ -9,6 +9,7 @@ from bourbonbook.analysis import (
     merge_analysis,
     normalize_analysis,
     search_bottle_prices,
+    warm_analysis_model,
 )
 from bourbonbook.config import Settings
 
@@ -102,6 +103,23 @@ def test_unknown_price_provider_is_unavailable(tmp_path) -> None:
     settings = settings_for(tmp_path, "other")
 
     assert asyncio.run(search_bottle_prices("Bottle", settings)) == ({}, [], "unavailable")
+
+
+def test_warm_analysis_model_only_dispatches_for_ollama(tmp_path, monkeypatch) -> None:
+    calls: list[object] = []
+
+    async def fake_warm(settings):
+        calls.append(settings)
+
+    monkeypatch.setattr("bourbonbook.ollama.warm_vision_model", fake_warm)
+
+    ollama_settings = settings_for(tmp_path, "ollama")
+    asyncio.run(warm_analysis_model(ollama_settings))
+    assert calls == [ollama_settings]
+
+    asyncio.run(warm_analysis_model(settings_for(tmp_path, "openai")))
+    asyncio.run(warm_analysis_model(settings_for(tmp_path, "other")))
+    assert calls == [ollama_settings]
 
 
 def test_partial_ollama_photo_analysis_refines_with_text_model_only(tmp_path, monkeypatch) -> None:

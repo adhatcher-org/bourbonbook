@@ -17,6 +17,7 @@ from bourbonbook.benchmark_cli import (
     compare_reports,
     ensure_local_benchmark_settings,
     export_fixture,
+    fill_level_mean_absolute_error,
     json_digest,
     load_fixture,
     local_benchmark_settings,
@@ -669,6 +670,22 @@ def test_strict_identity_size_and_legacy_report_policy() -> None:
     assert "current benchmark v2" in " ".join(compare_reports(legacy, legacy)["failures"])
 
 
+def test_fill_level_mean_absolute_error_measures_ordinal_distance_not_bucket_match() -> None:
+    """A 40-vs-50 miss and a 10-vs-100 miss both score 0 on accuracy; MAE tells them apart."""
+    close_miss = [{"expected": 50, "actual": 40}]
+    far_miss = [{"expected": 100, "actual": 10}]
+
+    assert fill_level_mean_absolute_error(close_miss) == 10.0
+    assert fill_level_mean_absolute_error(far_miss) == 90.0
+    assert fill_level_mean_absolute_error([{"expected": 50, "actual": 45}, far_miss[0]]) == 47.5
+
+
+def test_fill_level_mean_absolute_error_ignores_unscoreable_comparisons() -> None:
+    assert fill_level_mean_absolute_error([]) is None
+    assert fill_level_mean_absolute_error([{"expected": None, "actual": 40}]) is None
+    assert fill_level_mean_absolute_error([{"match": False}]) is None
+
+
 def test_summarize_and_compare_reports_cover_regressions() -> None:
     samples = [
         {
@@ -681,7 +698,7 @@ def test_summarize_and_compare_reports_cover_regressions() -> None:
                 "abv": {"match": True},
                 "size": {"match": True},
                 "status": {"match": True},
-                "fill_level": {"match": True},
+                "fill_level": {"expected": 100, "actual": 100, "match": True},
             },
         },
         {
@@ -694,17 +711,19 @@ def test_summarize_and_compare_reports_cover_regressions() -> None:
                 "abv": {"match": False},
                 "size": {"match": False},
                 "status": {"match": False},
-                "fill_level": {"match": False},
+                "fill_level": {"expected": 100, "actual": 70, "match": False},
             },
         },
     ]
-    summary = summarize(samples, list(benchmark_cli.CRITICAL_FIELDS))
+    summary = summarize(samples, list(benchmark_cli.CRITICAL_FIELDS["photo"]))
     assert summary["requests"] == 2
     assert summary["successes"] == 1
     assert summary["p50_ms"] == 120.0
     assert summary["p95_ms"] == 138.0
     assert summary["overall_accuracy"] == 0.5
     assert summary["fields"]["name"]["scored"] == 2
+    assert "mae" not in summary["fields"]["name"]
+    assert summary["fields"]["fill_level"]["mae"] == 15.0
 
     photo_summary = report(p50=100, p95=120, accuracy=1.0)["operations"]["photo"]["summary"]
     baseline = {

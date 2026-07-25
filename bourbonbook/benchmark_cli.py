@@ -232,9 +232,25 @@ def percentile(values: list[float], percent: float) -> float | None:
     return round(ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower), 2)
 
 
+def fill_level_mean_absolute_error(comparisons: list[dict[str, Any]]) -> float | None:
+    """Mean absolute error in fill-level percentage points, not a 3-bucket accuracy score.
+
+    Being one bucket off (40% vs 50%) is a materially different failure than being three
+    buckets off (10% vs 100%); a flat match/no-match accuracy collapses that distinction to
+    the same 0.
+    """
+    errors: list[float] = []
+    for item in comparisons:
+        expected_number = as_number(item.get("expected"))
+        actual_number = as_number(item.get("actual"))
+        if expected_number is not None and actual_number is not None:
+            errors.append(abs(expected_number - actual_number))
+    return round(sum(errors) / len(errors), 2) if errors else None
+
+
 def summarize(samples: list[dict[str, Any]], fields: list[str]) -> dict[str, Any]:
     timings = [sample["duration_ms"] for sample in samples]
-    field_summary: dict[str, dict[str, int | float]] = {}
+    field_summary: dict[str, dict[str, int | float | None]] = {}
     for field in fields:
         comparisons = [
             sample["comparisons"][field] for sample in samples if field in sample["comparisons"]
@@ -246,6 +262,8 @@ def summarize(samples: list[dict[str, Any]], fields: list[str]) -> dict[str, Any
             "matched": matched,
             "accuracy": round(matched / scored, 4) if scored else 0.0,
         }
+        if field == "fill_level":
+            field_summary[field]["mae"] = fill_level_mean_absolute_error(comparisons)
     scored = sum(item["scored"] for item in field_summary.values())
     matched = sum(item["matched"] for item in field_summary.values())
     return {

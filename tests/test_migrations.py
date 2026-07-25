@@ -268,3 +268,18 @@ def test_sqlite_connections_enforce_foreign_keys(tmp_path: Path) -> None:
             )
     finally:
         database.engine.dispose()
+
+
+def test_sqlite_connections_use_wal_and_a_busy_timeout(tmp_path: Path) -> None:
+    """WAL lets a reader and a writer overlap instead of the default journal's exclusive
+    lock, and busy_timeout retries briefly instead of instantly raising 'database is locked'
+    when two writers do collide."""
+    settings = migration_settings(tmp_path)
+    bootstrap_database(settings)
+    database = Database(settings)
+    try:
+        with database.engine.connect() as connection:
+            assert connection.execute(text("PRAGMA journal_mode")).scalar_one() == "wal"
+            assert connection.execute(text("PRAGMA busy_timeout")).scalar_one() == 5000
+    finally:
+        database.engine.dispose()

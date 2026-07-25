@@ -243,6 +243,10 @@ async def _request_provider_analysis(
         from bourbonbook.ollama import request_analysis
 
         return await request_analysis(prompt, settings, photo)
+    if settings.analysis_provider == "vllm":
+        from bourbonbook.vllm_provider import request_analysis
+
+        return await request_analysis(prompt, settings, photo)
     return {}, "unavailable"
 
 

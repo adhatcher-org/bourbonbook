@@ -40,6 +40,11 @@ class Settings:
     ollama_api_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.5"
+    vllm_base_url: str | None = None
+    vllm_model: str | None = None
+    vllm_api_key: str | None = None
+    vllm_min_pixels: int | None = None
+    vllm_max_pixels: int | None = None
     public_base_url: str = "http://localhost:8000"
     email_delivery_mode: str = "capture"
     smtp_host: str | None = None
@@ -115,6 +120,11 @@ class Settings:
             ollama_api_key=get("OLLAMA_API_KEY") or None,
             openai_api_key=get("OPENAI_API_KEY") or None,
             openai_model=get("OPENAI_MODEL", "gpt-5.5"),
+            vllm_base_url=get("VLLM_BASE_URL", "").rstrip("/") or None,
+            vllm_model=get("VLLM_MODEL") or None,
+            vllm_api_key=get("VLLM_API_KEY") or None,
+            vllm_min_pixels=int(get("VLLM_MIN_PIXELS")) if get("VLLM_MIN_PIXELS") else None,
+            vllm_max_pixels=int(get("VLLM_MAX_PIXELS")) if get("VLLM_MAX_PIXELS") else None,
             public_base_url=get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
             email_delivery_mode=get("EMAIL_DELIVERY_MODE", "capture").lower(),
             smtp_host=get("SMTP_HOST") or None,

@@ -6,7 +6,12 @@ import httpx
 
 from bourbonbook import ollama
 from bourbonbook.config import Settings
-from bourbonbook.ollama import analyze_bottle_name, normalize_analysis, request_analysis
+from bourbonbook.ollama import (
+    analyze_bottle_name,
+    normalize_analysis,
+    request_analysis,
+    warm_vision_model,
+)
 from bourbonbook.provider_clients import reset_shared_ollama_client, set_shared_ollama_client
 
 
@@ -182,6 +187,83 @@ def test_ollama_connection_failures_log_safe_actionable_context(tmp_path, monkey
     assert extra["failure_kind"] == "connect_error"
     assert extra["connection_reason"] == "connection_refused"
     assert extra["endpoint_host"] == "ollama.internal"
+
+
+def test_warm_vision_model_loads_the_configured_vision_model_without_a_prompt(
+    tmp_path, monkeypatch
+) -> None:
+    requests: list[dict] = []
+
+    class RecordingClient(FakeClient):
+        async def post(self, url: str, json: dict) -> FakeResponse:
+            requests.append({"url": url, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", RecordingClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.test",
+        ollama_model="legacy-model",
+        ollama_vision_model="vision-model",
+        max_users=1,
+        max_upload_mb=1,
+    )
+
+    asyncio.run(warm_vision_model(settings))
+
+    assert requests == [
+        {"url": "http://ollama.test/api/generate", "json": {"model": "vision-model"}}
+    ]
+
+
+def test_warm_vision_model_falls_back_to_the_legacy_model(tmp_path, monkeypatch) -> None:
+    requests: list[dict] = []
+
+    class RecordingClient(FakeClient):
+        async def post(self, url: str, json: dict) -> FakeResponse:
+            requests.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", RecordingClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.test",
+        ollama_model="legacy-model",
+        max_users=1,
+        max_upload_mb=1,
+    )
+
+    asyncio.run(warm_vision_model(settings))
+
+    assert requests == [{"model": "legacy-model"}]
+
+
+def test_warm_vision_model_failure_is_non_fatal(tmp_path, monkeypatch) -> None:
+    class FailingClient(FakeClient):
+        async def post(self, url: str, json: dict) -> FakeResponse:
+            raise httpx.ConnectError(
+                "[Errno 111] Connection refused", request=httpx.Request("POST", url)
+            )
+
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", FailingClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.test",
+        ollama_model="legacy-model",
+        max_users=1,
+        max_upload_mb=1,
+    )
+
+    asyncio.run(warm_vision_model(settings))
 
 
 def test_shared_ollama_client_is_reused(tmp_path, monkeypatch) -> None:

@@ -204,3 +204,36 @@ async def analyze_bottle(photo: Path, settings: Settings) -> tuple[dict[str, Any
 
 async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, Any], str]:
     return await request_analysis(name_prompt(name), settings)
+
+
+async def warm_vision_model(settings: Settings) -> None:
+    """Best-effort pre-load of the vision model into Ollama's memory.
+
+    Ollama evicts a model after its keep_alive window and pays a real reload cost (seconds
+    to tens of seconds for a large model) on the next request. A bare {"model": ...} POST to
+    /api/generate, with no prompt, loads the model without running inference. Calling this as
+    soon as a user opens the add-bottle form hides that load time behind the time they spend
+    filling out the rest of the form, instead of behind their photo upload. Failures here are
+    silently non-fatal: this is a latency optimization, not a required step.
+    """
+    model = settings.ollama_vision_model or settings.ollama_model
+    try:
+        async with ollama_client_session() as client:
+            response = await client.post(
+                f"{settings.ollama_url}/api/generate", json={"model": model}
+            )
+            response.raise_for_status()
+        log_event(
+            logger,
+            logging.INFO,
+            "ollama_model_warmed",
+            "Ollama vision model warm-up requested",
+            model=model,
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        logger.info(
+            "Ollama model warm-up failed (non-fatal): model=%(model)s "
+            "exception_type=%(exception_type)s",
+            {"model": model, "exception_type": exc.__class__.__name__},
+            extra={"event": "ollama_model_warm_failed", "model": model},
+        )

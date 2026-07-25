@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -34,7 +34,12 @@ from bourbonbook.admin_config import (
     settings_values,
     write_managed_config,
 )
-from bourbonbook.analysis import analyze_bottle, analyze_bottle_name, search_bottle_prices
+from bourbonbook.analysis import (
+    analyze_bottle,
+    analyze_bottle_name,
+    search_bottle_prices,
+    warm_analysis_model,
+)
 from bourbonbook.auth import (
     authenticate_session,
     csrf_token,
@@ -2478,9 +2483,10 @@ def register_routes(app: FastAPI) -> None:
         return RedirectResponse("/shopping-list", 303)
 
     @app.get("/bottles/new", response_class=HTMLResponse)
-    def new_bottle(request: Request) -> Response:
+    def new_bottle(request: Request, background_tasks: BackgroundTasks) -> Response:
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
+            background_tasks.add_task(warm_analysis_model, app.state.settings)
             return render(request, "new.html", user=user)
 
     @app.post("/bottles")

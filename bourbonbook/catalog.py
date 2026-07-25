@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any
+
+FUZZY_MATCH_THRESHOLD = 0.82
 
 
 def normalize_product_name(value: str) -> str:
@@ -171,13 +174,32 @@ VERIFIED_PRODUCTS: dict[str, dict[str, Any]] = {
 }
 
 
+def fuzzy_verified_product(normalized: str) -> dict[str, Any] | None:
+    """Fall back to the closest catalog alias when no exact match is present.
+
+    OCR and model-transcribed names occasionally drop or mangle a character; a plain
+    substring/equality check would reject an otherwise-obvious match. The threshold is the
+    same one already validated against cross-product collisions for price matching.
+    """
+    best_score = 0.0
+    best_values: dict[str, Any] | None = None
+    for product in VERIFIED_PRODUCTS.values():
+        for alias in product["aliases"]:
+            score = SequenceMatcher(None, normalized, normalize_product_name(alias)).ratio()
+            if score > best_score:
+                best_score, best_values = score, product["values"]
+    return dict(best_values) if best_score >= FUZZY_MATCH_THRESHOLD and best_values else None
+
+
 def verified_product(name: str) -> dict[str, Any] | None:
     normalized = normalize_product_name(name)
+    if not normalized:
+        return None
     for product in VERIFIED_PRODUCTS.values():
         aliases = {normalize_product_name(alias) for alias in product["aliases"]}
         if normalized in aliases:
             return dict(product["values"])
-    return None
+    return fuzzy_verified_product(normalized)
 
 
 def verified_product_from_text(text: str) -> dict[str, Any] | None:

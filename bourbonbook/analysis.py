@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from bourbonbook.catalog import verified_product, verified_product_from_text
 from bourbonbook.config import Settings
+
+STANDARD_SIZES_ML = (50, 200, 375, 750, 1000, 1750)
+SIZE_SNAP_TOLERANCE_ML = 15
+PROOF_ABV_TOLERANCE = 1.0
+SIZE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*(ml|millilit(?:er|re)s?|cl|l|lit(?:er|re)s?)")
 
 FIELDS = (
     "name",
@@ -154,8 +160,61 @@ Known values:
 Return only JSON with these keys: {", ".join(OUTPUT_FIELDS)}."""
 
 
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+
+
+def reconcile_proof_and_abv(normalized: dict[str, Any]) -> None:
+    """Derive a missing proof/ABV from the other, or resolve a mismatch deterministically.
+
+    Proof is defined as exactly 2 x ABV, so the two fields never need to be independently
+    guessed once one is known. When both are present but disagree beyond OCR/transcription
+    noise, trust whichever value implies the higher proof: a dropped or misread digit is far
+    more likely to understate a value than invent an extra one.
+    """
+    proof, abv = _as_float(normalized.get("proof")), _as_float(normalized.get("abv"))
+    if proof is None and abv is None:
+        return
+    if proof is None:
+        normalized["proof"] = round(abv * 2, 1)
+        return
+    if abv is None:
+        normalized["abv"] = round(proof / 2, 1)
+        return
+    if abs(proof - abv * 2) > PROOF_ABV_TOLERANCE:
+        winning_proof = max(proof, abv * 2)
+        normalized["proof"] = round(winning_proof, 1)
+        normalized["abv"] = round(winning_proof / 2, 1)
+
+
+def snap_size(normalized: dict[str, Any]) -> None:
+    """Snap a recognized bottle size to the nearest standard US spirits size.
+
+    Sizes are read from a printed volume, not estimated, so small transcription noise around
+    an obviously-standard bottle (e.g. 751ml) should resolve to the real packaged size (750ml)
+    rather than being scored/stored as a one-off value.
+    """
+    size = normalized.get("size")
+    if not size:
+        return
+    match = SIZE_PATTERN.fullmatch(str(size).strip().lower())
+    if not match:
+        return
+    amount, unit = float(match.group(1)), match.group(2)
+    multiplier = 1 if unit.startswith(("ml", "millil")) else 10 if unit == "cl" else 1000
+    millilitres = amount * multiplier
+    nearest = min(STANDARD_SIZES_ML, key=lambda candidate: abs(candidate - millilitres))
+    if abs(nearest - millilitres) <= SIZE_SNAP_TOLERANCE_ML:
+        normalized["size"] = f"{nearest}ml"
+
+
 def normalize_analysis(values: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
+    reconcile_proof_and_abv(normalized)
+    snap_size(normalized)
     fill_level = normalized.get("fill_level")
     try:
         fill = max(0, min(100, int(round(float(str(fill_level).rstrip("%"))))))

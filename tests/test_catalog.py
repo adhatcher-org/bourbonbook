@@ -1,4 +1,4 @@
-from bourbonbook.catalog import verified_product, verified_product_from_text
+from bourbonbook.catalog import fuzzy_verified_product, verified_product, verified_product_from_text
 
 
 def test_weller_full_proof_verified_values() -> None:
@@ -71,3 +71,28 @@ def test_new_riff_8_year_verified_values() -> None:
     assert product["distilled_by"] == "New Riff Distilling"
     assert product["mash_bill"] == "65% Corn, 30% Rye, 5% Malted Barley"
     assert product["size"] == "750ml"
+
+
+def test_verified_product_falls_back_to_a_close_fuzzy_match() -> None:
+    product = verified_product("Weller Antiqu 107")
+
+    assert product
+    assert product["name"] == "Weller Antique 107"
+
+
+def test_verified_product_does_not_fuzzy_match_an_unrelated_name() -> None:
+    assert verified_product("An entirely unknown bottle") is None
+
+
+def test_verified_product_does_not_fuzzy_match_a_partial_name() -> None:
+    assert verified_product("Weller Special") is None
+
+
+def test_verified_product_rejects_an_empty_name() -> None:
+    assert verified_product("") is None
+    assert verified_product_from_text("") is None
+
+
+def test_fuzzy_verified_product_respects_the_normalized_threshold() -> None:
+    assert fuzzy_verified_product("weller antiqu 107") is not None
+    assert fuzzy_verified_product("completely different words entirely") is None

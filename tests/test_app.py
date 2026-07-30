@@ -407,6 +407,30 @@ def test_analysis_accepts_verified_catalog_msrp_when_allowed() -> None:
     assert bottle.brand == "New Riff"
 
 
+def test_apply_analysis_drops_a_noisy_non_numeric_proof_instead_of_raising() -> None:
+    bottle = Bottle(name="Example", proof=90.0)
+
+    apply_analysis(bottle, {"proof": "107 proof"})
+
+    assert bottle.proof is None
+
+
+def test_apply_analysis_drops_a_list_value_for_a_numeric_field_instead_of_raising() -> None:
+    bottle = Bottle(name="Example", proof=90.0)
+
+    apply_analysis(bottle, {"proof": ["107"]})
+
+    assert bottle.proof is None
+
+
+def test_apply_analysis_still_parses_a_clean_numeric_proof() -> None:
+    bottle = Bottle(name="Example")
+
+    apply_analysis(bottle, {"proof": "107"})
+
+    assert bottle.proof == 107.0
+
+
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
     client, _ = make_client(tmp_path)
     with client:
@@ -574,6 +598,10 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
             "complete",
         )
 
+    # The initial POST /bottles now runs analysis in the background pipeline, which imports
+    # analyze_bottle directly rather than through bourbonbook.main; the later /analyze endpoint
+    # calls stay synchronous in bourbonbook.main, so both call sites need patching.
+    monkeypatch.setattr("bourbonbook.bottle_processing.analyze_bottle", fake_analysis)
     monkeypatch.setattr("bourbonbook.main.analyze_bottle", fake_analysis)
     client, _ = make_client(tmp_path)
     with client:
@@ -596,10 +624,18 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
             files={"photo": ("bottle.png", image_bytes.getvalue(), "image/png")},
             follow_redirects=False,
         )
-        assert response.status_code == 303
-        assert response.headers["location"].endswith("/edit?new=1")
+        assert response.status_code == 202
+        bottle_id = response.json()["bottle_id"]
 
-        edit_page = client.get(response.headers["location"])
+        status_response = client.get(f"/bottles/{bottle_id}/status")
+        assert status_response.status_code == 200
+        assert status_response.json() == {
+            "stage": "complete",
+            "analysis_status": "verified",
+            "done": True,
+        }
+
+        edit_page = client.get(f"/bottles/{bottle_id}/edit?new=1")
         assert "Verified bottle details applied" in edit_page.text
         assert "Eagle Rare 10 Year" in edit_page.text
         assert '<input type="file" name="photo" accept="image/*">' in edit_page.text
@@ -607,7 +643,6 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert 'name="quantity" type="number" min="1" max="99" value="3"' in edit_page.text
         initial_photo = re.search(r'/media/([^"?]+)', edit_page.text)
         assert initial_photo
-        bottle_id = int(response.headers["location"].split("/")[2])
 
         replacement_bytes = BytesIO()
         Image.new("RGB", (100, 180), "#582a72").save(replacement_bytes, "JPEG")
@@ -698,6 +733,74 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
         assert photo_match.group(1) != refreshed_photo.group(1)
         assert client.get(f"/media/{refreshed_photo.group(1)}").status_code == 404
         assert client.get("/media/" + photo_match.group(1)).status_code == 200
+
+
+def test_add_bottle_pipeline_failure_leaves_a_usable_bottle_row(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def failing_analysis(photo, settings):
+        raise RuntimeError("ollama exploded")
+
+    monkeypatch.setattr("bourbonbook.bottle_processing.analyze_bottle", failing_analysis)
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        new_page = client.get("/bottles/new")
+        image_bytes = BytesIO()
+        Image.new("RGB", (120, 200), "#7a3f1c").save(image_bytes, "PNG")
+        response = client.post(
+            "/bottles",
+            data={
+                "csrf_token": csrf(new_page),
+                "purchase_price": "45.00",
+                "quantity": "1",
+            },
+            files={"photo": ("bottle.png", image_bytes.getvalue(), "image/png")},
+            follow_redirects=False,
+        )
+        assert response.status_code == 202
+        bottle_id = response.json()["bottle_id"]
+
+        status_response = client.get(f"/bottles/{bottle_id}/status")
+        assert status_response.status_code == 200
+        assert status_response.json() == {
+            "stage": "failed",
+            "analysis_status": "manual",
+            "done": True,
+        }
+
+        with app.state.database.session_factory() as session:
+            bottle = session.get(Bottle, bottle_id)
+            assert bottle is not None
+            assert bottle.processing_stage == "failed"
+            assert bottle.processing_error and "ollama exploded" in bottle.processing_error
+
+        edit_page = client.get(f"/bottles/{bottle_id}/edit?new=1")
+        assert edit_page.status_code == 200
+
+
+def test_collection_page_excludes_a_bottle_still_mid_pipeline(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            in_progress = Bottle(
+                owner_id=owner.id,
+                name="Still Processing Bottle",
+                processing_stage="analyzing",
+            )
+            finished = Bottle(
+                owner_id=owner.id,
+                name="Finished Bottle",
+                processing_stage="complete",
+            )
+            session.add_all([in_progress, finished])
+            session.commit()
+
+        collection_page = client.get("/")
+        assert "Still Processing Bottle" not in collection_page.text
+        assert "Finished Bottle" in collection_page.text
 
 
 def test_analysis_redirect_rejects_untrusted_provider_status(tmp_path: Path, monkeypatch) -> None:

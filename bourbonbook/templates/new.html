@@ -24,6 +24,7 @@
     <div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Local by design.</strong> The photo is sent only to the Ollama service configured on your network.</p></div>
     <button class="primary-button wide" type="submit" data-submit-button>Analyze bottle <span aria-hidden="true">✦</span></button>
   </form>
-  <div class="analyzing" data-analyzing hidden role="status" aria-live="polite"><span class="spinner"></span><strong>Reading the label…</strong><small>This can take a minute on the first run.</small></div>
+  <div class="analyzing" data-analyzing hidden role="status" aria-live="polite"><span class="spinner"></span><strong data-analyzing-text>Analyzing bottle…</strong><small>This can take a minute on the first run.</small></div>
+  <div class="form-alert" data-add-bottle-error hidden role="alert"></div>
 </main>
 {% endblock %}

@@ -37,6 +37,8 @@ addopts = "-q"
 pythonpath = ["."]
 filterwarnings = [
   "error::starlette.exceptions.StarletteDeprecationWarning",
+  "ignore:builtin type Swig.* has no __module__ attribute:DeprecationWarning",
+  "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
 ]
 
 [tool.ruff]

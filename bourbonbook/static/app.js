@@ -30,9 +30,68 @@ if (photoInput) {
 
 const uploadForm = document.querySelector('[data-upload-form]');
 if (uploadForm) {
-  uploadForm.addEventListener('submit', () => {
+  const STAGE_TEXT = {
+    queued: 'Starting…',
+    enriching: 'Getting bottle details…',
+    pricing: 'Checking pricing…',
+  };
+  // analyzing is a single opaque Ollama call with no real sub-progress, and it dominates the
+  // total wait (~24s of a ~25s pipeline) — without this, the UI shows the same static text for
+  // nearly the entire process. Tiers are elapsed time since analysis started, not a fake fixed
+  // timer independent of the poll loop.
+  const ANALYZING_TEXT_BY_ELAPSED_MS = [
+    [0, 'Analyzing bottle…'],
+    [8000, 'Reading the label…'],
+    [16000, 'Almost there…'],
+  ];
+  const analyzingText = (elapsedMs) =>
+    ANALYZING_TEXT_BY_ELAPSED_MS.reduce(
+      (text, [atMs, label]) => (elapsedMs >= atMs ? label : text),
+      ANALYZING_TEXT_BY_ELAPSED_MS[0][1]
+    );
+  const POLL_MS = 1200;
+  const POLL_TIMEOUT_MS = 120_000;
+
+  uploadForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorBox = document.querySelector('[data-add-bottle-error]');
+    errorBox.hidden = true;
     document.querySelector('[data-analyzing]').hidden = false;
     document.querySelector('[data-submit-button]').disabled = true;
+    const submittedAt = Date.now();
+    try {
+      const response = await fetch('/bottles', {
+        method: 'POST',
+        body: new FormData(uploadForm),
+        credentials: 'same-origin',
+      });
+      if (!response.ok) throw new Error('add_bottle_failed');
+      const { bottle_id: bottleId } = await response.json();
+      const deadline = Date.now() + POLL_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        const statusResponse = await fetch(`/bottles/${bottleId}/status`, { credentials: 'same-origin' });
+        if (!statusResponse.ok) throw new Error('status_failed');
+        const status = await statusResponse.json();
+        const text = document.querySelector('[data-analyzing-text]');
+        if (text) {
+          text.textContent =
+            status.stage === 'analyzing'
+              ? analyzingText(Date.now() - submittedAt)
+              : STAGE_TEXT[status.stage] || text.textContent;
+        }
+        if (status.done) {
+          window.location.href = `/bottles/${bottleId}/edit?new=1`;
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+      throw new Error('timed_out');
+    } catch {
+      document.querySelector('[data-analyzing]').hidden = true;
+      document.querySelector('[data-submit-button]').disabled = false;
+      errorBox.textContent = 'Something went wrong saving this bottle. Please try again.';
+      errorBox.hidden = false;
+    }
   });
 }
 

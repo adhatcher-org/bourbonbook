@@ -98,6 +98,8 @@ class Bottle(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     photo_name: Mapped[str | None] = mapped_column(String(80))
     analysis_status: Mapped[str] = mapped_column(String(30), default="manual")
+    processing_stage: Mapped[str] = mapped_column(String(20), default="idle", index=True)
+    processing_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, onupdate=now_utc

@@ -164,6 +164,13 @@ def _as_float(value: Any) -> float | None:
     try:
         return float(str(value).strip().rstrip("%"))
     except (TypeError, ValueError):
+        pass
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    if match is None:
+        return None
+    try:
+        return float(match.group())
+    except ValueError:
         return None
 
 

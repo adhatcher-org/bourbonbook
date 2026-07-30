@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
@@ -83,6 +84,34 @@ def test_identity_configuration_boundaries(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         settings_for(tmp_path, **changes).validate_identity()
+
+
+def test_ollama_url_https_on_private_host_warns_without_raising(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="bourbonbook.config")
+    settings = settings_for(
+        tmp_path,
+        analysis_provider="ollama",
+        ollama_url="https://192.168.50.4:11434",
+    )
+
+    settings.validate_identity()
+
+    record = caplog.records[-1]
+    assert record.event == "ollama_url_https_on_private_host"
+    assert record.endpoint_host == "192.168.50.4"
+
+
+def test_ollama_url_https_on_public_hostname_does_not_warn(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="bourbonbook.config")
+    settings = settings_for(
+        tmp_path,
+        analysis_provider="ollama",
+        ollama_url="https://ollama.aaronhatcher.com",
+    )
+
+    settings.validate_identity()
+
+    assert not caplog.records
 
 
 def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: Path) -> None:

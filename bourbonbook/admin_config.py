@@ -34,7 +34,7 @@ CONFIG_FIELDS = (
         "Analysis provider",
         "Analysis",
         "choice",
-        ("ollama", "openai", "vllm"),
+        ("ollama", "openai"),
     ),
     ConfigField("OLLAMA_URL", "ollama_url", "Ollama URL", "Analysis", "url"),
     ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama fallback model", "Analysis"),
@@ -66,31 +66,6 @@ CONFIG_FIELDS = (
         "OPENAI_API_KEY", "openai_api_key", "OpenAI API key", "Analysis", secret=True, optional=True
     ),
     ConfigField("OPENAI_MODEL", "openai_model", "OpenAI model", "Analysis"),
-    ConfigField(
-        "VLLM_BASE_URL", "vllm_base_url", "vLLM base URL", "Analysis", "url", optional=True
-    ),
-    ConfigField("VLLM_MODEL", "vllm_model", "vLLM model", "Analysis", optional=True),
-    ConfigField(
-        "VLLM_API_KEY", "vllm_api_key", "vLLM API key", "Analysis", secret=True, optional=True
-    ),
-    ConfigField(
-        "VLLM_MIN_PIXELS",
-        "vllm_min_pixels",
-        "vLLM minimum image pixels",
-        "Analysis",
-        "integer",
-        minimum=1,
-        optional=True,
-    ),
-    ConfigField(
-        "VLLM_MAX_PIXELS",
-        "vllm_max_pixels",
-        "vLLM maximum image pixels",
-        "Analysis",
-        "integer",
-        minimum=1,
-        optional=True,
-    ),
     ConfigField("MAX_USERS", "max_users", "Maximum users", "Application", "integer", minimum=1),
     ConfigField(
         "MAX_UPLOAD_MB",
@@ -329,10 +304,6 @@ def parse_config_form(
     candidate.validate_identity()
     if candidate.analysis_provider == "openai" and not candidate.openai_api_key:
         raise ValueError("OPENAI_API_KEY is required when ANALYSIS_PROVIDER=openai")
-    if candidate.analysis_provider == "vllm" and not (
-        candidate.vllm_base_url and candidate.vllm_model
-    ):
-        raise ValueError("VLLM_BASE_URL and VLLM_MODEL are required when ANALYSIS_PROVIDER=vllm")
     return values, candidate
 
 

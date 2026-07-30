@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import ipaddress
+import logging
 import os
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,11 +45,6 @@ class Settings:
     ollama_api_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.5"
-    vllm_base_url: str | None = None
-    vllm_model: str | None = None
-    vllm_api_key: str | None = None
-    vllm_min_pixels: int | None = None
-    vllm_max_pixels: int | None = None
     public_base_url: str = "http://localhost:8000"
     email_delivery_mode: str = "capture"
     smtp_host: str | None = None
@@ -120,11 +120,6 @@ class Settings:
             ollama_api_key=get("OLLAMA_API_KEY") or None,
             openai_api_key=get("OPENAI_API_KEY") or None,
             openai_model=get("OPENAI_MODEL", "gpt-5.5"),
-            vllm_base_url=get("VLLM_BASE_URL", "").rstrip("/") or None,
-            vllm_model=get("VLLM_MODEL") or None,
-            vllm_api_key=get("VLLM_API_KEY") or None,
-            vllm_min_pixels=int(get("VLLM_MIN_PIXELS")) if get("VLLM_MIN_PIXELS") else None,
-            vllm_max_pixels=int(get("VLLM_MAX_PIXELS")) if get("VLLM_MAX_PIXELS") else None,
             public_base_url=get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
             email_delivery_mode=get("EMAIL_DELIVERY_MODE", "capture").lower(),
             smtp_host=get("SMTP_HOST") or None,
@@ -205,3 +200,29 @@ class Settings:
             raise ValueError("CATALOG_IMPORT_LEASE_HEARTBEAT_SECONDS must be within the lease")
         if self.catalog_import_poll_seconds <= 0:
             raise ValueError("CATALOG_IMPORT_POLL_SECONDS must be positive")
+        self._warn_if_ollama_url_is_https_on_a_private_host()
+
+    def _warn_if_ollama_url_is_https_on_a_private_host(self) -> None:
+        if self.analysis_provider != "ollama":
+            return
+        endpoint = urlsplit(self.ollama_url)
+        if endpoint.scheme != "https" or not endpoint.hostname:
+            return
+        try:
+            is_private = ipaddress.ip_address(endpoint.hostname).is_private
+        except ValueError:
+            is_private = False  # not a bare IP; assume a real (proxied) hostname
+        if not is_private:
+            return
+        from bourbonbook.logging_config import log_event
+
+        log_event(
+            logger,
+            logging.WARNING,
+            "ollama_url_https_on_private_host",
+            "OLLAMA_URL uses https:// on a private/LAN address; Ollama's built-in server "
+            "does not serve TLS directly, so this likely needs http:// instead (unless a "
+            "TLS-terminating proxy sits in front of it)",
+            endpoint_scheme=endpoint.scheme,
+            endpoint_host=endpoint.hostname,
+        )

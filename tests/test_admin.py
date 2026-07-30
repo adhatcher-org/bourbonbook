@@ -1352,64 +1352,6 @@ def test_admin_config_rejects_invalid_choices_without_writing(tmp_path: Path) ->
         assert not (tmp_path / ".env").exists()
 
 
-def test_admin_can_save_vllm_configuration(tmp_path: Path, monkeypatch) -> None:
-    client, app = make_client(tmp_path)
-    with client:
-        register(client, "admin")
-        promote_admin(app, "admin@example.com")
-        page = client.get("/admin/config")
-
-        response = client.post(
-            "/admin/config",
-            data={
-                **config_form(
-                    app,
-                    ANALYSIS_PROVIDER="vllm",
-                    VLLM_BASE_URL="http://vllm.test:8000/v1",
-                    VLLM_MODEL="Qwen/Qwen2.5-VL-7B-Instruct",
-                    VLLM_MIN_PIXELS="200",
-                    VLLM_MAX_PIXELS="4000",
-                ),
-                "csrf_token": csrf(page),
-            },
-        )
-        assert response.status_code == 200
-        assert "Configuration saved" in response.text
-
-    stored = read_managed_config(tmp_path / ".env")
-    assert stored["ANALYSIS_PROVIDER"] == "vllm"
-    assert stored["VLLM_BASE_URL"] == "http://vllm.test:8000/v1"
-    assert stored["VLLM_MODEL"] == "Qwen/Qwen2.5-VL-7B-Instruct"
-
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    reloaded = Settings.from_env()
-    assert reloaded.analysis_provider == "vllm"
-    assert reloaded.vllm_base_url == "http://vllm.test:8000/v1"
-    assert reloaded.vllm_model == "Qwen/Qwen2.5-VL-7B-Instruct"
-    assert reloaded.vllm_min_pixels == 200
-    assert reloaded.vllm_max_pixels == 4000
-
-
-def test_admin_config_requires_vllm_base_url_and_model(tmp_path: Path) -> None:
-    client, app = make_client(tmp_path)
-    with client:
-        register(client, "admin")
-        promote_admin(app, "admin@example.com")
-        page = client.get("/admin/config")
-
-        response = client.post(
-            "/admin/config",
-            data={
-                **config_form(app, ANALYSIS_PROVIDER="vllm"),
-                "csrf_token": csrf(page),
-            },
-        )
-
-        assert response.status_code == 400
-        assert "VLLM_BASE_URL and VLLM_MODEL are required" in response.text
-        assert not (tmp_path / ".env").exists()
-
-
 def test_admin_config_cannot_override_deployment_data_directory(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:

@@ -17,7 +17,6 @@ warehouse: H
 status: Opened
 fill_level: 40%
 msrp: $65
-secondary_price: $150
 
 ## Blantons Straight from the barrel
 
@@ -37,7 +36,6 @@ floor: 46
 status: Unopened
 fill_level: 100%
 msrp: $110
-secondary_price: $260
 
 
 ## Weller Full Proof
@@ -56,7 +54,6 @@ warehouse: H
 status: Unopened
 fill_level: 100%
 msrp: $59.99
-secondary_price: $450
 
 ## Weller Antique 107
 
@@ -73,7 +70,6 @@ size: 750ml
 status: Unopened
 fill_level: 100%
 msrp: $50
-secondary_price: $250
 
 ## Weller Special Reserve
 
@@ -90,7 +86,6 @@ size: 750ml
 status: Opened
 fill_level: 40%
 msrp: $23.99
-secondary_price: $50
 
 ## Eagle Rare
 
@@ -106,7 +101,6 @@ size: 750ml
 status: Opened
 fill_level: 50%
 msrp: $49.99
-secondary_price: $100
 
 ## EH Taylor Small Batch
 
@@ -123,7 +117,6 @@ size: 750ml
 status: Opened
 fill_level: 80%
 msrp: $54.99
-secondary_price: $110
 
 ## Buffalo Trace
 
@@ -139,4 +132,3 @@ size: 750ml
 status: Unopened
 fill_level: 100%
 msrp: $24.99
-secondary_price: $30

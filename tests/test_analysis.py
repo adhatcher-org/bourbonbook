@@ -54,22 +54,6 @@ def test_unknown_provider_is_unavailable(tmp_path) -> None:
     assert result == {}
 
 
-def test_vllm_provider_is_selected(tmp_path, monkeypatch) -> None:
-    async def fake_request(prompt, settings, photo=None):
-        assert "Example Bourbon" in prompt
-        assert photo is None
-        return {"proof": 114}, "complete"
-
-    monkeypatch.setattr("bourbonbook.vllm_provider.request_analysis", fake_request)
-
-    result, status = asyncio.run(
-        analyze_bottle_name("Example Bourbon", settings_for(tmp_path, "vllm"))
-    )
-
-    assert status == "complete"
-    assert result == {"name": "Example Bourbon", "proof": 114}
-
-
 def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) -> None:
     settings = settings_for(tmp_path, "ollama")
 

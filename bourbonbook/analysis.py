@@ -243,10 +243,6 @@ async def _request_provider_analysis(
         from bourbonbook.ollama import request_analysis
 
         return await request_analysis(prompt, settings, photo)
-    if settings.analysis_provider == "vllm":
-        from bourbonbook.vllm_provider import request_analysis
-
-        return await request_analysis(prompt, settings, photo)
     return {}, "unavailable"
 
 
@@ -307,8 +303,8 @@ async def search_bottle_prices(
 async def warm_analysis_model(settings: Settings) -> None:
     """Best-effort pre-load of the vision model for providers with a real load cost.
 
-    Only Ollama evicts and reloads a model between requests; OpenAI is a remote API and vLLM
-    keeps its model resident for the life of the server, so neither has a load step to hide.
+    Only Ollama evicts and reloads a model between requests; OpenAI is a remote API with no
+    load step to hide.
     """
     if settings.analysis_provider == "ollama":
         from bourbonbook.ollama import warm_vision_model

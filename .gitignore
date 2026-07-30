@@ -15,3 +15,6 @@ data/
 AmericanWhiskey*.png
 new-riff*
 orbstack/
+.playwright-mcp/
+*/__pycache__/
+.claude/settings.local.json

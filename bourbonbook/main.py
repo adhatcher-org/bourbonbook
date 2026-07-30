@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openai import AsyncOpenAI
+from PIL import Image as PILImage
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
@@ -51,6 +52,12 @@ from bourbonbook.auth import (
     validate_password,
     verify_csrf,
     verify_password,
+)
+from bourbonbook.bottle_processing import (
+    IN_PROGRESS_STAGES,
+    BottleProcessingStage,
+    recover_orphaned_bottle_processing,
+    run_add_bottle_pipeline,
 )
 from bourbonbook.catalog import catalog_price_key, verified_product
 from bourbonbook.catalog_import_worker import CatalogImportWorker
@@ -163,6 +170,14 @@ def enforce_catalog_import_request_size(request: Request, maximum_bytes: int) ->
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    # Pillow's own decompression-bomb ceiling (default ~89.5M px) sits below our
+    # configured catalog-import limits and fires before our own checks run, so
+    # raise it to match — otherwise CATALOG_IMPORT_MAX_IMAGE_PIXELS/_DIMENSION
+    # have no effect above Pillow's default.
+    PILImage.MAX_IMAGE_PIXELS = max(
+        settings.catalog_import_max_image_pixels,
+        settings.catalog_import_max_pdf_render_pixels,
+    )
     configure_logging(settings)
     database = Database(settings)
     usage_recorder = AIUsageRecorder(
@@ -189,6 +204,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.qdrant_price_index = QdrantPriceIndex(settings)
             stack.push_async_callback(app.state.qdrant_price_index.close)
             bootstrap_database(settings)
+            with database.session_factory() as session:
+                recovered_bottles = recover_orphaned_bottle_processing(session)
+                session.commit()
+            if recovered_bottles:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "bottle_processing_recovered",
+                    "Recovered orphaned add-bottle background jobs",
+                    recovered=recovered_bottles,
+                )
             with database.session_factory() as session:
                 cleanup_expired_catalog_import_sources(settings, session)
             await app.state.qdrant_price_index.ensure_collection()
@@ -389,11 +415,20 @@ def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
         setattr(bottle, field, parse_float(form.get(field)))
 
 
+NUMERIC_ANALYSIS_FIELDS = {"proof", "abv", "msrp"}
+
+
 def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool = False) -> None:
     for key, value in analysis.items():
         if key == "msrp" and not allow_msrp:
             continue
-        if hasattr(bottle, key) and value is not None:
+        if not hasattr(bottle, key) or value is None:
+            continue
+        if key in NUMERIC_ANALYSIS_FIELDS:
+            # Vision-model output is untyped free text; never let a non-numeric value
+            # (e.g. "107 proof") reach a Float column and blow up the commit.
+            setattr(bottle, key, parse_float(value))
+        else:
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
@@ -722,6 +757,7 @@ def collection_statement(user: User, q: str = "", sort: str = "name"):
         Bottle.owner_id == user.id,
         Bottle.status != "Empty",
         Bottle.on_shopping_list.is_(False),
+        Bottle.processing_stage.notin_([stage.value for stage in IN_PROGRESS_STAGES]),
     )
     if q.strip():
         term = f"%{q.strip()}%"
@@ -2489,9 +2525,10 @@ def register_routes(app: FastAPI) -> None:
             background_tasks.add_task(warm_analysis_model, app.state.settings)
             return render(request, "new.html", user=user)
 
-    @app.post("/bottles")
+    @app.post("/bottles", status_code=202)
     async def add_bottle(
         request: Request,
+        background_tasks: BackgroundTasks,
         photo: Annotated[UploadFile, File()],
         purchase_price: Annotated[str, Form()] = "",
         quantity: Annotated[str, Form()] = "1",
@@ -2503,44 +2540,46 @@ def register_routes(app: FastAPI) -> None:
             photo_name = await save_photo(
                 photo, app.state.settings.data_dir / "uploads", app.state.settings.max_upload_mb
             )
-            with usage_context(app.state.usage_recorder, user.id):
-                analysis, analysis_status = await analyze_bottle(
-                    app.state.settings.data_dir / "uploads" / photo_name, app.state.settings
-                )
-            analysis_status = normalized_analysis_status(analysis_status)
             bottle = Bottle(
                 owner_id=user.id,
                 photo_name=photo_name,
-                analysis_status=analysis_status,
+                purchase_price=parse_float(purchase_price),
+                quantity=parse_int(quantity, 1, 1, 99),
+                processing_stage=BottleProcessingStage.QUEUED.value,
             )
-            apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")
-            bottle.purchase_price = parse_float(purchase_price)
-            bottle.quantity = parse_int(quantity, 1, 1, 99)
-            if bottle.name and bottle.name != "Untitled bottle":
-                enrichment, enrichment_status = await enrich_bottle_by_name(
-                    bottle, app.state.settings, allow_provider=False
-                )
-                apply_analysis(bottle, enrichment, allow_msrp=enrichment_status == "verified")
-                if enrichment:
-                    bottle.analysis_status = normalized_analysis_status(enrichment_status)
-                user_price_applied = await apply_user_purchase_price(
-                    session, bottle, app.state.qdrant_price_index
-                )
-                if not user_price_applied:
-                    with usage_context(app.state.usage_recorder, user.id):
-                        price_status = await refresh_prices(
-                            session,
-                            bottle,
-                            app.state.settings,
-                            price_index=app.state.qdrant_price_index,
-                        )
-                else:
-                    price_status = "user_price"
-                if price_status == "complete":
-                    bottle.analysis_status = price_status
             session.add(bottle)
             session.commit()
-            return RedirectResponse(f"/bottles/{bottle.id}/edit?new=1", 303)
+            bottle_id = bottle.id
+            user_id = user.id
+        background_tasks.add_task(
+            run_add_bottle_pipeline,
+            app.state.database.session_factory,
+            bottle_id,
+            app.state.settings,
+            app.state.qdrant_price_index,
+            app.state.usage_recorder,
+            user_id,
+        )
+        return JSONResponse({"bottle_id": bottle_id}, status_code=202)
+
+    @app.get("/bottles/{bottle_id}/status")
+    def bottle_processing_status(request: Request, bottle_id: int) -> Response:
+        with app.state.database.session_factory() as session:
+            user = require_verified_user(request, session)
+            bottle = owned_bottle(session, user, bottle_id)
+            if not bottle:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            done = bottle.processing_stage in {
+                BottleProcessingStage.COMPLETE.value,
+                BottleProcessingStage.FAILED.value,
+            }
+            return JSONResponse(
+                {
+                    "stage": bottle.processing_stage,
+                    "analysis_status": bottle.analysis_status,
+                    "done": done,
+                }
+            )
 
     @app.get("/bottles/{bottle_id}", response_class=HTMLResponse)
     def bottle_detail(request: Request, bottle_id: int) -> Response:

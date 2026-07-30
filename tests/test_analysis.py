@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 
 from bourbonbook.analysis import (
+    _as_float,
     analyze_bottle,
     analyze_bottle_name,
     enrich_from_verified_catalog,
     merge_analysis,
     normalize_analysis,
+    reconcile_proof_and_abv,
     search_bottle_prices,
     warm_analysis_model,
 )
@@ -183,6 +185,28 @@ def test_normalize_analysis_reconciles_proof_and_abv_even_without_a_fill_level()
 
     assert values["abv"] == 45.0
     assert "fill_level" not in values
+
+
+def test_as_float_extracts_the_numeric_token_from_a_noisy_string() -> None:
+    assert _as_float("107 proof") == 107.0
+    assert _as_float("53.5% ABV") == 53.5
+
+
+def test_as_float_returns_none_for_clearly_non_numeric_input() -> None:
+    assert _as_float("not a number") is None
+    assert _as_float(None) is None
+    assert _as_float("") is None
+
+
+def test_reconcile_proof_and_abv_derives_a_clean_proof_from_a_noisy_abv_string() -> None:
+    """A noisy ABV like "53.5% ABV" used to fail to parse at all (the old ``_as_float``
+    only stripped a trailing "%"), so reconcile bailed out entirely. With the regex fix,
+    it still parses and a clean proof can be derived from it."""
+    normalized = {"abv": "53.5% ABV"}
+
+    reconcile_proof_and_abv(normalized)
+
+    assert normalized["proof"] == 107.0
 
 
 def test_normalize_analysis_snaps_size_to_the_nearest_standard_bottle() -> None:

@@ -1,5 +1,62 @@
 # Bourbon Book Agent Instructions
 
+## Agent roster
+
+The same three roles are defined for both runtimes. Codex reads `.codex/agents/*.toml`; Claude Code
+reads `.claude/agents/*.md`. Names below are equivalent — use whichever form your runtime expects.
+
+| Role | Codex | Claude Code |
+|------|-------|-------------|
+| Design, planning, and architecture docs | — | `senior-architect` |
+| Independent design critique | — | `architecture-critic` |
+| Implementation | (primary session) | `senior-engineer` |
+| Independent code review | `bourbonbook_reviewer` | `bourbonbook-reviewer` |
+| PR authoring and CI triage | — | `pr-manager` |
+| PR validation and approval | `pr_validator` | `pr-validator` |
+| End-to-end UX and accessibility testing | — | `vux-tester` |
+
+Claude Code also has `e2e-bottle-tester`, invoked only by the `e2e-bottle-test` skill.
+
+`vux-tester` and `e2e-bottle-tester` are complementary and not interchangeable: `vux-tester` sweeps
+whole journeys, viewports, accessibility, and console health across the app; `e2e-bottle-test`
+measures photo-analysis field accuracy against `tests/images/ImageTestValidation.md`. Neither treats
+vision-model output variance as a defect.
+
+Both require the Playwright MCP server defined in `.mcp.json`. `pr-manager` and `pr-validator` use
+the GitHub MCP when it is connected and authorized, and fall back to `gh` with `GH_TOKEN` mapped
+from `GITHUB_PAT`. Approval remains a commit-pinned `gh api` call in `pr-validator` only.
+
+### Design-to-delivery chain
+
+For any change that is not a small, obvious fix:
+
+1. `senior-architect` reviews the request against the existing design and the current code, then
+   drafts a proposal: problem, constraints, options, recommendation, design, phasing, documentation
+   impact, risks.
+2. `architecture-critic` reviews that proposal read-only and returns `APPROVE` or `REVISE` with
+   evidence-backed findings.
+3. The architect revises and re-submits. **Maximum three critic rounds** — if a substantive
+   disagreement survives round three, the architect writes up both positions and escalates to Aaron
+   rather than proceeding or looping.
+4. On `APPROVE`, the architect records the work as a new Action Tracker row plus an action section
+   in `docs/adr/plan.md`, and writes a new ADR with `Status: Proposed` if a decision was made.
+5. **GATE: Aaron approves the plan.** The architect presents the recorded plan — acceptance
+   criteria, work items, verification methods, migrations, documentation impact, risks — and stops.
+   No implementation begins without an explicit go-ahead. This is the last cheap place to change
+   direction; everything after it costs code.
+6. The architect hands the action ID, branch, and dependencies to `senior-engineer`, which
+   implements it under the `$roadmap-action` skill and the PR sequence below.
+7. Once both commit-bound verdicts pass, `pr-manager` writes the PR body, opens the draft, triages
+   CI check failures, routes review comments, and updates the tracker row. `pr-validator` in remote
+   approval mode is the only agent permitted to approve, and nothing may merge automatically —
+   a merge to the default branch triggers `docker-publish.yml` and tags a release.
+7. **After the change merges**, the architect updates the as-built documentation named in the plan's
+   documentation-impact list (HLDD, C1–C4 views, `docs/architecture/components/`) and flips any new
+   ADR from `Proposed` to `Accepted`.
+
+The as-built invariant: `docs/architecture/` describes only what is checked in today. Proposed work
+lives in `docs/adr/plan.md` and in `Proposed` ADRs — never in the HLDD or the C-views.
+
 ## Project skills
 
 Use the available skill that matches the work:
@@ -14,6 +71,9 @@ Use the available skill that matches the work:
 
 Use multiple skills when a change crosses these boundaries. Follow each selected skill's workflow
 in addition to the review and validation sequence below.
+
+These four skills are defined in `.claude/skills/<name>/SKILL.md`. `.claude/skills/e2e-bottle-test`
+additionally drives a live browser through the real photo-upload pipeline; run it only when asked.
 
 ## PR review, validation, and approval
 

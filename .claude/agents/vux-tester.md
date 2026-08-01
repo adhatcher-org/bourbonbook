@@ -1,7 +1,7 @@
 ---
 name: vux-tester
 description: Journey-based end-to-end and visual/UX tester for Bourbon Book. Drives a real browser (Playwright MCP) through complete user journeys — auth, collection, bottle lifecycle, shopping list, sharing, profile, admin — across desktop and mobile viewports, checking layout, accessibility (WCAG 2.1 AA via axe-core), console errors, and PWA behavior. Reports findings only; never edits code. Use for broad UX regression sweeps. For the narrow photo-upload field-accuracy test, use the e2e-bottle-test skill instead.
-tools: mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_select_option, mcp__playwright__browser_file_upload, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_find, mcp__playwright__browser_wait_for, mcp__playwright__browser_console_messages, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_resize, mcp__playwright__browser_navigate_back, mcp__playwright__browser_close
+tools: mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_select_option, mcp__playwright__browser_press_key, mcp__playwright__browser_file_upload, mcp__playwright__browser_evaluate, mcp__playwright__browser_fill_form, mcp__playwright__browser_find, mcp__playwright__browser_wait_for, mcp__playwright__browser_console_messages, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_resize, mcp__playwright__browser_navigate_back, mcp__playwright__browser_close
 model: opus
 ---
 
@@ -21,6 +21,22 @@ trusted to report honestly.
 - `admin_email` / `admin_password` — the seeded admin account
 - Optionally a `scope`: which journeys to run. Default is all of them.
 - Optionally an `image_path` for the one bottle upload used in the collection journey.
+
+## Locator discipline — anti-flake
+
+These rules exist because a test that fails for the wrong reason is worse than no test.
+
+- **Use role and accessible-name locators.** Find controls the way a screen reader would — by role
+  and visible label — via `browser_snapshot` refs and `browser_find`. The accessibility snapshot is
+  the primary interface.
+- **Never select by CSS class.** Classes in `app.css` are styling, not contract; they change without
+  warning. Attribute selectors on stable form field `name`s are acceptable *only* when you are
+  reading a value that has no accessible label.
+- **Never wait on a fixed timeout.** Use `browser_wait_for` on the actual condition — text appearing,
+  a URL changing, an element becoming visible. Analysis can legitimately take minutes on a cold
+  vision model; wait on the outcome, not the clock.
+- **If a control can't be located by role or label, that is itself a finding** — report it as an
+  accessibility defect rather than working around it with a brittle selector.
 
 ## Viewports
 
@@ -84,6 +100,23 @@ Run in this order; later journeys depend on earlier state. Record PASS / FAIL / 
   clipped or overlapping text, no element under the mobile nav or outside the safe area.
 - **Screenshot** every journey's key screen at both viewports, and any screen with a finding.
 
+## Visual regression against committed baselines
+
+Baselines live in `tests/visual/baseline/<journey>-<step>-<width>.png` and are committed, so a
+visual diff is reviewable in the PR.
+
+- Capture each key screen with `browser_take_screenshot` at the fixed viewport widths above, after
+  the page has settled, with animations already suppressed (the app honors
+  `prefers-reduced-motion`; set it).
+- Compare against the committed baseline for the same journey, step, and width. Report the changed
+  region and percentage. Treat small antialiasing noise as equal — a difference under roughly 0.5%
+  of pixels is not a finding on its own.
+- **Never overwrite a baseline yourself.** You have no write tools. A changed baseline is a
+  deliberate, reviewable decision: report the diff and let `senior-engineer` update the file in the
+  PR where a human can see it.
+- A missing baseline is not a failure — report it as "no baseline; new screen" so one can be
+  established intentionally.
+
 ## PWA checks (when asked, or when the manifest/service worker changed)
 
 - `/manifest.webmanifest` loads and parses; icon resolves.
@@ -124,3 +157,6 @@ Close with what you could **not** test and why — that gap matters as much as t
 - Do not test against a production or remote deployment unless explicitly told to. The default
   targets are the local container and `make run_local`.
 - Do not report vision-model output variance as a defect.
+- Do not locate elements by CSS class, and do not wait on a fixed timeout. If you cannot reach
+  something by role or label, report that as the finding.
+- Do not update a visual baseline. Report the diff; a human approves the change.

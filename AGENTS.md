@@ -50,12 +50,29 @@ For any change that is not a small, obvious fix:
    CI check failures, routes review comments, and updates the tracker row. `pr-validator` in remote
    approval mode is the only agent permitted to approve, and nothing may merge automatically —
    a merge to the default branch triggers `docker-publish.yml` and tags a release.
-7. **After the change merges**, the architect updates the as-built documentation named in the plan's
+8. **After the change merges**, the architect updates the as-built documentation named in the plan's
    documentation-impact list (HLDD, C1–C4 views, `docs/architecture/components/`) and flips any new
    ADR from `Proposed` to `Accepted`.
 
 The as-built invariant: `docs/architecture/` describes only what is checked in today. Proposed work
 lives in `docs/adr/plan.md` and in `Proposed` ADRs — never in the HLDD or the C-views.
+
+### Escalation rules
+
+Every agent in the chain follows these. They exist because an agent that hits an unclear situation
+will invent a decision rather than admit ambiguity — halting is what prevents that.
+
+| Condition | Action |
+|---|---|
+| A reviewer requests changes 3× on the same artifact | Halt. Summarize both positions and escalate to Aaron. Do not start a 4th round. |
+| A CI check or local gate fails 3× on the same work item | Halt. Dump the failing logs and escalate. Do not attempt a 4th fix. |
+| The engineer wants to deviate from the plan | Stop the work item. Return to `senior-architect` for a plan amendment. Do not improvise inside the action's scope. |
+| Implementation reveals the plan is wrong or the requirement is ambiguous | Halt the work item and escalate to the architect, then to Aaron. Do not guess the intent. |
+| Architect and critic deadlock on a substantive point | Write both options into a decision-request ADR with `Status: Proposed`; Aaron picks. |
+| An agent needs a capability it has no tool for | Say so and stop. Never route around a missing tool by asking another agent to perform a restricted action. |
+
+Escalating is a successful outcome, not a failure. A halted work item with a clear question costs
+far less than a merged wrong assumption.
 
 ## Project skills
 

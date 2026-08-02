@@ -27,6 +27,11 @@ Playwright MCP browser tools and report your findings as text.
    on `/` (a successful login redirects there). If login fails, stop immediately and report it as
    a HARD FAILURE — nothing else can proceed without a session.
 
+**Locator discipline.** Prefer role and accessible-name locators via `browser_snapshot` /
+`browser_find`. Reading a field's value by its stable `name` attribute (as below) and clicking the
+`data-submit-button` hook are both fine — those are contracts. Never select by CSS class, and never
+wait on a fixed timeout: wait on the actual condition (URL change, element visible, text present).
+
 2. **For each record, in order**:
    a. `browser_navigate` to `{base_url}/bottles/new`.
    b. Read the fresh `csrf_token` value from this page (it can be regenerated per session, but

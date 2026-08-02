@@ -353,3 +353,138 @@ product name, brand, fill level, and the status derived from that fill level. Pr
 prices remain available for diagnostics but do not affect the vision score.
 
 The workflows under `.github/workflows` follow the current `adhatcher-org` patterns: pull-request tests and container builds, plus a multi-architecture GHCR publish on `main`.
+
+## Agent-assisted development workflow
+
+This repository ships a set of AI agents that divide the work of changing it: designing, critiquing,
+implementing, testing, and shepherding pull requests. They live in `.claude/agents/` (Claude Code)
+and `.codex/agents/` (Codex). `AGENTS.md` is the authoritative description; this section is the map.
+
+Two ideas hold the whole thing together. **Reviewers are separate agents with fresh context** — the
+agent that wrote a plan cannot meaningfully critique it, so critics and validators start cold and
+are read-only by tool list, not merely by instruction. And **every loop is bounded**, with a human
+decision at the two points where a wrong turn gets expensive.
+
+### The chain
+
+```mermaid
+flowchart TD
+  Intent([Intent])
+
+  subgraph PH1["1 · Requirements"]
+      RA["Requirements Analyst<br/>requirements.md"]
+      RR["Requirements Reviewer"]
+      RA --> RR
+      RR -.->|"revise · loop ≤2"| RA
+  end
+
+  GA{{"GATE A — human sign-off:<br/>scope + acceptance criteria"}}
+
+  subgraph PH2["2 · Architecture"]
+      AR["Architect<br/>ADRs · HLDD · C4 L1–L3"]
+      ARR["Architecture Reviewer<br/>must propose ≥1 alternative"]
+      AR --> ARR
+      ARR -.->|"revise · loop ≤2"| AR
+  end
+
+  GB{{"GATE B — diagrams compile in CI<br/>human approves ADRs"}}
+
+  subgraph PH3["3 · Planning"]
+      DP["Design Planner<br/>plan.md · work items W1..Wn"]
+      PR["Plan Reviewer"]
+      DP --> PR
+      PR -.->|"revise · loop ≤2"| DP
+  end
+
+  GC{{"GATE C — human approves plan<br/>last cheap place to change your mind"}}
+
+  subgraph PH4["4 · Per work item Wi"]
+      IMP["Implementer<br/>code"]
+      TE["Test Engineer<br/>unit + integration tests"]
+      CI{"CI — build · lint<br/>typecheck · tests"}
+      IMP --> TE --> CI
+      CI -.->|"fail · loop ≤3"| IMP
+  end
+
+  subgraph PH56["5 &amp; 6 · Validation, in parallel"]
+      E2E["E2E / UX Validator — Playwright MCP<br/>happy path · validation errors<br/>a11y · breakpoints · visual diff"]
+      SEC["Security Reviewer<br/>SAST · dependency audit · secrets"]
+  end
+
+  PRA["7 · PR Agent — GitHub MCP<br/>PR referencing ADRs · plan · issue"]
+  PRR["8 · PR Reviewer<br/>diff vs. plan and ADRs"]
+  GD{{"GATE D — human merge approval"}}
+  DOC["9 · Docs/Release Agent<br/>ADR status → Accepted<br/>changelog · runbook"]
+  Done([Merged and released])
+
+Intent --> RA
+RR --> GA --> AR
+ARR --> GB --> DP
+PR --> GC --> IMP
+CI -->|pass| E2E
+CI -->|pass| SEC
+E2E -.->|fail| IMP
+SEC -.->|findings| IMP
+E2E --> PRA
+SEC --> PRA
+PRA --> PRR
+PRR -.->|"request-changes · loop ≤2"| IMP
+PRR -->|approve| GD --> DOC --> Done
+```
+
+### The agents
+
+| Agent | Does | Can write? |
+| --- | --- | --- |
+| `senior-architect` | Reviews the request against the existing design, plans the change, owns ADRs and the architecture docs | Docs and plans only |
+| `architecture-critic` | Independent design review; returns `APPROVE` or `REVISE` with evidence | No |
+| `senior-engineer` | Implements one action end to end with tests, runs the local gates | Code, tests, migrations |
+| `bourbonbook-reviewer` | Independent code review bound to an exact commit | No |
+| `pr-validator` | Runs the full `make pr-review` gate; the only agent that may approve a PR | Approval only |
+| `pr-manager` | Writes the PR body, opens the draft, triages CI, updates the tracker | PR text and tracker |
+| `vux-tester` | Browser sweep of whole journeys: layout, accessibility, console health, visual diffs | No |
+| `e2e-bottle-tester` | Photo-analysis field accuracy against the image fixtures | No |
+
+Four skills carry the domain rules and are applied automatically by the agents when a change crosses
+their boundary: `roadmap-action`, `migration-change`, `pwa-visual-check`, and `provider-evaluation`.
+
+### Interacting with them
+
+Ask the architect first for anything non-trivial; it drives the rest of the chain.
+
+```text
+@senior-architect  Bottles should support a "sample/pour" status alongside
+                   unopened/opened/empty. Plan it.
+```
+
+It investigates, drafts a proposal, sends it to the critic itself, and comes back to you with a plan
+to approve. You do not need to invoke the critic by hand.
+
+```text
+@senior-engineer   Implement A03. Follow the roadmap-action skill.
+@vux-tester        Sweep the admin journeys at 390px against https://bourbonbook.orb.local
+@pr-manager        Open the draft PR for this branch.
+```
+
+Small, obvious fixes do not need the chain — ask `senior-engineer` directly. The chain earns its
+overhead when a change touches the schema, a provider, the security boundary, or the design.
+
+### What stops on its own
+
+- **Two human gates.** You approve the plan before code is written, and you merge. No agent merges;
+  a merge to `main` triggers `docker-publish.yml` and tags a release.
+- **Three-round caps** on critic revisions, CI fixes, and e2e repair cycles. Past that, the agent
+  halts and hands you both positions rather than looping.
+- **Halt on ambiguity.** If the plan turns out to be wrong mid-implementation, the engineer stops and
+  returns to the architect instead of inventing a decision.
+- **The as-built invariant.** `docs/architecture/` describes only what is checked in today. Proposed
+  work lives in `docs/adr/plan.md` and in `Proposed` ADRs.
+
+### Setup
+
+MCP servers used by the agents are declared in `.mcp.json`: **Playwright** (browser testing) and
+**Context7** (version-accurate library docs). Both run via `npx` on first use. The PR agents use the
+**GitHub MCP** when it is connected and authorized, and otherwise fall back to `gh` with `GH_TOKEN`
+mapped from `GITHUB_PAT`. Note that GitHub does not permit authors to approve their own pull
+requests, so remote approval returns `BLOCKED` when the PR author and the authenticated reviewer are
+the same account.

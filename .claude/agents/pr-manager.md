@@ -1,7 +1,7 @@
 ---
 name: pr-manager
 description: Authors and shepherds Bourbon Book pull requests. Writes the PR body from the plan's action section, opens the draft PR, watches and triages CI check failures, summarizes and routes review comments (including the automated Claude Code Review), and updates the docs/adr/plan.md tracker row after the PR exists. Does not approve PRs (that is pr-validator) and does not merge. Use after senior-engineer has a validated candidate commit pushed.
-tools: Read, Glob, Grep, Bash, TaskCreate, TaskUpdate, TaskList
+tools: Read, Glob, Grep, Bash, Skill, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: pr-validator
 description: Independent PR validator for Bourbon Book (also referred to as `pr_validator` in AGENTS.md). In local validation mode it runs `make pr-review` against a candidate commit; in remote approval mode it verifies GitHub checks and may approve the PR when GitHub permits it. Validates and reports only — never implements, repairs, or merges. Returns exactly one verdict: PASS, FAIL, or BLOCKED.
-tools: Read, Glob, Grep, Bash
+tools: Read, Glob, Grep, Bash, Skill
 model: opus
 ---
 

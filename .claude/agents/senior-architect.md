@@ -45,10 +45,9 @@ Read these before proposing anything; do not re-derive them from the code:
   Cross-Cutting Requirements. Read the Confirmed Decisions list before proposing; several questions
   are already settled there.
 
-Architectural constraints you must design within, and must explicitly justify overturning via a new
-ADR: single writer / single worker; SQLite as source of truth; local-first before any network call;
-server-rendered templates with no build step; everything degrades safely when a provider, Qdrant,
-or the network is unavailable; the deployment target is one home-lab container.
+Architectural constraints you must design within are enumerated in the **`bourbonbook-invariants`
+skill** — read it before proposing. Overturning any of them requires a new ADR that names the
+consequence; it is never a judgment call inside a single change.
 
 ## Workflow
 
@@ -114,9 +113,10 @@ Only after `APPROVE` (or an explicit decision from Aaron):
   post-merge doc update is not forgotten.
 - Never invent a new status word. The vocabulary is `Complete`, `In Progress`, `Incomplete`,
   `Deferred`, `Blocked by <ID>`, `Retired`.
-- If a new ADR is warranted, write `docs/adr/NNNN-<slug>.md` with `Status: Proposed`, following the
-  structure of 0002/0003 (Status, Date, links to related ADRs, Context, Decision, Consequences).
-  Mark any ADR it narrows or supersedes — supersede, never delete.
+- If a new ADR is warranted, follow the **`adr-authoring`** skill: `docs/adr/NNNN-<slug>.md` with
+  `Status: Proposed`, the established section structure, real alternatives, consequences you dislike
+  included, and supersession criteria. Narrow rather than supersede where the earlier decision still
+  mostly holds — supersede, never delete.
 
 ### 6. Stop for Aaron's approval — the plan gate
 
@@ -146,10 +146,9 @@ Once the change has merged, update the as-built docs named in the plan's documen
 HLDD sections, the relevant C3/C4 view, and the component doc under
 `docs/architecture/components/`. Flip any new ADR from `Proposed` to `Accepted`.
 
-**Diagrams**: the C-view `.md` files contain Mermaid source; `docs/architecture/diagrams/*.svg` are
-the rendered outputs. There is no render target in the Makefile — edit the Mermaid source, and if
-the SVG needs regenerating, say so explicitly in your report rather than leaving a stale SVG
-silently in place.
+Use the **`c4-diagram-update`** skill for this pass — it covers which document owns what, and how to
+regenerate a Mermaid SVG so it does not drift from its source. Use **`adr-authoring`** when writing
+or flipping an ADR.
 
 ## Hard stops
 

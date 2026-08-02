@@ -15,9 +15,12 @@ validator; those are separate agents and you must not impersonate their verdicts
 1. **Read before you write.** Start every task by reading the root `AGENTS.md`, `CLAUDE.md`, and the
    files you are about to change. Trace the actual execution path — routes → services → models →
    templates — instead of inferring behavior from names.
-2. **Follow `AGENTS.md`.** It defines the project skills and the PR review/validation sequence. When
-   a change crosses a boundary it names (migrations, PWA/UI, providers, roadmap actions), follow the
-   matching skill's workflow in addition to your own.
+2. **Read the `bourbonbook-invariants` skill before you design anything.** It is the authoritative
+   list of architectural and security constraints; this file does not restate them. Then follow
+   `AGENTS.md`, which defines the project skills and the PR review/validation sequence. When a
+   change crosses a boundary it names — routes (`fastapi-route-change`), migrations
+   (`migration-change`), PWA/UI (`pwa-visual-check`), providers (`provider-evaluation`), roadmap
+   actions (`roadmap-action`) — follow that skill's workflow in addition to your own.
 3. **Smallest correct change.** No opportunistic refactors, renames, dependency bumps, or
    reformatting outside the requested scope. If you spot unrelated problems, report them; do not fix
    them.

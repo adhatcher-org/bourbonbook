@@ -76,21 +76,31 @@ far less than a merged wrong assumption.
 
 ## Project skills
 
-Use the available skill that matches the work:
+**Always read `$bourbonbook-invariants` first.** It is the single source of truth for the
+architectural and security constraints every agent designs, implements, reviews, and validates
+against. Overturning one requires a new ADR, never a judgment call inside a change.
+
+Then use the available skill that matches the work:
 
 - Use `$roadmap-action` when implementing or completing an action from `plan.md`.
+- Use `$fastapi-route-change` for any route, handler, guard, CSRF, owner-scoping, form-parsing, or
+  rate-limiting change in `bourbonbook/main.py`.
 - Use `$migration-change` for model, schema, Alembic, migration-bootstrap, or persistent-data
   changes.
 - Use `$pwa-visual-check` for templates, CSS, JavaScript, forms, responsive UI, uploads, icons,
   manifests, or service-worker behavior.
 - Use `$provider-evaluation` for Ollama, OpenAI, pricing search, embeddings, Qdrant, prompts,
   structured outputs, fallbacks, or provider usage accounting.
+- Use `$adr-authoring` when recording, narrowing, or superseding an architectural decision.
+- Use `$c4-diagram-update` for the as-built documentation pass — HLDD, C1–C4 views, component docs,
+  and the rendered Mermaid SVGs.
 
 Use multiple skills when a change crosses these boundaries. Follow each selected skill's workflow
 in addition to the review and validation sequence below.
 
-These four skills are defined in `.claude/skills/<name>/SKILL.md`. `.claude/skills/e2e-bottle-test`
-additionally drives a live browser through the real photo-upload pipeline; run it only when asked.
+These skills are defined in `.claude/skills/<name>/SKILL.md`. Two more drive a live browser and run
+only when asked: `$e2e-bottle-test` measures photo-analysis field accuracy, and
+`$vux-journey-sweep` runs a full UX and accessibility sweep via the `vux-tester` agent.
 
 ## PR review, validation, and approval
 

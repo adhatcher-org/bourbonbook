@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -233,37 +233,83 @@ CONFIG_FIELDS = (
 
 SECRET_PLACEHOLDER = ""
 
+UNMANAGED_HEADER = "# Unregistered keys (preserved, not managed via UI)"
+
 
 def managed_config_path(settings: Settings) -> Path:
     return settings.data_dir / ".env"
 
 
-def read_managed_config(path: Path) -> dict[str, str]:
+def _iter_config_assignments(path: Path) -> Iterator[tuple[str, str]]:
+    """Yield ``(key, raw_value)`` for every assignment line, in file order.
+
+    Comments and blank lines are skipped. Later duplicates are yielded too, so
+    callers decide which occurrence wins.
+    """
     if not path.exists():
-        return {}
-    values: dict[str, str] = {}
+        return
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, raw_value = line.split("=", 1)
-        key = key.strip()
-        if key not in {field.key for field in CONFIG_FIELDS}:
-            continue
-        raw_value = raw_value.strip()
-        try:
-            value = json.loads(raw_value) if raw_value.startswith('"') else raw_value
-        except json.JSONDecodeError:
-            value = raw_value
-        values[key] = str(value)
-    return values
+        yield key.strip(), raw_value.strip()
+
+
+def _decode_value(raw_value: str) -> str:
+    try:
+        value = json.loads(raw_value) if raw_value.startswith('"') else raw_value
+    except json.JSONDecodeError:
+        value = raw_value
+    return str(value)
+
+
+def read_managed_config(path: Path) -> dict[str, str]:
+    """Return the values this module manages, keyed by ConfigField key.
+
+    Deliberately limited to registered keys: the result is layered over
+    ``os.environ`` by :func:`load_managed_overrides`, and unregistered keys such
+    as ``DATA_DIR`` must not be able to redirect the very path this file was read
+    from. Use :func:`unmanaged_config_entries` to see the rest.
+    """
+    managed = {field.key for field in CONFIG_FIELDS}
+    return {
+        key: _decode_value(raw_value)
+        for key, raw_value in _iter_config_assignments(path)
+        if key in managed
+    }
+
+
+def unmanaged_config_entries(path: Path) -> dict[str, str]:
+    """Return assignments no ConfigField owns, with values kept verbatim.
+
+    These are operator-maintained keys (``OLLAMA_API_KEY``, ``DEBUG``, tuning
+    knobs with no admin UI). Values are not decoded or re-encoded so that a
+    round-trip through :func:`write_managed_config` is byte-stable.
+    """
+    managed = {field.key for field in CONFIG_FIELDS}
+    entries: dict[str, str] = {}
+    for key, raw_value in _iter_config_assignments(path):
+        if key not in managed:
+            entries[key] = raw_value
+    return entries
 
 
 def write_managed_config(path: Path, values: Mapping[str, str]) -> None:
+    """Atomically rewrite the managed ``.env``, preserving unregistered keys.
+
+    The managed block is regenerated from ``values``; anything the registry does
+    not own is carried over verbatim instead of being dropped.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    preserved = unmanaged_config_entries(path)
     temporary = path.with_suffix(".tmp")
     lines = ["# Managed from Bourbon Book administration. Changes require a restart."]
     lines.extend(f"{field.key}={json.dumps(values[field.key])}" for field in CONFIG_FIELDS)
+    if preserved:
+        lines.append("")
+        lines.append(UNMANAGED_HEADER)
+        lines.extend(f"{key}={raw_value}" for key, raw_value in preserved.items())
     temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)

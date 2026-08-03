@@ -21,8 +21,9 @@ flowchart LR
   end
 
   swag[SWAG / reverse proxy]
-  ollama[Ollama]
-  openai[OpenAI web search]
+  ollama[Ollama - self-hosted vision/text]
+  ollama_cloud[Ollama Cloud web_search / web_fetch]
+  openai[OpenAI analysis + web search]
   qdrant[(Qdrant - optional)]
   smtp[SMTP relay]
   prometheus[Prometheus]
@@ -34,6 +35,7 @@ flowchart LR
   browser --> swag --> app
 
   app --> ollama
+  app --> ollama_cloud
   app --> openai
   app --> qdrant
   app --> smtp
@@ -46,11 +48,16 @@ flowchart LR
 
 - Collection users and administrators both reach the app through a browser or installed PWA.
 - SWAG or an equivalent reverse proxy terminates public HTTPS and forwards requests to the app.
-- Ollama is the local vision/text-analysis provider and also powers the offline catalog-screenshot
-  bulk-price-extraction workflow (`catalog_extract.py` / `make price-catalog-extract-screenshots`).
-- OpenAI is used for grounded bottle analysis and price research when selected; price research
-  (grounded web search) is OpenAI-only regardless of `ANALYSIS_PROVIDER` and only runs when the
-  local catalog and Qdrant have no fresh match.
+- Ollama (self-hosted, `OLLAMA_URL`) is the local vision/text-analysis provider. It also powers
+  catalog price-sheet extraction, both in-app via the admin catalog-import worker and offline via
+  `make price-catalog-extract-screenshots` — the same `catalog_extract.py` code either way.
+- **Ollama Cloud** (`https://ollama.com`) is a distinct external system, used only by
+  `ollama_search.py`: when `ANALYSIS_PROVIDER=ollama`, the model's `web_search`/`web_fetch` tool
+  calls are executed against Ollama Cloud's HTTP API with `OLLAMA_API_KEY`. Without that key,
+  Ollama-provider price search returns `unavailable` rather than falling through to OpenAI.
+- OpenAI is used for grounded bottle analysis and price research when `ANALYSIS_PROVIDER=openai`.
+  Grounded price search — from either provider — only runs when the local catalog and Qdrant have
+  no acceptable match.
 - Qdrant is an **optional** local-hash sparse-vector index (`QDRANT_URL` unset disables it
   entirely). It accelerates fuzzy product-name matching against the SQLite `catalog_prices` table;
   SQLite remains the source of truth and Qdrant is fully rebuildable from it (`make

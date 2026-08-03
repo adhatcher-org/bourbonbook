@@ -39,6 +39,8 @@ flowchart LR
   subgraph bottles["Bottle / shopping-list / sharing workflow"]
     save_photo["photos.save_photo()"]
     save_avatar["photos.save_avatar()"]
+    run_pipeline["bottle_processing.run_add_bottle_pipeline()"]
+    recover_orphans["bottle_processing.recover_orphaned_bottle_processing()"]
     analyze_bottle["analysis.analyze_bottle()"]
     analyze_name["analysis.analyze_bottle_name()"]
     search_prices["analysis.search_bottle_prices()"]
@@ -51,6 +53,22 @@ flowchart LR
     openai_request["openai_provider.request_analysis()"]
     openai_prices["openai_provider.search_prices()"]
     web_source_urls["openai_provider.web_source_urls()"]
+    ollama_prices["ollama_search.search_prices()"]
+  end
+
+  subgraph importing["Catalog import pipeline"]
+    validate_uploads["catalog_uploads.validate_catalog_uploads()"]
+    stage_uploads["catalog_uploads.stage_catalog_uploads()"]
+    cleanup_sources["catalog_uploads.cleanup_expired_catalog_import_sources()"]
+    reserve_batch["catalog_imports.reserve_catalog_import_batch()"]
+    transition["catalog_imports.transition_batch()"]
+    apply_batch["catalog_imports.apply_catalog_import_batch()"]
+    retry_batch["catalog_imports.retry_failed_catalog_import_batch()"]
+    worker["catalog_import_worker.CatalogImportWorker"]
+    claim_next["catalog_import_worker.claim_next_catalog_import()"]
+    recover_leases["catalog_import_worker.recover_expired_catalog_import_leases()"]
+    extract_files["catalog_extract.extract_catalog_files()"]
+    sync_qdrant["main.sync_applied_catalog_prices_to_qdrant()"]
   end
 
   subgraph pricing["Pricing / catalog orchestration"]
@@ -77,22 +95,26 @@ flowchart LR
     user_model["models.User"]
     bottle_model["models.Bottle"]
     catalog_model["models.CatalogPrice"]
+    import_model["models.CatalogImportBatch / Proposal"]
     usage_model["models.ApiUsage"]
   end
 
   subgraph telemetry["Telemetry"]
     recorder["observability.AIUsageRecorder"]
     observed_email["observability.ObservedEmailSender"]
+    observe_import["observability.observe_catalog_import()"]
     log_event["logging_config.log_event()"]
     metrics_response["observability.metrics_response()"]
   end
 
   sqlite[(SQLite / /data)]
   uploads[(Uploads / /data/uploads)]
+  import_sources[(Import sources / /data/catalog-imports)]
   config[(Managed config / /data/.env)]
   logs[(Logs / /data/logs)]
-  ollama[Ollama]
-  openai[OpenAI web search]
+  ollama[Ollama - self-hosted]
+  ollama_cloud[Ollama Cloud search/fetch]
+  openai[OpenAI]
   qdrant[(Qdrant - optional)]
   smtp[SMTP relay]
 
@@ -117,6 +139,7 @@ flowchart LR
   register_routes --> issue_reset
   register_routes --> save_photo
   register_routes --> save_avatar
+  register_routes --> run_pipeline
   register_routes --> analyze_bottle
   register_routes --> analyze_name
   register_routes --> refresh_prices
@@ -126,8 +149,36 @@ flowchart LR
   register_routes --> write_managed_config
   register_routes --> verified_product
   register_routes --> metrics_response
+  register_routes --> validate_uploads
+  register_routes --> stage_uploads
+  register_routes --> reserve_batch
+  register_routes --> apply_batch
+  register_routes --> retry_batch
+
+  run_pipeline --> analyze_bottle
+  run_pipeline --> refresh_prices
+  run_pipeline --> apply_user_price
+  run_pipeline --> recorder
 
   create_app --> bootstrap_admin
+  create_app --> recover_orphans
+  create_app --> worker
+  create_app --> cleanup_sources
+  worker --> claim_next
+  worker --> recover_leases
+  worker --> extract_files
+  worker --> transition
+  worker --> cleanup_sources
+  worker --> observe_import
+  extract_files --> ollama
+  apply_batch --> catalog_model
+  apply_batch --> import_model
+  reserve_batch --> import_model
+  stage_uploads --> import_sources
+  cleanup_sources --> import_sources
+  apply_batch --> sync_qdrant
+  sync_qdrant --> qdrant_upsert
+
   analyze_bottle --> ollama_request
   analyze_bottle --> openai_request
   analyze_bottle --> verified_product
@@ -146,7 +197,10 @@ flowchart LR
   apply_user_price --> catalog_price_key
   apply_user_price --> qdrant_upsert
   search_prices --> openai_prices
+  search_prices --> ollama_prices
   openai_prices --> web_source_urls
+  ollama_prices --> ollama
+  ollama_prices --> ollama_cloud
 
   bootstrap_admin --> issue_verification
   issue_verification --> issue_token
@@ -174,6 +228,7 @@ flowchart LR
   user_model --> sqlite
   bottle_model --> sqlite
   catalog_model --> sqlite
+  import_model --> sqlite
   usage_model --> sqlite
 ```
 
@@ -183,15 +238,34 @@ flowchart LR
   starts (`os.execvp` replaces the process image so a later admin-triggered `SIGTERM` targets the
   same PID uvicorn runs as).
 - `main.create_app()` assembles the FastAPI app and binds the supporting services (database,
-  usage recorder, email sender, rate limiter, Qdrant price index) onto `app.state`.
+  usage recorder, email sender, rate limiter, Qdrant price index, catalog-import worker) onto
+  `app.state`. The lifespan additionally runs `recover_orphaned_bottle_processing()` and
+  `cleanup_expired_catalog_import_sources()` before serving, and stops the worker on shutdown.
+- `POST /bottles` no longer runs analysis inline: it stores the photo, commits the row at
+  `processing_stage="queued"`, returns `202 {"bottle_id": …}`, and hands
+  `bottle_processing.run_add_bottle_pipeline()` to FastAPI's `BackgroundTasks`. The pipeline reuses
+  `main`'s `refresh_prices()`/`apply_user_purchase_price()`/`apply_analysis()` helpers, imported
+  lazily inside the function to avoid a circular import with `main`.
 - The identity path is session-based (signed cookie, no server-side session store), CSRF-protected
   via a per-session synchronizer token checked manually in every mutating handler, rate-limited by
   `rate_limit.RateLimiter.allow()`, and bootstrap-aware (`identity.bootstrap_admin()`).
-- Bottle analysis can use either Ollama or OpenAI (selected by `ANALYSIS_PROVIDER`); price search is
-  always OpenAI-grounded-web-search and only runs after `refresh_prices()` finds no fresh SQLite
-  catalog hit and no sufficiently-similar Qdrant fuzzy match. Every accepted OpenAI price is written
-  back into `CatalogPrice` (and, if enabled, upserted into Qdrant) so future bottles of the same
-  product/size resolve locally.
+- Bottle analysis can use either Ollama or OpenAI (selected by `ANALYSIS_PROVIDER`), and **price
+  search now follows the same setting**: `analysis.search_bottle_prices()` dispatches to
+  `openai_provider.search_prices()` or `ollama_search.search_prices()`. Either way it only runs
+  after `refresh_prices()` finds no acceptable SQLite catalog hit and no sufficiently-similar Qdrant
+  fuzzy match. Every accepted price is written back into `CatalogPrice` (and, if enabled, upserted
+  into Qdrant) so future bottles of the same product/size resolve locally.
+- `ollama_search.search_prices()` is a bounded tool-calling loop (`MAX_TOOL_ROUNDS = 4`): it posts
+  to the self-hosted `{OLLAMA_URL}/api/chat` with `web_search`/`web_fetch` tool definitions and
+  executes the resulting tool calls against Ollama Cloud (`https://ollama.com/api/web_search`,
+  `/api/web_fetch`) using `OLLAMA_API_KEY`. It records every consulted URL and accepts the model's
+  claimed source only if it is in that set — the same grounding rule
+  `openai_provider.web_source_urls()` enforces for OpenAI.
+- The catalog-import pipeline is the only part of the app with a durable job state machine:
+  `reserve_catalog_import_batch()` (capacity-checked insert) → `claim_next_catalog_import()`
+  (conditional update + lease) → `extract_catalog_files()` under a heartbeat →
+  `transition_batch(REVIEW)` → `apply_catalog_import_batch()` (one transaction into `CatalogPrice`)
+  → post-commit, best-effort `sync_applied_catalog_prices_to_qdrant()`.
 - Admin configuration writes to `/data/.env` and expects a restart to take effect; the restart is a
   self-`SIGTERM`, not a respawn — the container's `restart: unless-stopped` policy does the respawn.
 - Telemetry uses local SQLite usage records (`ApiUsage`, no prompts/responses/PII), Prometheus

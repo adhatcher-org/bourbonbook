@@ -22,10 +22,11 @@ load or a form POST followed by a `303` redirect.
 `base.html` (shared layout, PWA meta tags), `_mobile_nav.html` / `_collection_header.html` /
 `_compact_grid.html` (shared partials), plus one template per page: `library.html`, `compact.html`,
 `detail.html`, `new.html`, `edit.html`, `shopping_list.html`, `shared_collection.html`,
-`profile.html`, `login.html`, `register`-adjacent flows (`check_email.html`, `verify_email.html`,
-`forgot_password.html`, `reset_password.html`, `account_deleted.html`), and an `admin/` subtree
-(`users.html`, `user_detail.html`, `catalog.html`, `catalog_import.html`, `config.html`,
-`usage.html`). Email bodies live separately under `templates/email/` (see
+`profile.html`, `login.html` (which also hosts registration), the account flows
+(`check_email.html`, `verify_email.html`, `forgot_password.html`, `reset_password.html`,
+`account_deleted.html`), and an `admin/` subtree (`users.html`, `user_detail.html`, `catalog.html`,
+`catalog_import.html`, `catalog_import_review.html`, `config.html`, `usage.html`). Email bodies live
+separately under `templates/email/` (see
 [Observability & operations](observability-and-operations.md)).
 
 ## PWA shell
@@ -34,7 +35,7 @@ load or a form POST followed by a `303` redirect.
   /manifest.webmanifest` route with `media_type="application/manifest+json"`): `display:
   standalone`, dark theme/background (`#0d0c0b`), a single scalable SVG icon
   (`sizes: any, purpose: any maskable`) — no raster icon set, no `shortcuts` array.
-- **Service worker** (`static/sw.js`, cache name `bourbon-book-v4`): precaches a fixed shell
+- **Service worker** (`static/sw.js`, cache name `bourbon-book-v6`): precaches a fixed shell
   (`app.css`, `app.js`, `icon.svg`, the manifest) on install, purges old-versioned caches on
   activate, and on fetch only intercepts same-origin GET requests under `/static/` or the manifest
   path — cache-first with network fallback. **HTML pages, API calls, and photo/avatar media are
@@ -53,10 +54,21 @@ load or a form POST followed by a `303` redirect.
 
 ## Client-side JavaScript (`static/app.js`)
 
-A small, dependency-free script handling:
+A small, dependency-free script (~258 lines) handling:
 
-- Live avatar/photo preview via `URL.createObjectURL` before upload.
-- The "became Empty" bottle-edit confirm `<dialog>` (remove / add to shopping list / cancel).
+- Live avatar/photo preview: client-side downscale to 1200px via `createImageBitmap` + `<canvas>`
+  before the file is ever previewed, with an allow-list of accepted MIME types.
+- **The add-bottle submit + progress poller** — the only place in the app where JavaScript is
+  load-bearing rather than an enhancement. It intercepts the `[data-upload-form]` submit, `fetch`es
+  `POST /bottles`, then polls `GET /bottles/{id}/status` every `POLL_MS = 1200` up to
+  `POLL_TIMEOUT_MS = 120000`, mapping `stage` to user-facing text (with an elapsed-time-dependent
+  message while `analyzing`) before navigating on to the edit form. Errors surface in
+  `[data-add-bottle-error]`.
+- Fill-level range output binding and live purchase-price/quantity/MSRP valuation totals.
+- Catalog-import review bulk selection: select-all-visible, include-all, exclude-all across the
+  paginated proposal checkboxes.
+- The "became Empty" bottle-edit confirm `<dialog>` (remove / add to shopping list / cancel) and the
+  re-analysis overlay.
 - Collection-share confirm-before-replace guard and a copy-to-clipboard button for the generated
   share URL.
 - Service worker registration.
@@ -74,3 +86,10 @@ No build step, bundler, or framework is involved — the file is served as-is fr
   context, a one-shot session pop, or a redirect query string — a new feature needing to show
   post-redirect state should follow one of those three existing patterns rather than introducing a
   fourth mechanism.
+- The add-bottle poller is the app's **one** exception to "JavaScript is optional." It is worth
+  keeping that count at one: the server-side pieces are all still present (the row is committed and
+  the pipeline runs regardless of whether the client polls), so a future no-JS fallback would be a
+  progressive-enhancement addition rather than a rewrite.
+- Bumping `CACHE` in `sw.js` on every shell-asset change is not optional — the fetch handler is
+  cache-first for `/static/`, so a stale `app.js` would keep polling with old logic. It is currently
+  at `v6`.

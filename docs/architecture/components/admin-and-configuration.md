@@ -20,18 +20,30 @@ environment-driven setting — all gated behind `auth.require_admin()` and audit
 | `POST /admin/users/{id}/send-reset`, `/resend-verification` | Admin-triggered identity emails, rate-limited |
 | `POST /admin/users/{id}/email` | Correct a user's email after out-of-band verification (requires typed confirmation match) |
 | `GET /admin/catalog`, `POST /admin/catalog` | Browse/search/sort `CatalogPrice`; bulk edit or delete |
-| `GET /admin/catalog-import`, `POST /admin/catalog-import` | Upload bounded PNG/JPEG/PDF price sheets; administrators can review, retry, and apply queued local extraction batches |
+| `GET /admin/catalog-import`, `POST /admin/catalog-import` | Import queue overview; upload bounded PNG/JPEG/PDF price sheets (validate + stage only — extraction is queued to the worker) |
+| `GET /admin/catalog-import/{id}` | Paginated proposal review for one batch |
+| `POST /admin/catalog-import/{id}/review` | Save proposal edits; explicitly changes no catalog price |
+| `POST /admin/catalog-import/{id}/apply` | Atomically apply included proposals into `catalog_prices` |
+| `POST /admin/catalog-import/{id}/delete`, `/retry` | Delete an unclaimed batch; requeue a failed one whose sources survive |
 | `GET /admin/config`, `POST /admin/config` | View/edit the managed configuration file |
 | `POST /admin/restart` | Self-`SIGTERM`, relies on the container's process supervisor to come back up |
 | `GET /admin/usage` | AI/API usage dashboard, aggregated + paginated recent events |
 
 ## Managed configuration (`admin_config.py`)
 
-- **Field registry**: `CONFIG_FIELDS`, a tuple of typed `ConfigField` entries (one per managed
-  `Settings` attribute, grouped by Application/Analysis/Pricing/Email/Bootstrap/Network/
-  Security/Observability) — the single source both the admin UI and validation walk. This is what
-  makes "every setting listed in `.env.example` is admin-editable" true by construction rather than
-  by two documents staying manually in sync.
+- **Field registry**: `CONFIG_FIELDS`, a tuple of 42 typed `ConfigField` entries grouped by
+  Application/Analysis/Pricing/Email/Bootstrap/Network/Security/Observability — the single source
+  both the admin UI and validation walk.
+
+  > **Drift, as of this revision:** the registry no longer covers every setting. `Settings` has
+  > roughly 60 attributes; `OLLAMA_API_KEY` (present in `.env.example`, and the gate for
+  > Ollama-provider price search) and ten catalog-import tuning knobs
+  > (`CATALOG_IMPORT_QUEUE_CAPACITY`, `_CHUNK_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS`,
+  > `_LEASE_SECONDS`, `_LEASE_HEARTBEAT_SECONDS`, `_POLL_SECONDS`, `_MAX_IMAGE_PIXELS`,
+  > `_MAX_IMAGE_DIMENSION`, `_MAX_PDF_RENDER_PIXELS`, `_MAX_PDF_RENDER_DIMENSION`) are
+  > environment-only. Changing them requires editing the container environment or `<DATA_DIR>/.env`
+  > by hand. `DATABASE_URL`, `SESSION`-adjacent internals, and `RATE_LIMIT_SECRET` were always
+  > intentionally excluded; the eleven above are drift, not a decision.
 - **Validation** (`parse_config_form()`): per-field type/range/allowed-value checks (`boolean`,
   `choice`, `integer` with min/max, `url` requiring an http(s) scheme + netloc, `email`), plus
   hardcoded extra rules (`SESSION_SECRET` ≥32 chars, `DEFAULT_ADMIN_PASSWORD` if given ≥10 chars).
@@ -56,9 +68,20 @@ environment-driven setting — all gated behind `auth.require_admin()` and audit
 ## Catalog administration
 
 `/admin/catalog` gives an admin a paginated, sortable, searchable view over `CatalogPrice` with
-inline name/price edits and bulk deletion — a manual escape hatch for correcting a bad Tier 3 (OpenAI)
-result or a stale entry without waiting for the 90-day TTL. See
+inline name/price edits and bulk deletion — a manual escape hatch for correcting a bad Tier 3
+(grounded web search) result or a stale entry without waiting for the 90-day TTL. See
 [Pricing & catalog](pricing-and-catalog.md) for how those rows are otherwise populated.
+
+`/admin/catalog-import` is the bulk counterpart: a durable, review-first queue that reads price
+sheets with the local vision model and only writes `CatalogPrice` rows an administrator has
+approved. It is the largest admin surface in the app and has its own design doc,
+[Catalog import pipeline](catalog-import.md). Two points matter for the admin boundary specifically:
+
+- The upload route authorizes **before** parsing the multipart body, and returns a flat `403`
+  instead of the usual `303` login redirect, so an unauthorized caller cannot distinguish
+  authorization failure from upload-validation behavior.
+- Every state-changing import action re-checks the batch state inside the SQL predicate, so an admin
+  click cannot race the background worker's own transition.
 
 ## Usage dashboard
 
@@ -79,7 +102,9 @@ the web UI itself is unreachable.
 - `CONFIG_FIELDS` as the single registry is a load-bearing convention: adding a new `Settings`
   field without adding a matching `ConfigField` entry means it silently becomes un-editable from the
   admin UI (not a validation failure — just invisible), so this should be part of any PR checklist
-  for new configuration.
+  for new configuration. The eleven settings listed above are exactly what that silent failure mode
+  looks like in practice; a test asserting `CONFIG_FIELDS` covers every non-excluded `Settings`
+  attribute would make it loud instead.
 - The restart action being a real process exit (not a soft reload) means production deployments
   **must** run under a supervisor; the app deliberately does not try to be its own supervisor. See
   HLDD §7.3 and README's "Deployment Validation Runbook."

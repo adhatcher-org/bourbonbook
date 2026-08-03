@@ -1,6 +1,6 @@
 [project]
 name = "bourbon-book"
-version = "0.1.0"
+version = "0.1.1"
 description = "A private, photo-first bourbon collection PWA"
 readme = "README.md"
 requires-python = ">=3.12"

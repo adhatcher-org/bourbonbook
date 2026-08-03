@@ -1,7 +1,7 @@
 # Component Design: Bottle, Shopping-List & Sharing Workflow
 
 Modules: `bourbonbook/main.py` (bottle/shopping-list/sharing/avatar/collection routes),
-`bourbonbook/photos.py`
+`bourbonbook/photos.py`, `bourbonbook/bottle_processing.py`
 Related: [HLDD](../hldd.md) · [AI analysis](ai-analysis.md) · [Pricing & catalog](pricing-and-catalog.md)
 
 ## Responsibility
@@ -15,8 +15,10 @@ their collection. All routes here require `auth.require_verified_user()` except 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /`, `GET /collection/compact` | Main and compact library views, with search (`q`) and `sort`; excludes shopping-list/empty items |
-| `GET /bottles/new`, `POST /bottles` | New-bottle form and creation (photo → analysis → catalog enrichment → pricing) |
+| `GET /`, `GET /collection/compact` | Main and compact library views, with search (`q`) and `sort`; excludes shopping-list/empty items **and bottles still mid-pipeline** |
+| `GET /bottles/new` | New-bottle form; also schedules a best-effort `analysis.warm_analysis_model()` background task |
+| `POST /bottles` | Creation. Saves the photo, commits the row at `processing_stage="queued"`, returns **`202` JSON** `{"bottle_id": …}`, and queues the background pipeline |
+| `GET /bottles/{id}/status` | JSON progress poll: `{stage, analysis_status, done}`; `404` JSON if not owned |
 | `GET /bottles/{id}` | Detail view |
 | `GET /bottles/{id}/edit`, `POST /bottles/{id}/edit` | Edit form and save, including the "became Empty" transition |
 | `POST /bottles/{id}/analyze` | Re-run analysis: `photo`, `name`, or `price` mode |
@@ -30,6 +32,58 @@ their collection. All routes here require `auth.require_verified_user()` except 
 | `GET /shared/{token}`, `GET /shared/{token}/media/{photo_name}` | Public, unauthenticated read-only view |
 | `POST /profile/avatar`, `POST /profile/avatar/remove` | Upload/remove the user's avatar |
 | `GET /avatars/{avatar_name}` | Serve the current user's own avatar |
+
+## Asynchronous add-bottle pipeline (`bottle_processing.py`)
+
+`POST /bottles` is the only bottle route that does not do its work inline. It is a `202`-returning
+JSON endpoint driven by `fetch()` in `static/app.js`, not a form POST that ends in a `303`.
+
+```mermaid
+sequenceDiagram
+  participant JS as static/app.js
+  participant Route as POST /bottles
+  participant Task as run_add_bottle_pipeline
+  participant Poll as GET /bottles/{id}/status
+
+  JS->>Route: multipart photo + purchase_price + quantity
+  Route->>Route: save_photo(), commit Bottle(stage="queued")
+  Route-->>JS: 202 {"bottle_id": N}
+  Route->>Task: BackgroundTasks.add_task(...)
+  loop every 1.2s, 120s ceiling
+    JS->>Poll: GET /bottles/N/status
+    Poll-->>JS: {stage, analysis_status, done}
+  end
+  Task->>Task: analyzing -> enriching -> pricing -> complete|failed
+  JS->>JS: navigate to /bottles/N/edit?new=1
+```
+
+`BottleProcessingStage` is a `StrEnum` persisted in `Bottle.processing_stage`:
+`idle` (never went through the pipeline) → `queued` → `analyzing` → `enriching` → `pricing` →
+`complete`, or `failed` with a truncated `processing_error`.
+
+Properties that are load-bearing rather than incidental:
+
+- **Its own sessions.** Each stage runs in a session from `session_factory()`, never the request's
+  session — that one is already closed by the time `BackgroundTasks` run.
+- **Commits between stages.** The commit after each stage is what makes the poller show progress;
+  without it the client would see `queued` until the whole thing finished.
+- **It never raises.** Starlette runs `BackgroundTasks` as part of the response cycle, after the
+  `202` body is already sent. An escaping exception could only produce a server error against a
+  finished request and strand the row at its last committed stage, so every exception is caught,
+  persisted as `failed`, and logged with a bounded `error_type`.
+- **Lazy imports.** `apply_analysis`, `apply_user_purchase_price`, `enrich_bottle_by_name`,
+  `normalized_analysis_status`, and `refresh_prices` still live in `main.py`, which imports this
+  module at startup — so they are imported inside the function body to break the cycle. `main.py`'s
+  synchronous `POST /bottles/{id}/analyze` route still uses the same helpers directly.
+- **The enrich/price guard is computed once**, before enrichment runs, because enrichment can change
+  `bottle.name` and re-deriving the guard afterwards would change whether pricing happens at all.
+- **Hidden until done.** `collection_statement()` excludes `IN_PROGRESS_STAGES`, so a partially
+  analyzed bottle never appears in the library or a shared collection.
+- **Restart recovery.** `recover_orphaned_bottle_processing()` runs once in the lifespan and marks
+  every in-progress row `failed` / "Interrupted by server restart". This is sound *only* under the
+  single-worker invariant (ADR 0001): with one process, a restart unambiguously means the work is
+  gone, so no lease or TTL is needed — unlike `CatalogImportWorker`, whose extraction can legitimately
+  outlive a poll interval and therefore does need one.
 
 ## Photo pipeline (`photos.py`)
 
@@ -77,11 +131,16 @@ outstanding link — there is no grace period.
 ## Design properties worth preserving
 
 - Bottle creation never fails because of an AI provider outage — the photo and row are always
-  persisted; only `analysis_status` reflects what happened. See
+  persisted **before** any model call, and only `analysis_status` reflects what happened. See
   [AI analysis](ai-analysis.md).
-- The PRG (Post/Redirect/Get) pattern is used consistently: every mutating POST ends in a `303`
-  redirect, with transient state passed via query-string flags (`?new=1`, `?analysis=complete`) or a
-  one-shot session pop (`new_collection_share_url`) rather than a generic flash-message framework.
+- The PRG (Post/Redirect/Get) pattern is used consistently for every mutating POST **except**
+  `POST /bottles`, which is the one JSON/`202` endpoint in the collection surface. Transient state
+  is otherwise passed via query-string flags (`?new=1`, `?analysis=complete`) or a one-shot session
+  pop (`new_collection_share_url`) rather than a generic flash-message framework. Adding a second
+  async endpoint should follow the `202` + status-poll shape rather than inventing a third pattern.
+- `POST /bottles/{id}/analyze` is deliberately still synchronous. Re-analysis happens from the edit
+  page where a blocking spinner is acceptable, and keeping one async path means only one place has
+  to reason about orphan recovery. Converting it would need the same stage/recovery treatment.
 - Ownership checks are done per-route (`owned_bottle` helper) rather than via a shared dependency —
   a new route touching `Bottle` rows must remember to scope the query to the current user (or, for
   the `/shared/...` routes, to the resolved share-token owner).

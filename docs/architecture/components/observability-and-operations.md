@@ -13,8 +13,11 @@ bottle contents, email addresses) in any of these channels.
 
 ## AI usage ledger (`AIUsageRecorder` → `ApiUsage`)
 
-Every AI/API provider call — Ollama, OpenAI analysis, OpenAI price search — is wrapped in
-`usage_context(recorder, user_id)` and recorded via `AIUsageRecorder.record()`. The `ApiUsage` row
+Every AI/API provider call — Ollama analysis, Ollama price search, OpenAI analysis, OpenAI price
+search — is wrapped in `usage_context(recorder, user_id)` and recorded via
+`AIUsageRecorder.record()`. The context vars are set by the caller, so the background add-bottle
+pipeline opens its own `usage_context(...)` around each stage in order to keep per-user attribution
+outside the request. The `ApiUsage` row
 stores only: `provider`, `operation`, `model`, `success`, a truncated (`error_type[:40]`) bounded
 error classification, `duration_ms`, token-count columns (input/output/total/cached/reasoning),
 `web_search_calls`, an optional `user_id`, and a timestamp. There is structurally no column for
@@ -39,14 +42,28 @@ every startup.
 | `bourbonbook_openai_web_search_calls_total` | Counter | `operation`, `model` |
 | `bourbonbook_email_deliveries_total` | Counter | `kind`, `result` |
 | `bourbonbook_email_delivery_duration_seconds` | Histogram | `kind` |
+| `bourbonbook_catalog_imports_total` | Counter | `result` (`review`/`retry`/`failed`) |
+| `bourbonbook_catalog_import_queue_wait_seconds` | Histogram | — |
+| `bourbonbook_catalog_import_duration_seconds` | Histogram | — |
 | `bourbonbook_price_jobs_total`, `..._duration_seconds`, `..._current` | Counter/Histogram/Gauge | `result` / `state` |
 
 `GET /metrics` returns 404 if `METRICS_ENABLED=false`, otherwise the standard Prometheus exposition
 format. Request-level metrics are recorded by middleware in `main.py` (`route_template()` derives
 the templated path from `request.scope["route"]`, falling back to `"unmatched"` for 404s so
-unmatched-path cardinality doesn't explode the label set). Note the price-job gauges are defined but
-should be verified against the current synchronous `refresh_prices()` call path before building a
-dashboard around them (see HLDD §9 Open Gaps).
+unmatched-path cardinality doesn't explode the label set).
+
+Two caveats before building dashboards:
+
+- The **price-job** series (`bourbonbook_price_jobs_total`, `..._duration_seconds`, `..._current`)
+  are declared in `observability.py` and have **no call site** — nothing increments them. Pricing
+  observability today comes from the `ApiUsage` ledger and the `ai_*` series instead.
+- The **catalog-import** series *are* wired, via `observe_catalog_import()` in
+  `CatalogImportWorker.process_next()`. `queue_wait` is measured from `batch.created_at` to claim
+  time and `duration` from claim to outcome, so a `retry` and its eventual `review` are recorded as
+  two separate observations of the same batch.
+- `bourbonbook_openai_web_search_calls_total` is OpenAI-specific by name and label set; the Ollama
+  Cloud `web_search`/`web_fetch` loop has no equivalent counter and is visible only in `ApiUsage`
+  (`provider="ollama"`, `operation="price_search"`).
 
 ## Logging (`logging_config.py`)
 
@@ -94,6 +111,14 @@ intermediate launcher. `main.create_app()`'s own `lifespan` re-runs several of t
 idempotently (settings load, logging config, migration bootstrap, stale `ApiUsage` cleanup, admin
 bootstrap) since it can also be invoked directly by a test harness or `uvicorn` reload, not only via
 `entrypoint.py`.
+
+The lifespan does more than re-run bootstrap steps: it also owns the runtime objects with a lifetime
+longer than a request (shared `AsyncOpenAI`/`httpx` clients, the `QdrantPriceIndex`, the
+`CatalogImportWorker`) through an `AsyncExitStack`, and performs two recovery sweeps before serving
+— `recover_orphaned_bottle_processing()` (marks interrupted add-bottle jobs `failed`) and
+`cleanup_expired_catalog_import_sources()` (removes expired staged upload directories). Ordering
+matters in the worker's own `start()`: lease recovery runs *before* source cleanup, so a batch
+requeued from an interrupted lease keeps its input files.
 
 `/healthz` (liveness only, always `200`) is what the container `HEALTHCHECK` and Unraid poll.
 `/readyz` (DB connectivity + Alembic-at-head check, `503` if not ready) is the deeper check intended

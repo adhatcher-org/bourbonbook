@@ -12,6 +12,7 @@ it.
 | Bottle, shopping-list & sharing workflow | [bottle-workflow.md](bottle-workflow.md) |
 | AI analysis orchestration | [ai-analysis.md](ai-analysis.md) |
 | Pricing & catalog | [pricing-and-catalog.md](pricing-and-catalog.md) |
+| Catalog import pipeline | [catalog-import.md](catalog-import.md) |
 | Model evaluation & benchmarking | [model-evaluation-and-benchmarking.md](model-evaluation-and-benchmarking.md) |
 | Administration & configuration | [admin-and-configuration.md](admin-and-configuration.md) |
 | Observability & operations | [observability-and-operations.md](observability-and-operations.md) |

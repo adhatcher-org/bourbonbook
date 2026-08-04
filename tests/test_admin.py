@@ -12,7 +12,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from bourbonbook.admin_config import CONFIG_FIELDS, read_managed_config, settings_values
+from bourbonbook.admin_config import (
+    CONFIG_FIELDS,
+    UNMANAGED_HEADER,
+    read_managed_config,
+    settings_values,
+    unmanaged_config_entries,
+    write_managed_config,
+)
 from bourbonbook.auth import hash_password
 from bourbonbook.catalog_import_worker import claim_next_catalog_import
 from bourbonbook.catalog_imports import (
@@ -1533,3 +1540,119 @@ def test_admin_usage_totals_are_visible_to_admin(tmp_path: Path) -> None:
         assert "price_search" in response.text
         assert "gpt-test" in response.text
         assert "15" in response.text
+
+
+def test_write_managed_config_preserves_operator_maintained_keys(tmp_path: Path) -> None:
+    """Regression: an admin save used to delete every key the registry did not own.
+
+    `write_managed_config` rewrites the file atomically, so keys an operator added
+    by hand (API keys, tuning knobs with no admin UI) were silently destroyed.
+    """
+    env = tmp_path / ".env"
+    env.write_text(
+        "OLLAMA_API_KEY=operator-token\n"
+        "CATALOG_IMPORT_MAX_IMAGE_PIXELS=50000000\n"
+        "DEBUG=True\n"
+        'SESSION_SECRET="stale-value"\n',
+        encoding="utf-8",
+    )
+
+    values = {field.key: f"managed-{field.key}" for field in CONFIG_FIELDS}
+    write_managed_config(env, values)
+
+    preserved = unmanaged_config_entries(env)
+    assert preserved == {
+        "OLLAMA_API_KEY": "operator-token",
+        "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "50000000",
+        "DEBUG": "True",
+    }
+    assert UNMANAGED_HEADER in env.read_text(encoding="utf-8")
+    # The managed block still wins for keys the registry owns.
+    assert read_managed_config(env)["SESSION_SECRET"] == "managed-SESSION_SECRET"
+
+
+def test_write_managed_config_on_fresh_data_dir_adds_no_unmanaged_block(tmp_path: Path) -> None:
+    """Fresh-install path: nothing to preserve, so no stray header or keys."""
+    env = tmp_path / "fresh" / ".env"
+    values = {field.key: "value" for field in CONFIG_FIELDS}
+
+    write_managed_config(env, values)
+
+    assert unmanaged_config_entries(env) == {}
+    assert UNMANAGED_HEADER not in env.read_text(encoding="utf-8")
+    assert env.stat().st_mode & 0o777 == 0o600
+
+
+def test_write_managed_config_round_trip_is_stable(tmp_path: Path) -> None:
+    """Repeated saves must not duplicate, re-encode, or drift the preserved block."""
+    env = tmp_path / ".env"
+    env.write_text("OLLAMA_API_KEY=operator-token\nDEBUG=True\n", encoding="utf-8")
+    values = {field.key: "value" for field in CONFIG_FIELDS}
+
+    write_managed_config(env, values)
+    first = env.read_text(encoding="utf-8")
+    write_managed_config(env, values)
+
+    assert env.read_text(encoding="utf-8") == first
+    assert first.count(UNMANAGED_HEADER) == 1
+    assert first.count("OLLAMA_API_KEY=") == 1
+
+
+def test_unmanaged_config_entries_last_duplicate_wins(tmp_path: Path) -> None:
+    """Real .env files repeat keys; reading must match dotenv last-wins semantics."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "# comment\n\nDEBUG=True\nDEBUG=False\n",
+        encoding="utf-8",
+    )
+
+    assert unmanaged_config_entries(env) == {"DEBUG": "False"}
+
+
+def test_read_managed_config_still_ignores_unregistered_keys(tmp_path: Path) -> None:
+    """`read_managed_config` overrides os.environ, so DATA_DIR in the managed file
+    must not be able to redirect the path that file was just read from."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "DATA_DIR=/somewhere/else\nDEBUG=True\nOPENAI_MODEL=gpt-test\n",
+        encoding="utf-8",
+    )
+
+    stored = read_managed_config(env)
+
+    assert stored == {"OPENAI_MODEL": "gpt-test"}
+
+
+def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end: saving /admin/config keeps hand-added keys and still edits managed ones."""
+    client, app = make_client(tmp_path)
+    env = tmp_path / ".env"
+    env.write_text(
+        "OLLAMA_API_KEY=operator-token\nCATALOG_IMPORT_MAX_IMAGE_PIXELS=12345678\n",
+        encoding="utf-8",
+    )
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/config")
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, OPENAI_MODEL="gpt-preserved"),
+                "csrf_token": csrf(page),
+            },
+        )
+        assert response.status_code == 200
+        assert "Configuration saved" in response.text
+
+    assert unmanaged_config_entries(env) == {
+        "OLLAMA_API_KEY": "operator-token",
+        "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "12345678",
+    }
+    assert read_managed_config(env)["OPENAI_MODEL"] == "gpt-preserved"
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OLLAMA_API_KEY", "operator-token")
+    reloaded = Settings.from_env()
+    assert reloaded.openai_model == "gpt-preserved"
+    assert reloaded.ollama_api_key == "operator-token"

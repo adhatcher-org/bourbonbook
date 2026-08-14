@@ -4,11 +4,26 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # One PR per cycle per ecosystem. Every member of this group rewrites
+      # uv.lock, so ungrouped updates conflict with each other as soon as any
+      # one of them merges.
+      python-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    groups:
+      docker:
+        patterns:
+          - "*"

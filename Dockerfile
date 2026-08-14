@@ -1,4 +1,4 @@
-FROM docker.io/astral/uv:0.12.2 AS uv
+FROM docker.io/astral/uv:0.12.3 AS uv
 FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

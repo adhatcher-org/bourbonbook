@@ -1,0 +1,23 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "25 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    uses: adhatcher-org/shared-workflows/.github/workflows/codeql.yml@8189d4131e5b4b78d9b6f947e4a3bc8a28d4fdc8 # v1.0.1
+    with:
+      languages: '["actions", "javascript-typescript", "python"]'

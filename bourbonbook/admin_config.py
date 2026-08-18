@@ -5,6 +5,7 @@ import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -238,6 +239,57 @@ CONFIG_FIELDS = (
         "LOG_FORMAT", "log_format", "Log format", "Observability", "choice", ("text", "json")
     ),
 )
+
+
+ENV_ONLY_SETTINGS: Mapping[str, str] = MappingProxyType(
+    {
+        # Deliberate policy. These must never become admin-editable.
+        "data_dir": (
+            "Locates the managed .env itself; an admin-set value could redirect the very file "
+            "the registry is read from and written to."
+        ),
+        "database_url": (
+            "Derived from data_dir. Repointing it from the UI would strand the live database "
+            "and the Alembic revision the running process already applied."
+        ),
+        "rate_limit_secret": (
+            "Seeds the rate-limit HMAC. Rotating it from the UI would silently reset every live "
+            "bucket, handing an attacker a way to clear their own lockout."
+        ),
+        # Acknowledged drift, not policy: catalog-import tuning budgets that are admin-editable in
+        # principle and simply have no ConfigField yet. Give one a ConfigField and delete its entry
+        # here; do not add new entries to this block without a reason that belongs above instead.
+        "catalog_import_max_image_pixels": "Decode budget; env-only pending an admin UI decision.",
+        "catalog_import_max_image_dimension": (
+            "Decode budget; env-only pending an admin UI decision."
+        ),
+        "catalog_import_max_pdf_render_pixels": (
+            "Decode budget; env-only pending an admin UI decision."
+        ),
+        "catalog_import_max_pdf_render_dimension": (
+            "Decode budget; env-only pending an admin UI decision."
+        ),
+        "catalog_import_queue_capacity": "Queue budget; env-only pending an admin UI decision.",
+        "catalog_import_chunk_timeout_seconds": (
+            "Worker timing; env-only pending an admin UI decision."
+        ),
+        "catalog_import_batch_timeout_seconds": (
+            "Worker timing; env-only pending an admin UI decision."
+        ),
+        "catalog_import_lease_seconds": "Worker lease; env-only pending an admin UI decision.",
+        "catalog_import_lease_heartbeat_seconds": (
+            "Worker lease; env-only pending an admin UI decision."
+        ),
+        "catalog_import_poll_seconds": "Worker timing; env-only pending an admin UI decision.",
+    }
+)
+"""Settings attributes deliberately absent from :data:`CONFIG_FIELDS`, each with a reason.
+
+A missing ``ConfigField`` is otherwise silent -- the setting keeps working but becomes invisible to
+the admin UI, so drift is only ever found by reading the code. ``tests/test_config_registry.py``
+asserts every ``Settings`` attribute is either registered or listed here, which turns the next
+omission into a failing test rather than an accident.
+"""
 
 SECRET_PLACEHOLDER = ""
 

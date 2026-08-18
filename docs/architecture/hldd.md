@@ -437,11 +437,13 @@ Recorded here for transparency rather than silently left implicit:
   been **removed** rather than left as a permanently-empty series. `bourbonbook_catalog_imports_total`
   and its two companion histograms are wired (`observe_catalog_import()` in the worker). A durable
   price-job worker will need to reintroduce its own metrics when it exists.
-- `admin_config.CONFIG_FIELDS` still trails `Settings`: ten catalog-import tuning settings exist in
-  `Settings` but not in the admin registry. `OLLAMA_API_KEY` was added to the registry and
-  `EMAIL_VERIFICATION_REQUIRED` to `.env.example`, closing both known drift instances, but nothing
-  yet *prevents* the next one — a missing `ConfigField` is still silent, making the setting invisible
-  rather than failing validation. See §7.4.
+- `admin_config.CONFIG_FIELDS` covers 43 of the 56 `Settings` attributes; the remaining 13 are
+  enumerated with reasons in `admin_config.ENV_ONLY_SETTINGS`. Ten of those are acknowledged drift
+  (catalog-import tuning knobs that could reasonably be admin-editable) rather than policy, so the
+  registry is still incomplete by intent-to-fix. What is no longer possible is *silent* drift:
+  `tests/test_config_registry.py` fails if a `Settings` attribute is neither registered nor
+  allowlisted, if a registered field is missing from `.env.example`, or if the allowlist goes stale.
+  See §7.4.
 - `bourbonbook_openai_web_search_calls_total` is OpenAI-specific by name and label set; the Ollama
   Cloud `web_search`/`web_fetch` tool loop is accounted for in the `ApiUsage` ledger
   (`provider="ollama"`, `operation="price_search"`) but has no equivalent web-search-call counter.

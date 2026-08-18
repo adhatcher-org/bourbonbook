@@ -35,14 +35,20 @@ environment-driven setting — all gated behind `auth.require_admin()` and audit
   Application/Analysis/Pricing/Email/Bootstrap/Network/Security/Observability — the single source
   both the admin UI and validation walk.
 
-  > **Drift, as of this revision:** the registry no longer covers every setting. `Settings` has
-  > roughly 60 attributes; ten catalog-import tuning knobs
+- **Env-only allowlist**: `ENV_ONLY_SETTINGS`, a mapping of the 13 `Settings` attributes that
+  deliberately have no `ConfigField`, each with the reason. `tests/test_config_registry.py` asserts
+  every attribute is either registered or listed here, so a new setting cannot be silently omitted —
+  it fails the suite until someone decides which it is.
+
+  > `DATA_DIR`, `DATABASE_URL` and `RATE_LIMIT_SECRET` are **policy**: the first locates the managed
+  > `.env` itself, the second would strand the live database, and rotating the third from the UI
+  > would reset every live rate-limit bucket. The ten catalog-import tuning knobs
   > (`CATALOG_IMPORT_QUEUE_CAPACITY`, `_CHUNK_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS`,
   > `_LEASE_SECONDS`, `_LEASE_HEARTBEAT_SECONDS`, `_POLL_SECONDS`, `_MAX_IMAGE_PIXELS`,
   > `_MAX_IMAGE_DIMENSION`, `_MAX_PDF_RENDER_PIXELS`, `_MAX_PDF_RENDER_DIMENSION`) are
-  > environment-only. Changing them requires editing the container environment or `<DATA_DIR>/.env`
-  > by hand. `DATABASE_URL`, `SESSION`-adjacent internals, and `RATE_LIMIT_SECRET` were always
-  > intentionally excluded; the eleven above are drift, not a decision.
+  > **acknowledged drift, not a decision** — admin-editable in principle, simply lacking a
+  > `ConfigField`. Changing them means editing the container environment or `<DATA_DIR>/.env` by
+  > hand. Giving one a `ConfigField` means deleting its allowlist entry in the same change.
 - **Validation** (`parse_config_form()`): per-field type/range/allowed-value checks (`boolean`,
   `choice`, `integer` with min/max, `url` requiring an http(s) scheme + netloc, `email`), plus
   hardcoded extra rules (`SESSION_SECRET` ≥32 chars, `DEFAULT_ADMIN_PASSWORD` if given ≥10 chars).

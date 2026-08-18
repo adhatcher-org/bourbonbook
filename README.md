@@ -311,18 +311,20 @@ The Makefile is the canonical command interface for local development and CI:
 
 ```bash
 make install       # install the exact uv.lock environment
+make check         # non-mutating format, lint, test, coverage, security, dependency, and integrity checks
 make test          # fast deterministic tests
 make coverage      # branch coverage with the temporary 80% floor
 make pr-review     # all pre-PR gates plus the production image build
 make help          # list every available target
 ```
 
-During development, run focused tests as needed, then run `make pr-review` before opening or
-updating a pull request. It checks lint and formatting, coverage, Bandit, the dependency lock and
-known vulnerabilities, diff/tracked-file integrity, migrations, Compose configuration, and the
-production Docker build. These checks use test configuration and do not load `.env`; only
-`make run_local` loads that file. `build-local` builds the local Compose topology, while `build`
-builds the production image used by CI and Unraid.
+During development, run focused tests as needed, then run `make check` before opening or updating
+a pull request. It validates formatting, lint, deterministic tests, branch coverage, Bandit, the
+dependency lock and known vulnerabilities, and diff/tracked-file integrity without synchronizing
+the environment or changing tracked project files. `make pr-review` runs that same gate plus the
+production Docker build. These checks use test configuration and do not load `.env`; only `make
+run_local` loads that file. `build-local` builds the local Compose topology, while `build` builds
+the production image used by CI and Unraid.
 
 Repository administrators must configure the `main` branch ruleset to require the `quality`,
 `security`, `dependency`, `review-readiness`, and `container` GitHub Actions jobs before merge.

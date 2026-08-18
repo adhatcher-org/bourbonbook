@@ -23,7 +23,7 @@ jobs:
     concurrency:
       group: docker-publish
       cancel-in-progress: false
-    uses: adhatcher-org/shared-workflows/.github/workflows/docker-publish.yml@cc0291a44a46d85315af39d125bdc7f293b85b9b # pending v1.0.2
+    uses: adhatcher-org/shared-workflows/.github/workflows/docker-publish.yml@456f186a9c21632af188bde4ebf7ce6e11953831 # v1.0.2
     with:
       package-name: bourbonbook
       checkout-ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}

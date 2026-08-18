@@ -31,6 +31,7 @@ def test_make_help_exposes_required_contract() -> None:
         "install",
         "build",
         "build-local",
+        "check",
         "pre-ci",
         "ci",
         "test",
@@ -44,3 +45,13 @@ def test_make_help_exposes_required_contract() -> None:
     }
 
     assert all(f"{target}:" in content for target in required)
+    assert "check: lint test coverage security dependency-check pr-check" in content
+    assert content.count("--frozen --no-sync") >= 6
+
+
+def test_pr_review_uses_non_mutating_uv_commands() -> None:
+    script = (Path(__file__).parents[1] / "scripts" / "pr_review.py").read_text()
+
+    assert 'NON_MUTATING_UV_RUN = ("uv", "run", "--frozen", "--no-sync")' in script
+    assert 'run(*NON_MUTATING_UV_RUN, "alembic", "heads", capture=True)' in script
+    assert '*NON_MUTATING_UV_RUN,\n        "pytest",' in script

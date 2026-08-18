@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,15 +24,19 @@ TEXT_SUFFIXES = {
 SENSITIVE_NAMES = {".coverage", ".env", "coverage.xml"}
 SENSITIVE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 CONFLICT_MARKERS = ("<<<<<<< ", "=======", ">>>>>>> ")
+NON_MUTATING_UV_RUN = ("uv", "run", "--frozen", "--no-sync")
 
 
-def run(*command: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def run(
+    *command: str, capture: bool = False, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         cwd=ROOT,
         check=False,
         text=True,
         stdout=subprocess.PIPE if capture else None,
+        env=env,
     )
 
 
@@ -61,7 +66,7 @@ def check_tracked_files(paths: list[Path]) -> list[str]:
 
 
 def migration_heads() -> list[str]:
-    result = run("uv", "run", "alembic", "heads", capture=True)
+    result = run(*NON_MUTATING_UV_RUN, "alembic", "heads", capture=True)
     if result.returncode:
         raise RuntimeError("Alembic could not inspect migration heads")
     return [line for line in result.stdout.splitlines() if line.strip()]
@@ -80,7 +85,16 @@ def main() -> int:
     except RuntimeError as error:
         failures.append(str(error))
 
-    if run("uv", "run", "pytest", "-q", "tests/test_migrations.py").returncode:
+    test_environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    if run(
+        *NON_MUTATING_UV_RUN,
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        "-q",
+        "tests/test_migrations.py",
+        env=test_environment,
+    ).returncode:
         failures.append("migration tests failed")
     if run("docker", "compose", "config", "--quiet").returncode:
         failures.append("Docker Compose configuration is invalid")

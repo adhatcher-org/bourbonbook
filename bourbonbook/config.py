@@ -83,7 +83,7 @@ class Settings:
             database_url=get("DATABASE_URL", f"sqlite:///{data_dir / 'bourbonbook.db'}"),
             session_secret=get("SESSION_SECRET", secrets.token_urlsafe(32)),
             secure_cookies=get("SECURE_COOKIES", "false").lower() == "true",
-            ollama_url=get("OLLAMA_URL", "https://ollama.aaronhatcher.com").rstrip("/"),
+            ollama_url=get("OLLAMA_URL", "").rstrip("/"),
             ollama_model=get("OLLAMA_MODEL", "qwen3.6:35b"),
             ollama_vision_model=get("OLLAMA_VISION_MODEL") or None,
             ollama_text_model=get("OLLAMA_TEXT_MODEL") or None,

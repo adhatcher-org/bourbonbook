@@ -74,21 +74,6 @@ EMAIL_DURATION = Histogram(
     "Email delivery duration.",
     ("kind",),
 )
-PRICE_JOBS = Counter(
-    "bourbonbook_price_jobs_total",
-    "Price job outcomes.",
-    ("result",),
-)
-PRICE_JOB_DURATION = Histogram(
-    "bourbonbook_price_job_duration_seconds",
-    "Price job duration by result.",
-    ("result",),
-)
-PRICE_JOB_STATE = Gauge(
-    "bourbonbook_price_jobs_current",
-    "Current price jobs by state.",
-    ("state",),
-)
 CATALOG_IMPORTS = Counter(
     "bourbonbook_catalog_imports_total",
     "Catalog-import lifecycle outcomes.",

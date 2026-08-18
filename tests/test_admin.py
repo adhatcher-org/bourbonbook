@@ -1546,11 +1546,11 @@ def test_write_managed_config_preserves_operator_maintained_keys(tmp_path: Path)
     """Regression: an admin save used to delete every key the registry did not own.
 
     `write_managed_config` rewrites the file atomically, so keys an operator added
-    by hand (API keys, tuning knobs with no admin UI) were silently destroyed.
+    by hand (tuning knobs and debug flags with no admin UI) were silently destroyed.
     """
     env = tmp_path / ".env"
     env.write_text(
-        "OLLAMA_API_KEY=operator-token\n"
+        "CATALOG_IMPORT_QUEUE_CAPACITY=5\n"
         "CATALOG_IMPORT_MAX_IMAGE_PIXELS=50000000\n"
         "DEBUG=True\n"
         'SESSION_SECRET="stale-value"\n',
@@ -1562,7 +1562,7 @@ def test_write_managed_config_preserves_operator_maintained_keys(tmp_path: Path)
 
     preserved = unmanaged_config_entries(env)
     assert preserved == {
-        "OLLAMA_API_KEY": "operator-token",
+        "CATALOG_IMPORT_QUEUE_CAPACITY": "5",
         "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "50000000",
         "DEBUG": "True",
     }
@@ -1628,7 +1628,7 @@ def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypat
     client, app = make_client(tmp_path)
     env = tmp_path / ".env"
     env.write_text(
-        "OLLAMA_API_KEY=operator-token\nCATALOG_IMPORT_MAX_IMAGE_PIXELS=12345678\n",
+        "CATALOG_IMPORT_QUEUE_CAPACITY=5\nCATALOG_IMPORT_MAX_IMAGE_PIXELS=12345678\n",
         encoding="utf-8",
     )
     with client:
@@ -1638,7 +1638,7 @@ def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypat
         response = client.post(
             "/admin/config",
             data={
-                **config_form(app, OPENAI_MODEL="gpt-preserved"),
+                **config_form(app, OPENAI_MODEL="gpt-preserved", OLLAMA_API_KEY="cloud-token"),
                 "csrf_token": csrf(page),
             },
         )
@@ -1646,13 +1646,14 @@ def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypat
         assert "Configuration saved" in response.text
 
     assert unmanaged_config_entries(env) == {
-        "OLLAMA_API_KEY": "operator-token",
+        "CATALOG_IMPORT_QUEUE_CAPACITY": "5",
         "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "12345678",
     }
     assert read_managed_config(env)["OPENAI_MODEL"] == "gpt-preserved"
+    # OLLAMA_API_KEY is a registered secret field, so the admin UI owns it now.
+    assert read_managed_config(env)["OLLAMA_API_KEY"] == "cloud-token"
 
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("OLLAMA_API_KEY", "operator-token")
     reloaded = Settings.from_env()
     assert reloaded.openai_model == "gpt-preserved"
-    assert reloaded.ollama_api_key == "operator-token"
+    assert reloaded.ollama_api_key == "cloud-token"

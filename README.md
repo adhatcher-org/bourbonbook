@@ -11,7 +11,7 @@ uv sync
 uv run --env-file .env uvicorn bourbonbook.main:app --reload
 ```
 
-Open `http://localhost:8000`, create an account, and add a bottle. Local development uses `https://ollama.aaronhatcher.com` by default. If the selected analyzer is not reachable, the photo is still saved and the review form opens for manual entry.
+Open `http://localhost:8000`, create an account, and add a bottle. `OLLAMA_URL` has no built-in default and must be set in `.env`. If the selected analyzer is not reachable, the photo is still saved and the review form opens for manual entry.
 
 Form input and select values now use a self-hosted Atkinson Hyperlegible Next font for improved readability. The WOFF2 assets are stored under `bourbonbook/static/fonts/` with a local attribution note.
 

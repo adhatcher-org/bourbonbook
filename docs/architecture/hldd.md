@@ -388,13 +388,13 @@ the admin-managed `<DATA_DIR>/.env` file (which **takes precedence**). Both are 
 there is no live config reload. `admin_config.CONFIG_FIELDS` is the registry that both the admin UI
 and validation walk; secrets must be typed fresh or explicitly cleared and are never re-rendered.
 
-`CONFIG_FIELDS` currently covers 42 of the ~60 `Settings` attributes, so it is **no longer true**
-that every setting is admin-editable. `OLLAMA_API_KEY` (documented in `.env.example` and required
-for Ollama-provider price search) and the catalog-import tuning knobs beyond the four basic limits —
+`CONFIG_FIELDS` currently covers 43 of the ~60 `Settings` attributes, so it is **no longer true**
+that every setting is admin-editable. The catalog-import tuning knobs beyond the four basic limits —
 `CATALOG_IMPORT_QUEUE_CAPACITY`, `_CHUNK_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS`,
 `_LEASE_SECONDS`, `_LEASE_HEARTBEAT_SECONDS`, `_POLL_SECONDS`, `_MAX_IMAGE_PIXELS`,
 `_MAX_IMAGE_DIMENSION`, `_MAX_PDF_RENDER_PIXELS`, `_MAX_PDF_RENDER_DIMENSION` — are environment-only
-and require editing the container environment or the managed file by hand. See §9.
+and require editing the container environment or the managed file by hand. `OLLAMA_API_KEY` is a
+registered secret field: it is write-only in the admin UI and is never re-rendered. See §9.
 
 ### 7.5 Testing & CI
 
@@ -433,14 +433,15 @@ Recorded here for transparency rather than silently left implicit:
   point into the same `catalog_extract.py` code, so there are now two ingestion paths to keep in
   agreement.
 - Prometheus price-job metrics (`bourbonbook_price_jobs_total`, `bourbonbook_price_job_duration_seconds`,
-  `bourbonbook_price_jobs_current`) are defined in `observability.py` and still have **no call
-  site** — nothing increments them. `bourbonbook_catalog_imports_total` and its two companion
-  histograms are wired (`observe_catalog_import()` in the worker). Do not build dashboards on the
-  price-job series.
-- `admin_config.CONFIG_FIELDS` has drifted behind `Settings`: `OLLAMA_API_KEY` and ten
-  catalog-import tuning settings exist in `Settings` but not in the admin registry, and
-  `OLLAMA_API_KEY` is in `.env.example` while absent from the admin UI. A missing `ConfigField` is
-  silent — the setting just becomes invisible rather than failing validation. See §7.4.
+  `bourbonbook_price_jobs_current`) were defined in `observability.py` with no call site and have
+  been **removed** rather than left as a permanently-empty series. `bourbonbook_catalog_imports_total`
+  and its two companion histograms are wired (`observe_catalog_import()` in the worker). A durable
+  price-job worker will need to reintroduce its own metrics when it exists.
+- `admin_config.CONFIG_FIELDS` still trails `Settings`: ten catalog-import tuning settings exist in
+  `Settings` but not in the admin registry. `OLLAMA_API_KEY` was added to the registry and
+  `EMAIL_VERIFICATION_REQUIRED` to `.env.example`, closing both known drift instances, but nothing
+  yet *prevents* the next one — a missing `ConfigField` is still silent, making the setting invisible
+  rather than failing validation. See §7.4.
 - `bourbonbook_openai_web_search_calls_total` is OpenAI-specific by name and label set; the Ollama
   Cloud `web_search`/`web_fetch` tool loop is accounted for in the `ApiUsage` ledger
   (`provider="ollama"`, `operation="price_search"`) but has no equivalent web-search-call counter.

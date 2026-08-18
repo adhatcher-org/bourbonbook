@@ -157,7 +157,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "itsdangerous", specifier = ">=2.2,<3" },
     { name = "jinja2", specifier = ">=3.1,<4" },
-    { name = "openai", specifier = ">=1.93,<3" },
+    { name = "openai", specifier = ">=1.93,<4" },
     { name = "pillow", specifier = ">=11,<13" },
     { name = "prometheus-client", specifier = ">=0.22,<1" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1" },

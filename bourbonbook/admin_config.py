@@ -52,6 +52,14 @@ CONFIG_FIELDS = (
         "Analysis",
         optional=True,
     ),
+    ConfigField(
+        "OLLAMA_API_KEY",
+        "ollama_api_key",
+        "Ollama Cloud API key",
+        "Analysis",
+        secret=True,
+        optional=True,
+    ),
     ConfigField("QDRANT_URL", "qdrant_url", "Qdrant URL", "Pricing", "url", optional=True),
     ConfigField(
         "QDRANT_API_KEY", "qdrant_api_key", "Qdrant API key", "Pricing", secret=True, optional=True
@@ -283,7 +291,7 @@ def read_managed_config(path: Path) -> dict[str, str]:
 def unmanaged_config_entries(path: Path) -> dict[str, str]:
     """Return assignments no ConfigField owns, with values kept verbatim.
 
-    These are operator-maintained keys (``OLLAMA_API_KEY``, ``DEBUG``, tuning
+    These are operator-maintained keys (``DATA_DIR``, ``DEBUG``, tuning
     knobs with no admin UI). Values are not decoded or re-encoded so that a
     round-trip through :func:`write_managed_config` is byte-stable.
     """

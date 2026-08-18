@@ -31,13 +31,12 @@ environment-driven setting — all gated behind `auth.require_admin()` and audit
 
 ## Managed configuration (`admin_config.py`)
 
-- **Field registry**: `CONFIG_FIELDS`, a tuple of 42 typed `ConfigField` entries grouped by
+- **Field registry**: `CONFIG_FIELDS`, a tuple of 43 typed `ConfigField` entries grouped by
   Application/Analysis/Pricing/Email/Bootstrap/Network/Security/Observability — the single source
   both the admin UI and validation walk.
 
   > **Drift, as of this revision:** the registry no longer covers every setting. `Settings` has
-  > roughly 60 attributes; `OLLAMA_API_KEY` (present in `.env.example`, and the gate for
-  > Ollama-provider price search) and ten catalog-import tuning knobs
+  > roughly 60 attributes; ten catalog-import tuning knobs
   > (`CATALOG_IMPORT_QUEUE_CAPACITY`, `_CHUNK_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS`,
   > `_LEASE_SECONDS`, `_LEASE_HEARTBEAT_SECONDS`, `_POLL_SECONDS`, `_MAX_IMAGE_PIXELS`,
   > `_MAX_IMAGE_DIMENSION`, `_MAX_PDF_RENDER_PIXELS`, `_MAX_PDF_RENDER_DIMENSION`) are

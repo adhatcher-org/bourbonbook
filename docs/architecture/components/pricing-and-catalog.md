@@ -150,7 +150,7 @@ already trusts, and its records must carry provenance the admin UI supplies inte
 | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Collection name |
 | `ANALYSIS_PROVIDER` | `ollama` | Selects the Tier 3 adapter as well as the analysis provider |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | unset / `gpt-5.5` | Gates and configures Tier 3 when `ANALYSIS_PROVIDER=openai` |
-| `OLLAMA_API_KEY` | unset | Gates Tier 3 when `ANALYSIS_PROVIDER=ollama`; without it `ollama_search.search_prices()` returns `unavailable` immediately. **Not** in `admin_config.CONFIG_FIELDS`, so it is environment-only |
+| `OLLAMA_API_KEY` | unset | Gates Tier 3 when `ANALYSIS_PROVIDER=ollama`; without it `ollama_search.search_prices()` returns `unavailable` immediately. Registered in `admin_config.CONFIG_FIELDS` as a write-only secret field |
 | `OLLAMA_TEXT_MODEL` | falls back to `OLLAMA_MODEL` | Model used for the Ollama price-search tool loop |
 | `OLLAMA_VISION_MODEL` | falls back to `OLLAMA_MODEL` | Vision model used by catalog price-sheet extraction (`catalog_extract.py`) |
 | `OLLAMA_MODEL` | `qwen3.6:35b` | Universal Ollama fallback for both vision and text calls app-wide |

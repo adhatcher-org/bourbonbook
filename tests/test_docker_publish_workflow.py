@@ -16,7 +16,7 @@ def test_docker_publish_uses_the_versioned_shared_workflow() -> None:
     )
     assert (
         "adhatcher-org/shared-workflows/.github/workflows/"
-        "docker-publish.yml@cc0291a44a46d85315af39d125bdc7f293b85b9b" in workflow
+        "docker-publish.yml@456f186a9c21632af188bde4ebf7ce6e11953831" in workflow
     )
     assert "package-name: bourbonbook" in workflow
     assert (

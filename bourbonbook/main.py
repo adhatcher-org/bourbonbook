@@ -30,9 +30,13 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from bourbonbook.admin_config import (
     CONFIG_FIELDS,
+    config_sources,
     managed_config_path,
     parse_config_form,
+    persisted_keys,
+    read_managed_config,
     settings_values,
+    unregistered_env_entries,
     write_managed_config,
 )
 from bourbonbook.analysis import (
@@ -2062,15 +2066,19 @@ def register_routes(app: FastAPI) -> None:
         field_groups: dict[str, list[Any]] = {}
         for field in CONFIG_FIELDS:
             field_groups.setdefault(field.group, []).append(field)
+        config_path = managed_config_path(app.state.settings)
         return render(
             request,
             "admin/config.html",
             user=admin,
             field_groups=field_groups,
             values=values or settings_values(app.state.settings),
+            sources=config_sources(config_path),
+            baseline_values=settings_values(Settings.from_env(include_managed=False)),
+            unregistered=unregistered_env_entries(config_path),
             error=error,
             notice=notice,
-            config_path=managed_config_path(app.state.settings),
+            config_path=config_path,
             status_code=status_code,
         )
 
@@ -2089,7 +2097,21 @@ def register_routes(app: FastAPI) -> None:
             submitted = {field.key: str(form.get(field.key, "")) for field in CONFIG_FIELDS}
             try:
                 values, _candidate = parse_config_form(form, app.state.settings)
-                write_managed_config(managed_config_path(app.state.settings), values)
+                config_path = managed_config_path(app.state.settings)
+                # Persist only what this admin actually set. Writing every field
+                # would freeze environment-inherited values into the file, where
+                # they silently outrank later container changes.
+                persist = persisted_keys(
+                    values,
+                    settings_values(Settings.from_env(include_managed=False)),
+                    read_managed_config(config_path),
+                    reverted={
+                        field.key
+                        for field in CONFIG_FIELDS
+                        if str(form.get(f"revert_{field.key}", "")) == "true"
+                    },
+                )
+                write_managed_config(config_path, values, persist=persist)
             except (OSError, ValueError) as exc:
                 log_admin_action(admin.id, admin.id, "update_config", False)
                 return render_admin_config(

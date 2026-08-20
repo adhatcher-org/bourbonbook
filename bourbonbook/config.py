@@ -72,10 +72,19 @@ class Settings:
     log_format: str = "text"
 
     @classmethod
-    def from_env(cls) -> Settings:
+    def from_env(cls, *, include_managed: bool = True) -> Settings:
+        """Build settings from the environment, layered under the managed ``.env``.
+
+        ``include_managed=False`` skips the managed file and returns the
+        *baseline*: what the app would run with from the container environment
+        and code defaults alone. The admin UI compares a submitted form against
+        that baseline to decide which keys a save should persist, so inherited
+        values are not silently frozen into the file.
+        """
         from bourbonbook.admin_config import load_managed_overrides
 
-        values: Mapping[str, str] = {**os.environ, **load_managed_overrides()}
+        overrides = load_managed_overrides() if include_managed else {}
+        values: Mapping[str, str] = {**os.environ, **overrides}
         get = values.get
         data_dir = Path(get("DATA_DIR", "./data")).resolve()
         return cls(

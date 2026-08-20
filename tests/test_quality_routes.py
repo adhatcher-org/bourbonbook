@@ -339,7 +339,12 @@ def test_bottle_missing_edit_sources_delete_and_media(tmp_path: Path) -> None:
         assert 'value="$100.00" readonly data-total-value' in edit.text
         assert 'class="msrp-field"' in edit.text
         assert 'class="price-refresh price-refresh-inline"' in edit.text
-        assert "Barrel information" not in edit.text
+        assert "Barrel information" in edit.text
+        assert 'class="form-section collapsible-section" open' in edit.text
+        assert 'name="date_bottled" type="date"' in edit.text
+        assert 'name="date_purchased" type="date"' in edit.text
+        assert 'aria-describedby="date-bottled-error"' not in edit.text
+        assert 'aria-describedby="date-purchased-error"' not in edit.text
         saved = client.post(
             f"/bottles/{bottle_id}/edit",
             data={

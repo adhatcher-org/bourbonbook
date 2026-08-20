@@ -26,6 +26,7 @@
       <label class="range-field"><span>Fill level <output data-fill-output>{{ bottle.fill_level }}%</output></span><input name="fill_level" type="range" min="0" max="100" step="5" value="{{ bottle.fill_level }}" data-fill-range></label>
       <div class="field-grid valuation-fields">
         <label class="purchase-price-field">Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="{{ bottle.purchase_price if bottle.purchase_price is not none else '' }}" inputmode="decimal"></label>
+        <label>Date purchased<input name="date_purchased" type="date" value="{{ bottle.date_purchased.isoformat() if bottle.date_purchased else '' }}"{% if errors and errors.get('date_purchased') %} aria-describedby="date-purchased-error"{% endif %}>{% if errors and errors.get('date_purchased') %}<small id="date-purchased-error" class="field-error">{{ errors['date_purchased'] }}</small>{% endif %}</label>
         <label class="quantity-field">Quantity<input name="quantity" type="number" min="1" max="99" value="{{ bottle.quantity }}"></label>
         <label class="calculated-field total-spent-field">Total spent<input type="text" value="{{ ('$%.2f'|format(bottle.purchase_price * bottle.quantity)) if bottle.purchase_price is not none else '' }}" readonly data-total-spent></label>
         <label class="calculated-field total-value-field">Total value<input type="text" value="{{ ('$%.2f'|format(bottle.msrp * bottle.quantity)) if bottle.msrp is not none else '' }}" readonly data-total-value></label>
@@ -35,10 +36,10 @@
       </div>
     </section>
     </div>
-    {% set has_barrel_info = bottle.barrel_number or bottle.bottle_number or bottle.warehouse or bottle.floor %}
-    {% if has_barrel_info %}<details class="form-section collapsible-section" open><summary><div class="section-heading"><span>03</span><h2>Barrel information</h2></div><small>Details added</small></summary><div class="field-grid">
+    <details class="form-section collapsible-section" open><summary><div class="section-heading"><span>03</span><h2>Barrel information</h2></div><small>Optional details</small></summary><div class="field-grid">
       <label>Barrel number<input name="barrel_number" value="{{ bottle.barrel_number }}"></label><label>Bottle number<input name="bottle_number" value="{{ bottle.bottle_number }}"></label><label>Warehouse<input name="warehouse" value="{{ bottle.warehouse }}"></label><label>Floor<input name="floor" value="{{ bottle.floor }}"></label>
-    </div></details>{% endif %}
+      <label>Date bottled<input name="date_bottled" type="date" value="{{ bottle.date_bottled.isoformat() if bottle.date_bottled else '' }}"{% if errors and errors.get('date_bottled') %} aria-describedby="date-bottled-error"{% endif %}>{% if errors and errors.get('date_bottled') %}<small id="date-bottled-error" class="field-error">{{ errors['date_bottled'] }}</small>{% endif %}</label>
+    </div></details>
     <section class="form-section"><div class="section-heading"><span>04</span><h2>Tasting &amp; notes</h2></div>
       <fieldset class="rating-picker"><legend>Your rating</legend>{% for option in range(5,0,-1) %}<input id="rating-{{ option }}" type="radio" name="rating" value="{{ option }}" {{ 'checked' if bottle.rating == option }}><label for="rating-{{ option }}" aria-label="{{ option }} stars">★</label>{% endfor %}</fieldset>
       <div class="field-grid"><label class="field-span">Tasting notes<textarea name="tasting_notes" rows="3" placeholder="Caramel, oak, orange peel…">{{ bottle.tasting_notes }}</textarea></label><label class="field-span">Private notes<textarea name="notes" rows="4" placeholder="Where you found it, who shared it, what to remember…">{{ bottle.notes }}</textarea></label></div>

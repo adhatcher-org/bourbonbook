@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -431,6 +431,19 @@ def test_apply_analysis_still_parses_a_clean_numeric_proof() -> None:
     assert bottle.proof == 107.0
 
 
+def test_apply_analysis_never_overwrites_lifecycle_dates() -> None:
+    bottle = Bottle(name="Example", date_bottled=date(2025, 10, 1), date_purchased=date(2026, 1, 2))
+
+    apply_analysis(
+        bottle,
+        {"date_bottled": "2020-01-01", "date_purchased": "2020-01-02", "brand": "New"},
+    )
+
+    assert bottle.brand == "New"
+    assert bottle.date_bottled == date(2025, 10, 1)
+    assert bottle.date_purchased == date(2026, 1, 2)
+
+
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
     client, _ = make_client(tmp_path)
     with client:
@@ -777,6 +790,161 @@ def test_add_bottle_pipeline_failure_leaves_a_usable_bottle_row(
 
         edit_page = client.get(f"/bottles/{bottle_id}/edit?new=1")
         assert edit_page.status_code == 200
+
+
+def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_instance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def unexpected_analysis(*args, **kwargs):
+        raise AssertionError("invalid lifecycle dates must not start analysis")
+
+    monkeypatch.setattr("bourbonbook.bottle_processing.analyze_bottle", unexpected_analysis)
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        new_page = client.get("/bottles/new")
+        invalid = client.post(
+            "/bottles",
+            data={
+                "csrf_token": csrf(new_page),
+                "date_bottled": "2026-2-03",
+                "date_purchased": "2026-02-30",
+            },
+            files={"photo": ("bottle.png", b"not saved", "image/png")},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json() == {
+            "errors": {
+                "date_bottled": "Use YYYY-MM-DD.",
+                "date_purchased": "Enter a valid calendar date.",
+            }
+        }
+        assert not list((tmp_path / "uploads").glob("*"))
+        with app.state.database.session_factory() as session:
+            assert session.scalar(select(Bottle)) is None
+
+        async def leave_bottle_queued(*args, **kwargs) -> None:
+            """Keep this route regression focused on persisted request data."""
+
+        monkeypatch.setattr("bourbonbook.main.run_add_bottle_pipeline", leave_bottle_queued)
+        image_bytes = BytesIO()
+        Image.new("RGB", (120, 200), "#7a3f1c").save(image_bytes, "PNG")
+        accepted = client.post(
+            "/bottles",
+            data={
+                "csrf_token": csrf(new_page),
+                "date_bottled": "2026-01-02",
+                "date_purchased": "2026-01-03",
+            },
+            files={"photo": ("dated-bottle.png", image_bytes.getvalue(), "image/png")},
+        )
+        assert accepted.status_code == 202
+        accepted_bottle_id = accepted.json()["bottle_id"]
+        with app.state.database.session_factory() as session:
+            accepted_bottle = session.get(Bottle, accepted_bottle_id)
+            assert accepted_bottle is not None
+            assert accepted_bottle.processing_stage == "queued"
+            assert accepted_bottle.date_bottled == date(2026, 1, 2)
+            assert accepted_bottle.date_purchased == date(2026, 1, 3)
+
+        owner = None
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            first = Bottle(
+                owner_id=owner.id,
+                name="Same Product",
+                brand="Example",
+                release="Release",
+                edition="Edition",
+                date_bottled=date(2025, 1, 2),
+                date_purchased=date(2025, 1, 3),
+                barrel_number="A-1",
+            )
+            second = Bottle(
+                owner_id=owner.id,
+                name="Same Product",
+                brand="Example",
+                release="Release",
+                edition="Edition",
+                date_bottled=date(2025, 2, 2),
+                date_purchased=date(2025, 2, 3),
+                barrel_number="B-2",
+            )
+            session.add_all([first, second])
+            session.commit()
+            first_id, second_id = first.id, second.id
+
+        edit = client.get(f"/bottles/{first_id}/edit")
+        invalid_edit = client.post(
+            f"/bottles/{first_id}/edit",
+            data={"csrf_token": csrf(edit), "date_bottled": "01/02/2025"},
+        )
+        assert invalid_edit.status_code == 422
+        assert "Use YYYY-MM-DD." in invalid_edit.text
+        assert 'aria-describedby="date-bottled-error"' in invalid_edit.text
+
+        invalid_reanalysis = client.post(
+            f"/bottles/{first_id}/analyze",
+            data={
+                "csrf_token": csrf(edit),
+                "analysis_mode": "name",
+                "date_purchased": "2025-99-01",
+            },
+        )
+        assert invalid_reanalysis.status_code == 422
+        assert "Enter a valid calendar date." in invalid_reanalysis.text
+
+        saved = client.post(
+            f"/bottles/{first_id}/edit",
+            data={
+                "csrf_token": csrf(edit),
+                "name": "Same Product",
+                "brand": "Example",
+                "release": "Release",
+                "edition": "Edition",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+                "date_bottled": "2026-03-04",
+                "date_purchased": "2026-03-05",
+                "barrel_number": "A-3",
+            },
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+        detail = client.get(saved.headers["location"])
+        assert "2026-03-04" in detail.text
+        assert "2026-03-05" in detail.text
+        assert "Barrel information" in detail.text
+        with app.state.database.session_factory() as session:
+            first = session.get(Bottle, first_id)
+            second = session.get(Bottle, second_id)
+            assert first is not None and second is not None
+            assert first.date_bottled == date(2026, 3, 4)
+            assert first.date_purchased == date(2026, 3, 5)
+            assert first.barrel_number == "A-3"
+            assert second.date_bottled == date(2025, 2, 2)
+            assert second.date_purchased == date(2025, 2, 3)
+            assert second.barrel_number == "B-2"
+
+
+def test_detail_renders_barrel_information_for_a_bottled_date_only(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            bottle = Bottle(owner_id=owner.id, name="Date Only", date_bottled=date(2026, 4, 5))
+            session.add(bottle)
+            session.commit()
+            bottle_id = bottle.id
+
+        detail = client.get(f"/bottles/{bottle_id}")
+        assert detail.status_code == 200
+        assert "Barrel information" in detail.text
+        assert "2026-04-05" in detail.text
 
 
 def test_collection_page_excludes_a_bottle_still_mid_pipeline(tmp_path: Path) -> None:

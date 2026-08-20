@@ -95,6 +95,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Local catalog/OHLQ cache exists, but no Qdrant embedding, index, filtered retrieval, or Ollama evidence synthesis is present. |
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
+| A14 | Bottle instances, editable barrel details, and lifecycle dates | In Progress | `codex/bottle-editability-lifecycle-dates` | Approved design review; implementation in progress. |
 
 ## Implementation Audit
 
@@ -939,6 +940,69 @@ A01–A12.
 - Deployment, health, backup, restore, and rollback runbooks are complete.
 - Sub-agent review and `make pr-review` pass.
 - Draft PR exists and the A13 tracker row is updated.
+
+---
+
+## A14 — Bottle Instances, Editable Barrel Details, and Lifecycle Dates
+
+### Goal
+
+Always make an existing bottle's barrel information editable, and record optional bottled and
+purchased calendar dates. A bottle remains one owned physical inventory row: multiple rows may have
+the same product identity while retaining independent barrel and lifecycle facts.
+
+### Dependencies
+
+None.
+
+### Scope and exclusions
+
+- `quantity` remains an existing row-level convenience value. This action neither redefines it nor
+  splits historic quantities into individual bottles.
+- Matching or merging photo submissions with existing bottles, and photo-driven fill/status updates,
+  are excluded.
+- No product-catalog redesign, provider contract, runtime configuration, or ADR is required.
+
+### Expected Files
+
+- `bourbonbook/models.py`
+- `bourbonbook/main.py`
+- `bourbonbook/migrations.py`
+- `migrations/versions/0010_bottle_lifecycle_dates.py`
+- `bourbonbook/templates/new.html`
+- `bourbonbook/templates/edit.html`
+- `bourbonbook/templates/detail.html`
+- `tests/test_app.py`
+- `tests/test_migrations.py`
+
+### Individual Implementation Instructions
+
+1. Add nullable `date_bottled` and `date_purchased` SQLAlchemy `Date` columns to `Bottle`.
+2. Add forward-only migration `0010_bottle_lifecycle_dates` from `0009_bottle_processing_stage`;
+   add nullable `sa.Date()` columns, bump `HEAD_REVISION`, and leave `EXPECTED_SCHEMA` unchanged.
+3. Use one server-side parser for optional dates: blanks become `None`; nonblank values must match
+   exact `YYYY-MM-DD` before `date.fromisoformat`; invalid dates produce named field errors.
+4. Validate both dates before any model mutation, photo save, commit, background scheduling, or
+   provider call on the photo-add, edit, and all photo/name/price re-analysis submissions. Invalid
+   add requests return JSON `422`; invalid edit/re-analysis requests render the editor with `422`.
+5. Pass validated typed dates through the central form-update path. Analysis results must neither
+   supply nor overwrite lifecycle dates.
+6. Always render the open Barrel information editor. Add accessible native date controls: Date
+   bottled in that editor and Date purchased alongside purchase/status information. Render stored
+   dates consistently in detail views as local calendar dates.
+7. Preserve CSRF verification, verified-user guards, and owner scoping. A matching product identity
+   must not cause a separate owned `Bottle` row to be merged or changed.
+
+### Completion Evidence
+
+- A blank-barrel existing bottle renders the open barrel editor and can save all barrel/date fields.
+- Valid dates persist through initial photo add, normal edit, and photo/name/price re-analysis;
+  invalid dates cause no partial database, photo, provider, or background-work side effect.
+- Same-product owned rows retain independent barrel/date values.
+- Migration tests prove fresh bootstrap, `0009` upgrade with null lifecycle dates, repeat bootstrap,
+  and downgrade behavior.
+- Route tests cover CSRF, authentication, and cross-owner access for changed paths.
+- Independent review, `make pr-review`, a draft PR, and tracker evidence are recorded.
 
 ## Plan-Review Prompt
 

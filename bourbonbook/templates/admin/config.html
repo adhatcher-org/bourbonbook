@@ -8,6 +8,14 @@
   </section>
   {% if error %}<div class="form-alert" role="alert">{{ error }}</div>{% endif %}
   {% if notice %}<div class="analysis-banner" role="status">{{ notice }}</div>{% endif %}
+  {% if unregistered %}
+  <div class="form-alert" role="alert">
+    <strong>Ignored entries in {{ config_path }}.</strong>
+    These keys are set in the file but no setting owns them, so they have no effect:
+    {% for key in unregistered %}<code>{{ key }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+    Remove them, or check the key name for a typo.
+  </div>
+  {% endif %}
   <form method="post" action="/admin/config">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% for group, fields in field_groups.items() %}
@@ -16,6 +24,14 @@
       <div class="field-grid">
       {% for field in fields %}
         <label>{{ field.label }}
+          {% set source = sources[field.key] %}
+          {% if source == "file" %}
+          <span class="config-source config-source-file" title="Set in {{ config_path }}; overrides the container environment.">Overridden here</span>
+          {% elif source == "environment" %}
+          <span class="config-source config-source-env" title="Inherited from the container environment. Saving a change here overrides it.">Unraid template</span>
+          {% else %}
+          <span class="config-source config-source-default" title="Neither the file nor the environment sets this; the built-in default applies.">Default</span>
+          {% endif %}
           {% if field.kind == "choice" %}
           <select name="{{ field.key }}" required>
             {% for option in field.options %}<option value="{{ option }}"{% if values[field.key] == option %} selected{% endif %}>{{ option }}</option>{% endfor %}
@@ -36,6 +52,13 @@
           <input type="url" name="{{ field.key }}" value="{{ values[field.key] }}" required>
           {% else %}
           <input name="{{ field.key }}" value="{{ values[field.key] }}"{% if not field.optional %} required{% endif %}>
+          {% endif %}
+          {% if source == "file" %}
+          <span class="config-clear"><input type="checkbox" name="revert_{{ field.key }}" value="true"> Revert to
+            {%- if field.secret %} the inherited value
+            {%- elif baseline_values[field.key] %} <code>{{ baseline_values[field.key] }}</code>
+            {%- else %} the default
+            {%- endif %}</span>
           {% endif %}
         </label>
       {% endfor %}

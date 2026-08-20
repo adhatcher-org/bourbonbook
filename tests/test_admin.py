@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from bourbonbook.admin_config import (
     CONFIG_FIELDS,
+    MANAGED_HEADER,
     UNMANAGED_HEADER,
     read_managed_config,
     settings_values,
@@ -1551,7 +1552,7 @@ def test_write_managed_config_preserves_operator_maintained_keys(tmp_path: Path)
     env = tmp_path / ".env"
     env.write_text(
         "CATALOG_IMPORT_QUEUE_CAPACITY=5\n"
-        "CATALOG_IMPORT_MAX_IMAGE_PIXELS=50000000\n"
+        "CATALOG_IMPORT_LEASE_SECONDS=1200\n"
         "DEBUG=True\n"
         'SESSION_SECRET="stale-value"\n',
         encoding="utf-8",
@@ -1563,10 +1564,12 @@ def test_write_managed_config_preserves_operator_maintained_keys(tmp_path: Path)
     preserved = unmanaged_config_entries(env)
     assert preserved == {
         "CATALOG_IMPORT_QUEUE_CAPACITY": "5",
-        "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "50000000",
+        "CATALOG_IMPORT_LEASE_SECONDS": "1200",
         "DEBUG": "True",
     }
-    assert UNMANAGED_HEADER in env.read_text(encoding="utf-8")
+    # Kept verbatim and in place rather than relocated under a header, so comments an
+    # operator wrote next to these keys stay attached to them.
+    assert "CATALOG_IMPORT_QUEUE_CAPACITY=5" in env.read_text(encoding="utf-8")
     # The managed block still wins for keys the registry owns.
     assert read_managed_config(env)["SESSION_SECRET"] == "managed-SESSION_SECRET"
 
@@ -1594,7 +1597,7 @@ def test_write_managed_config_round_trip_is_stable(tmp_path: Path) -> None:
     write_managed_config(env, values)
 
     assert env.read_text(encoding="utf-8") == first
-    assert first.count(UNMANAGED_HEADER) == 1
+    assert first.count(MANAGED_HEADER) == 1
     assert first.count("OLLAMA_API_KEY=") == 1
 
 
@@ -1628,7 +1631,7 @@ def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypat
     client, app = make_client(tmp_path)
     env = tmp_path / ".env"
     env.write_text(
-        "CATALOG_IMPORT_QUEUE_CAPACITY=5\nCATALOG_IMPORT_MAX_IMAGE_PIXELS=12345678\n",
+        "CATALOG_IMPORT_QUEUE_CAPACITY=5\nCATALOG_IMPORT_LEASE_SECONDS=12345678\n",
         encoding="utf-8",
     )
     with client:
@@ -1647,7 +1650,7 @@ def test_admin_config_save_preserves_unregistered_keys(tmp_path: Path, monkeypat
 
     assert unmanaged_config_entries(env) == {
         "CATALOG_IMPORT_QUEUE_CAPACITY": "5",
-        "CATALOG_IMPORT_MAX_IMAGE_PIXELS": "12345678",
+        "CATALOG_IMPORT_LEASE_SECONDS": "12345678",
     }
     assert read_managed_config(env)["OPENAI_MODEL"] == "gpt-preserved"
     # OLLAMA_API_KEY is a registered secret field, so the admin UI owns it now.

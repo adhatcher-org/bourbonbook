@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -111,6 +111,22 @@ CONFIG_FIELDS = (
         "integer",
         minimum=1,
         maximum=100,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_MAX_IMAGE_PIXELS",
+        "catalog_import_max_image_pixels",
+        "Catalog import maximum image pixels",
+        "Catalog import",
+        "integer",
+        minimum=1,
+    ),
+    ConfigField(
+        "CATALOG_IMPORT_MAX_IMAGE_DIMENSION",
+        "catalog_import_max_image_dimension",
+        "Catalog import maximum image dimension (0 disables)",
+        "Catalog import",
+        "integer",
+        minimum=0,
     ),
     ConfigField(
         "CATALOG_IMPORT_SOURCE_EXPIRY_HOURS",
@@ -259,10 +275,6 @@ ENV_ONLY_SETTINGS: Mapping[str, str] = MappingProxyType(
         # Acknowledged drift, not policy: catalog-import tuning budgets that are admin-editable in
         # principle and simply have no ConfigField yet. Give one a ConfigField and delete its entry
         # here; do not add new entries to this block without a reason that belongs above instead.
-        "catalog_import_max_image_pixels": "Decode budget; env-only pending an admin UI decision.",
-        "catalog_import_max_image_dimension": (
-            "Decode budget; env-only pending an admin UI decision."
-        ),
         "catalog_import_max_pdf_render_pixels": (
             "Decode budget; env-only pending an admin UI decision."
         ),
@@ -294,6 +306,19 @@ omission into a failing test rather than an accident.
 SECRET_PLACEHOLDER = ""
 
 UNMANAGED_HEADER = "# Unregistered keys (preserved, not managed via UI)"
+
+MANAGED_HEADER = "# Managed from Bourbon Book administration. Changes require a restart."
+
+# Keys that may sit in the managed .env without being a mistake. Everything in
+# ENV_ONLY_SETTINGS is deliberately absent here: those are settable from the
+# container environment but silently discarded when read from this file, so an
+# operator who puts one here does need telling.
+NON_SETTING_ENV_KEYS = frozenset(
+    {
+        # Consumed by the container runtime, not by Settings.
+        "TZ",
+    }
+)
 
 
 def managed_config_path(settings: Settings) -> Path:
@@ -355,21 +380,105 @@ def unmanaged_config_entries(path: Path) -> dict[str, str]:
     return entries
 
 
-def write_managed_config(path: Path, values: Mapping[str, str]) -> None:
-    """Atomically rewrite the managed ``.env``, preserving unregistered keys.
+def unregistered_env_entries(path: Path) -> dict[str, str]:
+    """Return ``.env`` assignments that are silently ignored at runtime.
 
-    The managed block is regenerated from ``values``; anything the registry does
-    not own is carried over verbatim instead of being dropped.
+    :func:`read_managed_config` drops every key no ``ConfigField`` owns, so an
+    operator can set one, see it in the file, and never have it take effect.
+    Subtracting the keys that are unmanaged *by design* leaves exactly the
+    entries worth warning about.
     """
+    return {
+        key: raw_value
+        for key, raw_value in unmanaged_config_entries(path).items()
+        if key not in NON_SETTING_ENV_KEYS
+    }
+
+
+def config_sources(path: Path, environment: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return where each registered key's value comes from.
+
+    ``"file"`` means the managed ``.env`` set it (and therefore wins),
+    ``"environment"`` means it is inherited from the container environment, and
+    ``"default"`` means neither source set it and the code default applies.
+    """
+    environment = os.environ if environment is None else environment
+    from_file = read_managed_config(path)
+    sources: dict[str, str] = {}
+    for field in CONFIG_FIELDS:
+        if field.key in from_file:
+            sources[field.key] = "file"
+        elif field.key in environment:
+            sources[field.key] = "environment"
+        else:
+            sources[field.key] = "default"
+    return sources
+
+
+def persisted_keys(
+    submitted: Mapping[str, str],
+    baseline: Mapping[str, str],
+    existing: Mapping[str, str],
+    reverted: Collection[str] = (),
+) -> set[str]:
+    """Return the registered keys a save should write to ``.env``.
+
+    A key belongs in the file when it is already there (an existing deliberate
+    override) or when the submitted value differs from ``baseline`` -- what the
+    container environment and code defaults would produce on their own. Keys
+    that match the baseline are omitted so they keep inheriting rather than
+    being frozen into the file, which would make later environment changes
+    silently ineffective. ``reverted`` names keys the admin explicitly asked to
+    hand back to the environment.
+    """
+    keys: set[str] = set()
+    for field in CONFIG_FIELDS:
+        key = field.key
+        if key in reverted:
+            continue
+        if key in existing or submitted.get(key, "") != baseline.get(key, ""):
+            keys.add(key)
+    return keys
+
+
+def write_managed_config(
+    path: Path, values: Mapping[str, str], *, persist: Collection[str] | None = None
+) -> None:
+    """Atomically rewrite the managed ``.env``.
+
+    ``persist`` names the registered keys to write. Anything omitted is dropped
+    from the file so it falls back to the container environment or the code
+    default; ``None`` writes every registered key. Lines the registry does not
+    own -- comments, blanks, and unregistered assignments -- are carried through
+    verbatim in their original order, so operator notes survive a save.
+    """
+    managed = {field.key for field in CONFIG_FIELDS}
+    persisted = managed if persist is None else set(persist)
     path.parent.mkdir(parents=True, exist_ok=True)
-    preserved = unmanaged_config_entries(path)
-    temporary = path.with_suffix(".tmp")
-    lines = ["# Managed from Bourbon Book administration. Changes require a restart."]
-    lines.extend(f"{field.key}={json.dumps(values[field.key])}" for field in CONFIG_FIELDS)
-    if preserved:
+
+    kept: list[str] = []
+    if path.exists():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line in {MANAGED_HEADER, UNMANAGED_HEADER}:
+                continue
+            is_assignment = bool(line) and not line.startswith("#") and "=" in line
+            if is_assignment and line.split("=", 1)[0].strip() in managed:
+                continue
+            kept.append(raw_line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+
+    lines = list(kept)
+    if lines:
         lines.append("")
-        lines.append(UNMANAGED_HEADER)
-        lines.extend(f"{key}={raw_value}" for key, raw_value in preserved.items())
+    lines.append(MANAGED_HEADER)
+    lines.extend(
+        f"{field.key}={json.dumps(values[field.key])}"
+        for field in CONFIG_FIELDS
+        if field.key in persisted
+    )
+    temporary = path.with_suffix(".tmp")
     temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)

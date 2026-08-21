@@ -132,7 +132,8 @@ price-catalog-extract-screenshots`) — two callers, one code path, so a change 
 
 PDFs are rasterized page by page (`document_chunks()`); tall screenshots are sliced into overlapping
 vertical chunks (`image_chunks()`, default 2400px tall, 120px overlap) so a long price list is not
-truncated by the model's context window. Each chunk goes to `OLLAMA_VISION_MODEL or OLLAMA_MODEL`,
+truncated by the model's context window. Each chunk goes to `OLLAMA_VISION_MODEL or OLLAMA_MODEL`
+with `OLLAMA_VISION_NUM_CTX` (default `32768`),
 prompted to use the sale "Now" price rather than a crossed-out one and to skip incomplete cards.
 `parse_catalog_items()` strips code fences and defensively validates each record; `parse_price()`
 rejects anything outside `(0, 100000)`; `canonical_size()` normalizes e.g. `750ML`;

@@ -123,8 +123,11 @@ the value actually configured in Unraid.
 | `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama` or `openai` | Yes | No |
 | `OLLAMA_URL` | Variable | `OLLAMA_URL` | `http://ollama:11434` | If using Ollama | No |
 | `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `qwen3.6:35b` | Fallback for either Ollama task | No |
+| `OLLAMA_NUM_CTX` | Variable | `OLLAMA_NUM_CTX` | `4096` | Fallback/text context window | No |
 | `OLLAMA_VISION_MODEL` | Variable | `OLLAMA_VISION_MODEL` | `qwen3.6:35b` | Photo analysis | No |
+| `OLLAMA_VISION_NUM_CTX` | Variable | `OLLAMA_VISION_NUM_CTX` | `32768` | Photo and catalog-extraction context window | No |
 | `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | unset (falls back to `OLLAMA_MODEL`) | Name-only analysis | No |
+| `OLLAMA_TEXT_NUM_CTX` | Variable | `OLLAMA_TEXT_NUM_CTX` | unset (falls back to `OLLAMA_NUM_CTX`) | Optional text-model context window | No |
 | `QDRANT_URL` | Variable | `QDRANT_URL` | `http://qdrant:6333` | Local price search index | No |
 | `QDRANT_API_KEY` | Variable | `QDRANT_API_KEY` | masked value | If Qdrant requires authentication | Yes |
 | `QDRANT_PRICE_COLLECTION` | Variable | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Local price-search collection | No |
@@ -169,6 +172,10 @@ deployments. A vision-capable model is required for uploaded bottle photos. The 
 `qwen3.6:35b`, reports `completion`, `vision`, `tools`, and `thinking` capabilities and can serve
 both `OLLAMA_VISION_MODEL` and `OLLAMA_MODEL`/`OLLAMA_TEXT_MODEL` from a single resident model
 instead of loading a separate model per task.
+
+Context windows are configured by role: `OLLAMA_VISION_NUM_CTX` defaults to `32768` for bottle
+photos, catalog extraction, and vision warm-up. `OLLAMA_NUM_CTX` defaults to `4096` for text work;
+set the optional `OLLAMA_TEXT_NUM_CTX` only when the text model needs a different positive value.
 
 Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
 are process-local; add a shared limiter before scaling workers or replicas.

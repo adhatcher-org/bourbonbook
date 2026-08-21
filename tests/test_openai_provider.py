@@ -56,6 +56,7 @@ def test_openai_image_analysis_uses_structured_output(tmp_path, monkeypatch) -> 
                     floor=None,
                     status="Unopened",
                     fill_level=45,
+                    date_bottled="2025-03-07",
                     msrp=None,
                 )
             )
@@ -78,6 +79,7 @@ def test_openai_image_analysis_uses_structured_output(tmp_path, monkeypatch) -> 
     assert status == "complete"
     assert result["fill_level"] == 45
     assert result["status"] == "Opened"
+    assert result["date_bottled"] == "2025-03-07"
     assert "msrp" not in result
     assert captured["model"] == "test-openai"
     assert captured["text_format"] is BottleAnalysis
@@ -120,6 +122,7 @@ def test_shared_openai_client_is_reused(tmp_path, monkeypatch) -> None:
                     floor=None,
                     status="Unopened",
                     fill_level=45,
+                    date_bottled=None,
                     msrp=None,
                 )
             )

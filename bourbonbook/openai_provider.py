@@ -43,6 +43,7 @@ class BottleAnalysis(BaseModel):
     floor: str | None
     status: Literal["Unopened", "Opened", "Empty"] | None
     fill_level: int | None
+    date_bottled: str | None = None
     msrp: None
     ocr_text: str | None = None
 

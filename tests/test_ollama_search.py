@@ -153,6 +153,7 @@ def test_ollama_web_search_round_trip_returns_a_grounded_price(tmp_path) -> None
         }
     ]
     assert client.calls[0][0] == f"{settings.ollama_url}/api/chat"
+    assert client.calls[0][1]["options"] == {"num_ctx": 4096}
     assert client.calls[1][0] == "https://ollama.com/api/web_search"
     assert client.calls[1][2]["Authorization"] == "Bearer test-ollama-cloud-key"
     assert client.calls[2][0] == f"{settings.ollama_url}/api/chat"

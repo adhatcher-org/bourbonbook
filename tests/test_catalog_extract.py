@@ -106,6 +106,7 @@ def test_reusable_extraction_renders_generated_image_and_returns_normalized_prop
     assert isinstance(payload, dict)
     assert "name, current displayed price, and bottle size" in str(payload["prompt"])
     assert "Now" in str(payload["prompt"])
+    assert payload["options"] == {"temperature": 0, "num_ctx": 32768}
     assert client.calls[0]["timeout"] == 120.0
 
 

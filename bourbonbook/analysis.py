@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -35,6 +37,8 @@ FIELDS = (
     "msrp",
 )
 OUTPUT_FIELDS = FIELDS + ("ocr_text",)
+PHOTO_OUTPUT_FIELDS = OUTPUT_FIELDS + ("date_bottled",)
+PHOTO_BOTTLED_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MISSING_FIELDS = (
     "name",
     "brand",
@@ -65,6 +69,9 @@ Field rules:
 - size is only package volume such as 750ml, never an age statement.
 - On a barrel tag, map text beside "Barrel No", "Bottle No", "Warehouse", "Floor", or "Rick No"
   to the corresponding field. Do not shift values between fields.
+- date_bottled is the bottling date printed on this specific bottle or its barrel tag. Return it
+  only when the complete calendar date is clearly readable, using exactly YYYY-MM-DD. Return null
+  for partial, ambiguous, inferred, or unreadable dates.
 - Determine condition from the liquid boundary, not from whether a cap or seal is present. If amber
   liquid visibly continues through the shoulder and into the narrow neck with no meniscus in the
   wide body, the bottle is full: fill_level 100 and status Unopened. If a horizontal air/liquid
@@ -82,6 +89,15 @@ Field rules:
 - MSRP must always be null; a photograph cannot establish current pricing.
 - Use null for every uncertain or unreadable value. Numeric proof, ABV, and fill_level must not
   include symbols or units."""
+
+
+@dataclass(frozen=True)
+class PhotoAnalysisResult:
+    """Photo fields plus the separately-provenanced optional bottled date."""
+
+    values: dict[str, Any]
+    status: str
+    date_bottled: date | None
 
 
 def name_prompt(name: str) -> str:
@@ -239,6 +255,16 @@ def normalize_analysis(values: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def normalize_photo_bottled_date(value: Any) -> date | None:
+    """Accept only an exact, complete photo-proposed ISO calendar date."""
+    if not isinstance(value, str) or not PHOTO_BOTTLED_DATE_PATTERN.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 async def _request_provider_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:
@@ -265,16 +291,21 @@ async def _refine_analysis(
     return values, status
 
 
-async def analyze_bottle(photo: Path, settings: Settings) -> tuple[dict[str, Any], str]:
+async def analyze_bottle(photo: Path, settings: Settings) -> PhotoAnalysisResult:
     values, status = await _request_provider_analysis(PHOTO_PROMPT, settings, photo)
+    photo_bottled_date = normalize_photo_bottled_date(values.get("date_bottled"))
+    values = {key: value for key, value in values.items() if key != "date_bottled"}
     if not values:
-        return values, status
+        return PhotoAnalysisResult(values, status, photo_bottled_date)
     values, matched = enrich_from_verified_catalog(values)
     if matched:
-        return values, "verified"
+        return PhotoAnalysisResult(values, "verified", photo_bottled_date)
     if settings.analysis_provider == "ollama" and missing_fields(values):
-        return await _refine_analysis(values, settings, source="transcribed bottle-label text")
-    return values, status
+        values, status = await _refine_analysis(
+            values, settings, source="transcribed bottle-label text"
+        )
+        values.pop("date_bottled", None)
+    return PhotoAnalysisResult(values, status, photo_bottled_date)
 
 
 async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, Any], str]:

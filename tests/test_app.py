@@ -12,8 +12,15 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import select, text
 
+from bourbonbook.analysis import PhotoAnalysisResult
 from bourbonbook.config import Settings
-from bourbonbook.main import apply_analysis, apply_user_purchase_price, create_app, refresh_prices
+from bourbonbook.main import (
+    apply_analysis,
+    apply_photo_bottled_date,
+    apply_user_purchase_price,
+    create_app,
+    refresh_prices,
+)
 from bourbonbook.migrations import bootstrap_database
 from bourbonbook.models import Bottle, CatalogPrice, User
 from bourbonbook.qdrant_prices import PriceMatch
@@ -444,6 +451,15 @@ def test_apply_analysis_never_overwrites_lifecycle_dates() -> None:
     assert bottle.date_purchased == date(2026, 1, 2)
 
 
+def test_photo_bottled_date_fills_only_an_empty_value() -> None:
+    bottle = Bottle(name="Example")
+
+    apply_photo_bottled_date(bottle, date(2025, 10, 1))
+    apply_photo_bottled_date(bottle, date(2024, 1, 2))
+
+    assert bottle.date_bottled == date(2025, 10, 1)
+
+
 def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
     client, _ = make_client(tmp_path)
     with client:
@@ -599,7 +615,7 @@ def test_new_bottle_page_schedules_a_vision_model_warm_up(tmp_path: Path, monkey
 
 def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     async def fake_analysis(photo, settings):
-        return (
+        return PhotoAnalysisResult(
             {
                 "name": "Eagle Rare 10 Year",
                 "brand": "Eagle Rare",
@@ -609,6 +625,7 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
                 "size": "750ml",
             },
             "complete",
+            None,
         )
 
     # The initial POST /bottles now runs analysis in the background pipeline, which imports
@@ -620,6 +637,7 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     with client:
         register(client)
         new_page = client.get("/bottles/new")
+        assert 'name="date_bottled"' not in new_page.text
         assert (
             'name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" '
             "required data-photo-input" in new_page.text
@@ -813,12 +831,7 @@ def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_ins
             files={"photo": ("bottle.png", b"not saved", "image/png")},
         )
         assert invalid.status_code == 422
-        assert invalid.json() == {
-            "errors": {
-                "date_bottled": "Use YYYY-MM-DD.",
-                "date_purchased": "Enter a valid calendar date.",
-            }
-        }
+        assert invalid.json() == {"errors": {"date_purchased": "Enter a valid calendar date."}}
         assert not list((tmp_path / "uploads").glob("*"))
         with app.state.database.session_factory() as session:
             assert session.scalar(select(Bottle)) is None
@@ -844,7 +857,7 @@ def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_ins
             accepted_bottle = session.get(Bottle, accepted_bottle_id)
             assert accepted_bottle is not None
             assert accepted_bottle.processing_stage == "queued"
-            assert accepted_bottle.date_bottled == date(2026, 1, 2)
+            assert accepted_bottle.date_bottled is None
             assert accepted_bottle.date_purchased == date(2026, 1, 3)
 
         owner = None
@@ -927,6 +940,103 @@ def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_ins
             assert second.date_bottled == date(2025, 2, 2)
             assert second.date_purchased == date(2025, 2, 3)
             assert second.barrel_number == "B-2"
+
+
+def test_photo_reanalysis_respects_an_explicit_bottled_date_clear(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def fake_photo_analysis(photo, settings):
+        return PhotoAnalysisResult({"brand": "Example"}, "complete", date(2025, 3, 7))
+
+    async def no_enrichment(bottle, settings, *, allow_provider=True):
+        return {}, "unavailable"
+
+    async def no_price_refresh(session, bottle, settings, *, force=False, price_index=None):
+        return "unavailable"
+
+    monkeypatch.setattr("bourbonbook.main.analyze_bottle", fake_photo_analysis)
+    monkeypatch.setattr("bourbonbook.main.enrich_bottle_by_name", no_enrichment)
+    monkeypatch.setattr("bourbonbook.main.refresh_prices", no_price_refresh)
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner is not None
+            bottle = Bottle(owner_id=owner.id, name="Photo bottle", photo_name="photo.jpg")
+            session.add(bottle)
+            session.commit()
+            bottle_id = bottle.id
+
+        edit = client.get(f"/bottles/{bottle_id}/edit")
+        first_refresh = client.post(
+            f"/bottles/{bottle_id}/analyze",
+            data={
+                "csrf_token": csrf(edit),
+                "analysis_mode": "photo",
+                "name": "Photo bottle",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+            },
+            follow_redirects=False,
+        )
+        assert first_refresh.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, bottle_id).date_bottled == date(2025, 3, 7)
+
+        refreshed = client.get(first_refresh.headers["location"])
+        preserved = client.post(
+            f"/bottles/{bottle_id}/edit",
+            data={
+                "csrf_token": csrf(refreshed),
+                "name": "Photo bottle",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+                "date_bottled": "",
+            },
+            follow_redirects=False,
+        )
+        assert preserved.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, bottle_id).date_bottled == date(2025, 3, 7)
+
+        refreshed = client.get(f"/bottles/{bottle_id}/edit")
+        cleared = client.post(
+            f"/bottles/{bottle_id}/analyze",
+            data={
+                "csrf_token": csrf(refreshed),
+                "analysis_mode": "photo",
+                "name": "Photo bottle",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+                "date_bottled": "2025-03-07",
+                "clear_date_bottled": "true",
+            },
+            follow_redirects=False,
+        )
+        assert cleared.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, bottle_id).date_bottled is None
+
+        later_refresh = client.get(cleared.headers["location"])
+        later = client.post(
+            f"/bottles/{bottle_id}/analyze",
+            data={
+                "csrf_token": csrf(later_refresh),
+                "analysis_mode": "photo",
+                "name": "Photo bottle",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+            },
+            follow_redirects=False,
+        )
+        assert later.status_code == 303
+        with app.state.database.session_factory() as session:
+            assert session.get(Bottle, bottle_id).date_bottled == date(2025, 3, 7)
 
 
 def test_detail_renders_barrel_information_for_a_bottled_date_only(tmp_path: Path) -> None:

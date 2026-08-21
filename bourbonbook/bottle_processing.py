@@ -75,6 +75,7 @@ async def run_add_bottle_pipeline(
     """
     from bourbonbook.main import (
         apply_analysis,
+        apply_photo_bottled_date,
         apply_user_purchase_price,
         enrich_bottle_by_name,
         normalized_analysis_status,
@@ -92,9 +93,11 @@ async def run_add_bottle_pipeline(
 
             if bottle.photo_name:
                 with usage_context(usage_recorder, user_id):
-                    analysis, analysis_status = await analyze_bottle(
+                    photo_result = await analyze_bottle(
                         settings.data_dir / "uploads" / bottle.photo_name, settings
                     )
+                    analysis, analysis_status = photo_result.values, photo_result.status
+                    apply_photo_bottled_date(bottle, photo_result.date_bottled)
             else:
                 analysis, analysis_status = {}, "unavailable"
             analysis_status = normalized_analysis_status(analysis_status)

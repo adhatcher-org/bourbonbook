@@ -75,7 +75,8 @@ async def evaluate(images_dir: Path, settings: Settings) -> dict[str, Any]:
         if not image_path.exists():
             continue
         print(f"Analyzing {image_name}…", flush=True)
-        actual, status = await analyze_bottle(image_path, settings)
+        photo_result = await analyze_bottle(image_path, settings)
+        actual, status = photo_result.values, photo_result.status
         comparisons = {}
         for field, expected_value in expected.items():
             if field not in SCORED_FIELDS:

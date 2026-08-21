@@ -6,7 +6,7 @@
   <section class="capture-intro">
     <p class="eyebrow">New entry</p>
     <h1>Put the label<br>in the light.</h1>
-    <p>Use a clear, straight-on photo. Your Ollama model will read the label, then you can review every field before saving.</p>
+    <p>Use a clear, straight-on photo. Your configured analyzer will read the label, then you can review every field before saving.</p>
   </section>
   <form method="post" action="/bottles" enctype="multipart/form-data" class="capture-form" data-upload-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -20,10 +20,9 @@
     <div class="capture-metadata">
       <label>Purchase price <span class="money-input"><i>$</i><input name="purchase_price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Optional"></span></label>
       <label>Date purchased<input name="date_purchased" type="date"></label>
-      <label>Date bottled<input name="date_bottled" type="date"></label>
       <label>Bottles owned <span class="quantity-input"><input name="quantity" type="number" min="1" max="99" value="1" inputmode="numeric"><i>qty</i></span></label>
     </div>
-    <div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Local by design.</strong> The photo is sent only to the Ollama service configured on your network.</p></div>
+    <div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Private by design.</strong> The photo is sent only to your configured bottle analyzer.</p></div>
     <button class="primary-button wide" type="submit" data-submit-button>Analyze bottle <span aria-hidden="true">✦</span></button>
   </form>
   <div class="analyzing" data-analyzing hidden role="status" aria-live="polite"><span class="spinner"></span><strong data-analyzing-text>Analyzing bottle…</strong><small>This can take a minute on the first run.</small></div>

@@ -124,6 +124,9 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
     monkeypatch.setenv("OLLAMA_VISION_MODEL", "qwen3-vl:30b")
     monkeypatch.setenv("OLLAMA_TEXT_MODEL", "qwen3:30b-a3b")
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
+    monkeypatch.setenv("OLLAMA_VISION_NUM_CTX", "32768")
+    monkeypatch.setenv("OLLAMA_TEXT_NUM_CTX", "16384")
 
     settings = Settings.from_env()
 
@@ -137,6 +140,23 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     assert settings.email_verification_required is False
     assert settings.ollama_vision_model == "qwen3-vl:30b"
     assert settings.ollama_text_model == "qwen3:30b-a3b"
+    assert settings.ollama_context_window(vision=True) == 32768
+    assert settings.ollama_context_window(vision=False) == 16384
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"ollama_num_ctx": 0}, "OLLAMA_NUM_CTX"),
+        ({"ollama_vision_num_ctx": 0}, "OLLAMA_VISION_NUM_CTX"),
+        ({"ollama_text_num_ctx": 0}, "OLLAMA_TEXT_NUM_CTX"),
+    ],
+)
+def test_ollama_context_windows_must_be_positive(
+    tmp_path: Path, changes: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        settings_for(tmp_path, **changes).validate_identity()
 
 
 class FakeSMTP:

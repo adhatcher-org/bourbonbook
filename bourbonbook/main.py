@@ -411,14 +411,25 @@ LIFECYCLE_DATE_FIELDS = ("date_bottled", "date_purchased")
 LIFECYCLE_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def parse_lifecycle_dates(form: Any) -> tuple[dict[str, date | None], dict[str, str]]:
-    """Parse optional lifecycle dates without accepting browser-dependent formats."""
+def parse_lifecycle_dates(
+    form: Any, *, fields: tuple[str, ...] = LIFECYCLE_DATE_FIELDS
+) -> tuple[dict[str, date | None], dict[str, str]]:
+    """Parse lifecycle dates without accepting browser-dependent formats.
+
+    A blank bottled date deliberately has no mutation semantics: it preserves a
+    previously photo-derived or manually entered value. Its explicit removal is
+    the separately named checkbox, which also makes this safe for re-analysis.
+    """
     values: dict[str, date | None] = {}
     errors: dict[str, str] = {}
-    for field in LIFECYCLE_DATE_FIELDS:
+    for field in fields:
+        if field == "date_bottled" and clears_bottled_date(form):
+            values[field] = None
+            continue
         raw_value = str(form.get(field, "")).strip()
         if not raw_value:
-            values[field] = None
+            if field != "date_bottled":
+                values[field] = None
             continue
         if not LIFECYCLE_DATE_PATTERN.fullmatch(raw_value):
             errors[field] = "Use YYYY-MM-DD."
@@ -428,6 +439,11 @@ def parse_lifecycle_dates(form: Any) -> tuple[dict[str, date | None], dict[str, 
         except ValueError:
             errors[field] = "Enter a valid calendar date."
     return values, errors
+
+
+def clears_bottled_date(form: Any) -> bool:
+    """Whether this submission explicitly removes the optional bottled date."""
+    return str(form.get("clear_date_bottled", "")) == "true"
 
 
 def update_bottle_from_form(
@@ -464,6 +480,12 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
+
+
+def apply_photo_bottled_date(bottle: Bottle, photo_bottled_date: date | None) -> None:
+    """Apply only an immediate photo proposal; user corrections always win."""
+    if bottle.date_bottled is None and photo_bottled_date is not None:
+        bottle.date_bottled = photo_bottled_date
 
 
 def apply_price_search(
@@ -2582,7 +2604,6 @@ def register_routes(app: FastAPI) -> None:
         photo: Annotated[UploadFile, File()],
         purchase_price: Annotated[str, Form()] = "",
         quantity: Annotated[str, Form()] = "1",
-        date_bottled: Annotated[str, Form()] = "",
         date_purchased: Annotated[str, Form()] = "",
         csrf: Annotated[str, Form(alias="csrf_token")] = "",
     ) -> Response:
@@ -2590,7 +2611,7 @@ def register_routes(app: FastAPI) -> None:
         with app.state.database.session_factory() as session:
             require_verified_user(request, session)
         lifecycle_dates, date_errors = parse_lifecycle_dates(
-            {"date_bottled": date_bottled, "date_purchased": date_purchased}
+            {"date_purchased": date_purchased}, fields=("date_purchased",)
         )
         if date_errors:
             return JSONResponse({"errors": date_errors}, status_code=422)
@@ -2752,6 +2773,7 @@ def register_routes(app: FastAPI) -> None:
                 )
             saved_bottle_id = bottle.id
             update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
+            clear_bottled_date = clears_bottled_date(form)
             user_price_applied = await apply_user_purchase_price(
                 session, bottle, app.state.qdrant_price_index
             )
@@ -2785,12 +2807,15 @@ def register_routes(app: FastAPI) -> None:
                     analysis, analysis_status = await enrich_bottle_by_name(
                         bottle, app.state.settings
                     )
-            elif bottle.photo_name:
+            elif mode == "photo" and bottle.photo_name:
                 with usage_context(app.state.usage_recorder, user.id):
-                    analysis, analysis_status = await analyze_bottle(
+                    photo_result = await analyze_bottle(
                         app.state.settings.data_dir / "uploads" / bottle.photo_name,
                         app.state.settings,
                     )
+                analysis, analysis_status = photo_result.values, photo_result.status
+                if not clear_bottled_date:
+                    apply_photo_bottled_date(bottle, photo_result.date_bottled)
             else:
                 analysis, analysis_status = {}, "unavailable"
             apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")

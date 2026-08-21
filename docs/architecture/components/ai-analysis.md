@@ -79,9 +79,14 @@ only) runs the same refinement pass.
 - Model selection (`analysis_model()`): a photo request uses `OLLAMA_VISION_MODEL or OLLAMA_MODEL`;
   a text-only request uses `OLLAMA_TEXT_MODEL or OLLAMA_MODEL`. `OLLAMA_MODEL` is the universal
   fallback.
+- Context-window selection (`Settings.ollama_context_window()`): photo analysis, catalog extraction,
+  and vision warm-up use `OLLAMA_VISION_NUM_CTX` (default `32768`). Name analysis, refinement, and
+  Ollama price chat use `OLLAMA_TEXT_NUM_CTX` when set, otherwise `OLLAMA_NUM_CTX` (default `4096`).
+  All configured values are positive integers and are managed by the admin configuration screen.
 - `request_analysis()` POSTs to `{OLLAMA_URL}/api/generate` with `format: "json"`, `think: false`,
-  `temperature: 0.1`, `num_ctx: 4096`, and a base64-encoded image when a photo is supplied. Uses the
-  shared/one-off `httpx.AsyncClient` from `provider_clients.ollama_client_session()` (120s timeout).
+  `temperature: 0.1`, the role-resolved `num_ctx`, and a base64-encoded image when a photo is
+  supplied. Uses the shared/one-off `httpx.AsyncClient` from
+  `provider_clients.ollama_client_session()` (120s timeout).
 - Failures (`httpx.HTTPError`, `KeyError`/`TypeError`, `json.JSONDecodeError`, `OSError`) are
   classified by `failure_context()`/`connection_reason()` into a bounded `failure_kind`
   (`http_status`, `timeout`, `tls_error`, `connect_error`, `request_error`, `invalid_json`,
@@ -96,7 +101,8 @@ this module implements the loop itself and is the only component that talks to *
 endpoints:
 
 - **Self-hosted** `{OLLAMA_URL}/api/chat` — the conversation, with `web_search` and `web_fetch`
-  declared as function tools and `stream: false`. Model is `OLLAMA_TEXT_MODEL or OLLAMA_MODEL`.
+  declared as function tools, `stream: false`, and the text-role context window. Model is
+  `OLLAMA_TEXT_MODEL or OLLAMA_MODEL`.
 - **Ollama Cloud** `https://ollama.com/api/web_search` and `/api/web_fetch` — where the tool calls
   the model emits are actually executed, authenticated with `OLLAMA_API_KEY` as a bearer token.
 

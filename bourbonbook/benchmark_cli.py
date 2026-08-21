@@ -417,9 +417,9 @@ async def run_fixture(
     first_case = cases[0]
     started = time.perf_counter()
     if first_operation == "photo":
-        _, cold_status = await analyze_bottle(
-            safe_photo(fixture, first_case["photo_file"]), settings
-        )
+        cold_status = (
+            await analyze_bottle(safe_photo(fixture, first_case["photo_file"]), settings)
+        ).status
     else:
         _, cold_status = await analyze_bottle_name(first_case["expected"]["name"], settings)
     cold_start = {
@@ -434,9 +434,10 @@ async def run_fixture(
             for case in cases:
                 started = time.perf_counter()
                 if operation == "photo":
-                    actual, status = await analyze_bottle(
+                    photo_result = await analyze_bottle(
                         safe_photo(fixture, case["photo_file"]), settings
                     )
+                    actual, status = photo_result.values, photo_result.status
                 else:
                     actual, status = await analyze_bottle_name(case["expected"]["name"], settings)
                 duration_ms = round((time.perf_counter() - started) * 1000, 2)

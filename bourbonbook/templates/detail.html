@@ -14,11 +14,11 @@
     <section class="detail-card valuation-card"><h2>Valuation &amp; status</h2>
       <div class="status-line"><span class="status-dot status-{{ bottle.status|lower }}"></span><strong>{{ bottle.status }}</strong><span>{{ bottle.quantity }} {{ "bottle" if bottle.quantity == 1 else "bottles" }}</span></div>
       <div class="fill-display"><div><span>Fill level</span><strong>{{ bottle.fill_level }}%</strong></div><div class="fill-track large"><span style="width: {{ bottle.fill_level }}%"></span></div></div>
-      <dl><div><dt>Purchase price</dt><dd>{{ bottle.purchase_price|money }}</dd></div><div><dt>MSRP</dt><dd>{{ bottle.msrp|money }}</dd></div></dl>
+      <dl><div><dt>Purchase price</dt><dd>{{ bottle.purchase_price|money }}</dd></div><div><dt>Date purchased</dt><dd>{{ bottle.date_purchased.isoformat() if bottle.date_purchased else "—" }}</dd></div><div><dt>MSRP</dt><dd>{{ bottle.msrp|money }}</dd></div></dl>
     </section>
-    {% set has_barrel_info = bottle.barrel_number or bottle.bottle_number or bottle.warehouse or bottle.floor %}
+    {% set has_barrel_info = bottle.barrel_number or bottle.bottle_number or bottle.warehouse or bottle.floor or bottle.date_bottled %}
     {% if has_barrel_info %}<details class="detail-card collapsible-section" open><summary><h2>Barrel information</h2><small>Details added</small></summary><dl>
-      <div><dt>Barrel no.</dt><dd>{{ bottle.barrel_number or "—" }}</dd></div><div><dt>Bottle no.</dt><dd>{{ bottle.bottle_number or "—" }}</dd></div><div><dt>Warehouse</dt><dd>{{ bottle.warehouse or "—" }}</dd></div><div><dt>Floor</dt><dd>{{ bottle.floor or "—" }}</dd></div>
+      <div><dt>Barrel no.</dt><dd>{{ bottle.barrel_number or "—" }}</dd></div><div><dt>Bottle no.</dt><dd>{{ bottle.bottle_number or "—" }}</dd></div><div><dt>Warehouse</dt><dd>{{ bottle.warehouse or "—" }}</dd></div><div><dt>Floor</dt><dd>{{ bottle.floor or "—" }}</dd></div><div><dt>Date bottled</dt><dd>{{ bottle.date_bottled.isoformat() if bottle.date_bottled else "—" }}</dd></div>
     </dl></details>{% endif %}
     <section class="detail-card notes-card"><h2>Tasting &amp; notes</h2><div class="rating-display" aria-label="{{ bottle.rating }} out of 5 stars"><span>{% for i in range(1,6) %}<i class="{{ 'on' if i <= bottle.rating }}">★</i>{% endfor %}</span><strong>{{ bottle.rating|round(1) }}</strong></div>{% if bottle.tasting_notes %}<h3>Tasting notes</h3><p>{{ bottle.tasting_notes }}</p>{% endif %}{% if bottle.notes %}<h3>Notes</h3><p>{{ bottle.notes }}</p>{% endif %}{% if not bottle.tasting_notes and not bottle.notes %}<p class="muted">No tasting notes yet.</p>{% endif %}</section>
   </div>

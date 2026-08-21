@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from bourbonbook.analysis import (
+    PhotoAnalysisResult,
     _as_float,
     analyze_bottle,
     analyze_bottle_name,
@@ -63,7 +64,8 @@ def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) ->
         return {"name": "From Ollama", "photo": str(photo) if photo else None}, "complete"
 
     monkeypatch.setattr("bourbonbook.ollama.request_analysis", fake_request)
-    assert asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))[0]["name"] == "From Ollama"
+    photo_result = asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+    assert photo_result.values["name"] == "From Ollama"
     assert asyncio.run(analyze_bottle_name("Bottle", settings))[1] == "complete"
 
     async def fake_prices(name, settings, *, size=None):
@@ -122,11 +124,42 @@ def test_partial_ollama_photo_analysis_refines_with_text_model_only(tmp_path, mo
 
     monkeypatch.setattr("bourbonbook.ollama.request_analysis", fake_ollama)
 
-    values, status = asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+    photo_result = asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+    values, status = photo_result.values, photo_result.status
 
     assert status == "complete"
     assert values["ocr_text"] == "UNCATALOGUED BOTTLE 100 PROOF"
     assert calls == ["vision", "text"]
+
+
+def test_photo_bottled_date_is_exact_and_isolated_from_refinement_and_catalog(
+    tmp_path, monkeypatch
+) -> None:
+    settings = settings_for(tmp_path, "ollama")
+
+    async def fake_ollama(prompt, configured_settings, photo=None):
+        if photo:
+            return {"name": "Uncatalogued Bottle", "date_bottled": "2025-03-07"}, "complete"
+        return {"date_bottled": "2024-01-01", "brand": "Refined"}, "complete"
+
+    monkeypatch.setattr("bourbonbook.ollama.request_analysis", fake_ollama)
+
+    result = asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+
+    assert isinstance(result, PhotoAnalysisResult)
+    assert result.date_bottled.isoformat() == "2025-03-07"
+    assert "date_bottled" not in result.values
+
+
+def test_photo_bottled_date_rejects_partial_or_invalid_values(tmp_path, monkeypatch) -> None:
+    settings = settings_for(tmp_path, "openai")
+
+    async def fake_openai(prompt, configured_settings, photo=None):
+        return {"name": "Example", "date_bottled": "2025-2-07"}, "complete"
+
+    monkeypatch.setattr("bourbonbook.openai_provider.request_analysis", fake_openai)
+
+    assert asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings)).date_bottled is None
 
 
 def test_merge_analysis_drops_msrp_by_default() -> None:

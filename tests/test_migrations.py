@@ -68,7 +68,12 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             column["name"] for column in inspect(database.engine).get_columns("bottles")
         }
         assert "on_shopping_list" in bottle_columns
-        assert {"processing_stage", "processing_error"} <= bottle_columns
+        assert {
+            "processing_stage",
+            "processing_error",
+            "date_bottled",
+            "date_purchased",
+        } <= bottle_columns
         bottle_indexes = {
             index["name"] for index in inspect(database.engine).get_indexes("bottles")
         }
@@ -224,6 +229,60 @@ def test_bottle_processing_stage_migration_defaults_existing_rows_to_idle(tmp_pa
         }
         assert "processing_stage" not in downgraded_columns
         assert "processing_error" not in downgraded_columns
+    finally:
+        downgraded.engine.dispose()
+
+
+def test_lifecycle_dates_migration_keeps_existing_rows_nullable_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    settings = migration_settings(tmp_path)
+    config = alembic_config(settings.database_url)
+    command.upgrade(config, "0009_bottle_processing_stage")
+
+    database = Database(settings)
+    try:
+        with database.engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users (username, display_name, password_hash, created_at) "
+                    "VALUES ('date-migration', 'Date Migration', 'hash', CURRENT_TIMESTAMP)"
+                )
+            ).lastrowid
+            connection.execute(
+                text(
+                    "INSERT INTO bottles "
+                    "(owner_id, name, brand, release, edition, spirit_type, distilled_by, "
+                    "mash_bill, size, age_statement, barrel_number, bottle_number, warehouse, "
+                    "floor, status, on_shopping_list, fill_level, quantity, storage_location, "
+                    "rating, tasting_notes, notes, analysis_status, processing_stage, created_at, "
+                    "updated_at) VALUES (:owner, 'Existing Bottle', '', '', '', 'Bourbon', '', "
+                    "'', '750ml', '', '', '', '', '', 'Unopened', 0, 100, 1, '', 0, '', '', "
+                    "'manual', 'idle', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"owner": user_id},
+            )
+    finally:
+        database.engine.dispose()
+
+    command.upgrade(config, "head")
+    upgraded = Database(settings)
+    try:
+        assert current_revision(upgraded) == HEAD_REVISION
+        with upgraded.session_factory() as session:
+            bottle = session.scalar(select(Bottle))
+            assert bottle is not None
+            assert bottle.date_bottled is None
+            assert bottle.date_purchased is None
+    finally:
+        upgraded.engine.dispose()
+
+    command.downgrade(config, "0009_bottle_processing_stage")
+    downgraded = Database(settings)
+    try:
+        columns = {column["name"] for column in inspect(downgraded.engine).get_columns("bottles")}
+        assert "date_bottled" not in columns
+        assert "date_purchased" not in columns
     finally:
         downgraded.engine.dispose()
 

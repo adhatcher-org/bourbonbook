@@ -10,7 +10,13 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from bourbonbook.analysis import OUTPUT_FIELDS, PHOTO_PROMPT, name_prompt, normalize_analysis
+from bourbonbook.analysis import (
+    OUTPUT_FIELDS,
+    PHOTO_OUTPUT_FIELDS,
+    PHOTO_PROMPT,
+    name_prompt,
+    normalize_analysis,
+)
 from bourbonbook.config import Settings
 from bourbonbook.logging_config import log_event
 from bourbonbook.observability import (
@@ -30,6 +36,11 @@ def analysis_model(settings: Settings, photo: Path | None) -> str:
     if photo:
         return settings.ollama_vision_model or settings.ollama_model
     return settings.ollama_text_model or settings.ollama_model
+
+
+def analysis_context_window(settings: Settings, photo: Path | None) -> int:
+    """Resolve the fixed model role's context window in one place."""
+    return settings.ollama_context_window(vision=photo is not None)
 
 
 def endpoint_port(endpoint) -> int | str:
@@ -105,14 +116,15 @@ async def request_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:
     model = analysis_model(settings, photo)
-    field_list = ", ".join(OUTPUT_FIELDS)
+    output_fields = PHOTO_OUTPUT_FIELDS if photo else OUTPUT_FIELDS
+    field_list = ", ".join(output_fields)
     payload: dict[str, Any] = {
         "model": model,
         "prompt": f"{prompt}\nReturn ONLY one JSON object with these keys: {field_list}.",
         "stream": False,
         "think": False,
         "format": "json",
-        "options": {"temperature": 0.1, "num_ctx": 4096},
+        "options": {"temperature": 0.1, "num_ctx": analysis_context_window(settings, photo)},
     }
     if photo:
         payload["images"] = [base64.b64encode(photo.read_bytes()).decode("ascii")]
@@ -140,7 +152,7 @@ async def request_analysis(
         duration_ms = ollama_duration_ms(body, fallback_ms)
         raw_output = body.get("response") or body.get("thinking")
         parsed = json.loads(raw_output)
-        values = {key: parsed.get(key) for key in OUTPUT_FIELDS if parsed.get(key) is not None}
+        values = {key: parsed.get(key) for key in output_fields if parsed.get(key) is not None}
         if recorder:
             recorder.record(
                 provider="ollama",
@@ -220,7 +232,11 @@ async def warm_vision_model(settings: Settings) -> None:
     try:
         async with ollama_client_session() as client:
             response = await client.post(
-                f"{settings.ollama_url}/api/generate", json={"model": model}
+                f"{settings.ollama_url}/api/generate",
+                json={
+                    "model": model,
+                    "options": {"num_ctx": settings.ollama_context_window(vision=True)},
+                },
             )
             response.raise_for_status()
         log_event(

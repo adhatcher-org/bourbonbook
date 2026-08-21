@@ -85,6 +85,8 @@ class Bottle(Base):
     bottle_number: Mapped[str] = mapped_column(String(80), default="")
     warehouse: Mapped[str] = mapped_column(String(80), default="")
     floor: Mapped[str] = mapped_column(String(80), default="")
+    date_bottled: Mapped[date | None] = mapped_column(Date)
+    date_purchased: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), default="Unopened")
     on_shopping_list: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     fill_level: Mapped[int] = mapped_column(Integer, default=100)

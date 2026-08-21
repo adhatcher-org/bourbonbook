@@ -13,7 +13,7 @@ from bourbonbook.database import create_database_engine
 logger = logging.getLogger(__name__)
 
 BASELINE_REVISION = "0001_current_schema"
-HEAD_REVISION = "0009_bottle_processing_stage"
+HEAD_REVISION = "0010_bottle_lifecycle_dates"
 EXPECTED_SCHEMA = {
     "users": {
         "id",

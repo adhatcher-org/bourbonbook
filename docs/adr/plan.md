@@ -95,6 +95,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Local catalog/OHLQ cache exists, but no Qdrant embedding, index, filtered retrieval, or Ollama evidence synthesis is present. |
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
+| A14 | Bottle instances, editable barrel details, and lifecycle dates | Complete | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence, per-role context windows, and explicit empty/recorded/clear date UX are complete. `make pr-review` passed (338 tests); independent browser check passed; reviewer and validator passed at `43b88a5`. |
 
 ## Implementation Audit
 
@@ -939,6 +940,137 @@ A01–A12.
 - Deployment, health, backup, restore, and rollback runbooks are complete.
 - Sub-agent review and `make pr-review` pass.
 - Draft PR exists and the A13 tracker row is updated.
+
+---
+
+## A14 — Bottle Instances, Editable Barrel Details, and Lifecycle Dates
+
+### Goal
+
+Always make an existing bottle's barrel information editable, and record optional bottled and
+purchased calendar dates. A bottle remains one owned physical inventory row: multiple rows may have
+the same product identity while retaining independent barrel and lifecycle facts.
+
+### Dependencies
+
+None.
+
+### Scope and exclusions
+
+- `quantity` remains an existing row-level convenience value. This action neither redefines it nor
+  splits historic quantities into individual bottles.
+- Matching or merging photo submissions with existing bottles, and photo-driven fill/status updates,
+  are excluded.
+- No product-catalog redesign or ADR is required. This action adds provider-scoped Ollama context
+  configuration only; it does not change model selection or the real deployment `.env`.
+
+### Expected Files
+
+- `bourbonbook/models.py`
+- `bourbonbook/main.py`
+- `bourbonbook/analysis.py`
+- `bourbonbook/ollama.py`
+- `bourbonbook/ollama_search.py`
+- `bourbonbook/catalog_extract.py`
+- `bourbonbook/config.py`
+- `bourbonbook/admin_config.py`
+- `.env.example`
+- `README.md`
+- `bourbonbook/migrations.py`
+- `migrations/versions/0010_bottle_lifecycle_dates.py`
+- `bourbonbook/templates/new.html`
+- `bourbonbook/templates/edit.html`
+- `bourbonbook/templates/detail.html`
+- `tests/test_app.py`
+- `bourbonbook/static/app.js`
+- `bourbonbook/static/app.css`
+- `tests/test_migrations.py`
+- `tests/test_quality_routes.py`
+
+### Individual Implementation Instructions
+
+1. Add nullable `date_bottled` and `date_purchased` SQLAlchemy `Date` columns to `Bottle`.
+2. Add forward-only migration `0010_bottle_lifecycle_dates` from `0009_bottle_processing_stage`;
+   add nullable `sa.Date()` columns, bump `HEAD_REVISION`, and leave `EXPECTED_SCHEMA` unchanged.
+3. Use one server-side parser for the user-entered Date Purchased: blanks become `None`; nonblank
+   values must match exact `YYYY-MM-DD` before `date.fromisoformat`; invalid values produce named
+   field errors. Date Bottled is not accepted from the initial upload form.
+4. Derive Date Bottled only from the immediate direct photo-analysis result. It is optional, has no
+   default, and must be a complete exact `YYYY-MM-DD` normalized to `date`; unreadable, partial,
+   ambiguous, malformed, or unavailable output stays null. Name, catalog, price, and refinement
+   paths cannot supply it. A valid photo proposal fills only a currently null value and never
+   overwrites a manual correction.
+5. Validate user-entered dates before any model mutation, photo save, commit, background scheduling,
+   or provider call on the photo-add, edit, and all photo/name/price re-analysis submissions. Invalid
+   add requests return JSON `422`; invalid edit/re-analysis requests render the editor with `422`.
+6. Pass validated typed user dates through the central form-update path. Always render the open
+   Barrel information editor with Date Bottled as the later manual correction mechanism; keep Date
+   Purchased alongside purchase/status information. Render stored dates consistently in detail views
+   as local calendar dates.
+7. Preserve CSRF verification, verified-user guards, and owner scoping. A matching product identity
+   must not cause a separate owned `Bottle` row to be merged or changed.
+8. Make Date Bottled removal explicit in the editor. An explicit clear request has three-state
+   semantics (preserve, replace, clear) and wins over a direct-photo proposal from the same
+   re-analysis request; a later separate photo analysis may fill a cleared null value only when it
+   finds a complete exact date.
+9. Add validated role-based Ollama context settings: generic fallback `OLLAMA_NUM_CTX=4096`, vision
+   default `OLLAMA_VISION_NUM_CTX=32768`, and optional `OLLAMA_TEXT_NUM_CTX` falling back to the
+   generic value. Photo analysis, catalog extraction, and vision warm-up use the vision setting;
+   name/refinement and local price chat use the text setting. Update config registry, documentation,
+   and deterministic payload/validation tests.
+
+### Completion Evidence
+### Pre-merge UX amendment — lifecycle-date state clarity
+
+Native date controls render browser-local placeholder-like segments when their value is actually
+empty. Do not put a current date, a fake placeholder, or a JavaScript-derived value into either
+input to compensate. The persisted `Date | None` value remains the source of truth.
+
+1. Wrap each native date control in one reusable `.date-field` pattern in the existing single
+   stylesheet/script and two-breakpoint PWA layout. It has a visible label, a native `type="date"`
+   control, and persistent state text associated through `aria-describedby`: **Not recorded** when
+   the stored value is null, or **Recorded: YYYY-MM-DD** when a date exists. Error text appends to
+   that description rather than replacing it. Never populate a synthetic/default browser date.
+2. On initial add, label Date Purchased as optional and show that an empty field records no purchase
+   date. Do not add Date Bottled to the capture form; only direct photo analysis may initially
+   propose it.
+3. On edit, preserve local-calendar semantics and do not convert dates to timestamps or relative
+   labels. A browser picker selection is visible in the control; the state text changes only after
+   save/re-render, making the saved/not-saved boundary unambiguous.
+4. Standardize **both** lifecycle dates on one exact server state machine for edit and all
+   photo/name/price re-analysis requests: explicit `clear_date_<field>=true` clears; otherwise an
+   exact valid nonblank `YYYY-MM-DD` replaces; otherwise blank/omitted preserves the stored value.
+   Parse both fields before mutation, upload, provider work, or commit. This supersedes the prior
+   implicit blank-clears-purchase-date behavior and prevents partial re-analysis forms from silently
+   deleting a stored date.
+5. Render a clear control only when its date is currently recorded; label it **Clear saved date**.
+   It is a real keyboard-operable checkbox posting only `clear_date_<field>=true`, explains that
+   removal takes effect only after Save/Analyze, and its client state reads **Will be cleared when
+   saved**. Checking it clears the visible native control; selecting/typing a valid replacement
+   unchecks it. The deterministic precedence is clear > valid manual replacement > preserved stored
+   value > direct-photo bottled-date proposal. Thus a clear wins over a same-request photo proposal,
+   while a later photo re-analysis may fill a still-null Date Bottled.
+6. Keep CSRF, verified-user checks, owner scoping, strict `YYYY-MM-DD` validation, and atomic
+   no-mutation-on-error behavior unchanged.
+
+
+- A blank-barrel existing bottle renders the open barrel editor and can save all barrel/date fields.
+- Date Purchased persists through initial photo add and normal edit. A direct photo analysis may
+  fill an empty Date Bottled only with a complete exact date; no image date remains blank and no
+  analysis path can overwrite a correction or infer a fallback.
+- Same-product owned rows retain independent barrel/date values.
+- Migration tests prove fresh bootstrap, `0009` upgrade with null lifecycle dates, repeat bootstrap,
+  and downgrade behavior.
+- Route tests cover CSRF, authentication, and cross-owner access for changed paths.
+- An explicit clear keeps Date Bottled null during the same photo re-analysis, and context-window
+  configuration is validated and used by every affected Ollama request path.
+- Independent review, `make pr-review`, a draft PR, and tracker evidence are recorded.
+- Browser, keyboard, and screen-reader-facing tests distinguish a null date from a recorded date,
+  verify explicit clear/preserve/replace semantics for both fields, and retain the existing 422,
+  CSRF, owner-scope, and no-partial-mutation checks.
+- A real-browser `pwa-visual-check` covers the native date fields, clear-state transition, focus and
+  touch-target behavior at iPhone-width and desktop-width viewports; it confirms no layout clipping
+  or false saved-date cue in either theme-supported rendering.
 
 ## Plan-Review Prompt
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import signal
 import time
@@ -406,8 +407,46 @@ TEXT_FIELDS = (
     "notes",
 )
 
+LIFECYCLE_DATE_FIELDS = ("date_bottled", "date_purchased")
+LIFECYCLE_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
+
+def parse_lifecycle_dates(
+    form: Any, *, fields: tuple[str, ...] = LIFECYCLE_DATE_FIELDS
+) -> tuple[dict[str, date | None], dict[str, str]]:
+    """Parse lifecycle dates without accepting browser-dependent formats.
+
+    A blank lifecycle date deliberately has no mutation semantics: it preserves
+    a previously photo-derived or manually entered value. Its explicit removal
+    is the separately named checkbox, which also makes this safe for re-analysis.
+    """
+    values: dict[str, date | None] = {}
+    errors: dict[str, str] = {}
+    for field in fields:
+        if clears_lifecycle_date(form, field):
+            values[field] = None
+            continue
+        raw_value = str(form.get(field, "")).strip()
+        if not raw_value:
+            continue
+        if not LIFECYCLE_DATE_PATTERN.fullmatch(raw_value):
+            errors[field] = "Use YYYY-MM-DD."
+            continue
+        try:
+            values[field] = date.fromisoformat(raw_value)
+        except ValueError:
+            errors[field] = "Enter a valid calendar date."
+    return values, errors
+
+
+def clears_lifecycle_date(form: Any, field: str) -> bool:
+    """Whether this submission explicitly removes an optional lifecycle date."""
+    return str(form.get(f"clear_{field}", "")) == "true"
+
+
+def update_bottle_from_form(
+    bottle: Bottle, form: Any, *, lifecycle_dates: dict[str, date | None]
+) -> None:
     for field in TEXT_FIELDS:
         setattr(bottle, field, str(form.get(field, "")).strip())
     status = str(form.get("status", "Unopened"))
@@ -417,14 +456,17 @@ def update_bottle_from_form(bottle: Bottle, form: Any) -> None:
     bottle.rating = parse_int(form.get("rating"), 0, 0, 5)
     for field in ("proof", "abv", "purchase_price", "msrp"):
         setattr(bottle, field, parse_float(form.get(field)))
+    for field, value in lifecycle_dates.items():
+        setattr(bottle, field, value)
 
 
 NUMERIC_ANALYSIS_FIELDS = {"proof", "abv", "msrp"}
+ANALYSIS_EXCLUDED_FIELDS = set(LIFECYCLE_DATE_FIELDS)
 
 
 def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool = False) -> None:
     for key, value in analysis.items():
-        if key == "msrp" and not allow_msrp:
+        if key in ANALYSIS_EXCLUDED_FIELDS or (key == "msrp" and not allow_msrp):
             continue
         if not hasattr(bottle, key) or value is None:
             continue
@@ -436,6 +478,12 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool
             setattr(bottle, key, value)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
+
+
+def apply_photo_bottled_date(bottle: Bottle, photo_bottled_date: date | None) -> None:
+    """Apply only an immediate photo proposal; user corrections always win."""
+    if bottle.date_bottled is None and photo_bottled_date is not None:
+        bottle.date_bottled = photo_bottled_date
 
 
 def apply_price_search(
@@ -2554,9 +2602,17 @@ def register_routes(app: FastAPI) -> None:
         photo: Annotated[UploadFile, File()],
         purchase_price: Annotated[str, Form()] = "",
         quantity: Annotated[str, Form()] = "1",
+        date_purchased: Annotated[str, Form()] = "",
         csrf: Annotated[str, Form(alias="csrf_token")] = "",
     ) -> Response:
         verify_csrf(request, csrf)
+        with app.state.database.session_factory() as session:
+            require_verified_user(request, session)
+        lifecycle_dates, date_errors = parse_lifecycle_dates(
+            {"date_purchased": date_purchased}, fields=("date_purchased",)
+        )
+        if date_errors:
+            return JSONResponse({"errors": date_errors}, status_code=422)
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
             photo_name = await save_photo(
@@ -2567,6 +2623,7 @@ def register_routes(app: FastAPI) -> None:
                 photo_name=photo_name,
                 purchase_price=parse_float(purchase_price),
                 quantity=parse_int(quantity, 1, 1, 99),
+                **lifecycle_dates,
                 processing_stage=BottleProcessingStage.QUEUED.value,
             )
             session.add(bottle)
@@ -2637,10 +2694,22 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            lifecycle_dates, date_errors = parse_lifecycle_dates(form)
+            if date_errors:
+                return render(
+                    request,
+                    "edit.html",
+                    user=user,
+                    bottle=bottle,
+                    is_new=False,
+                    analysis_result="",
+                    errors=date_errors,
+                    status_code=422,
+                )
             saved_bottle_id = bottle.id
             previous_status = bottle.status
             previous_prices = {"msrp": bottle.msrp}
-            update_bottle_from_form(bottle, form)
+            update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
             if previous_status != "Empty" and bottle.status == "Empty":
                 empty_action = str(form.get("empty_action", ""))
                 if empty_action == "remove":
@@ -2688,8 +2757,21 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
+            lifecycle_dates, date_errors = parse_lifecycle_dates(form)
+            if date_errors:
+                return render(
+                    request,
+                    "edit.html",
+                    user=user,
+                    bottle=bottle,
+                    is_new=False,
+                    analysis_result="",
+                    errors=date_errors,
+                    status_code=422,
+                )
             saved_bottle_id = bottle.id
-            update_bottle_from_form(bottle, form)
+            update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
+            clear_bottled_date = clears_lifecycle_date(form, "date_bottled")
             user_price_applied = await apply_user_purchase_price(
                 session, bottle, app.state.qdrant_price_index
             )
@@ -2723,12 +2805,15 @@ def register_routes(app: FastAPI) -> None:
                     analysis, analysis_status = await enrich_bottle_by_name(
                         bottle, app.state.settings
                     )
-            elif bottle.photo_name:
+            elif mode == "photo" and bottle.photo_name:
                 with usage_context(app.state.usage_recorder, user.id):
-                    analysis, analysis_status = await analyze_bottle(
+                    photo_result = await analyze_bottle(
                         app.state.settings.data_dir / "uploads" / bottle.photo_name,
                         app.state.settings,
                     )
+                analysis, analysis_status = photo_result.values, photo_result.status
+                if not clear_bottled_date:
+                    apply_photo_bottled_date(bottle, photo_result.date_bottled)
             else:
                 analysis, analysis_status = {}, "unavailable"
             apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")

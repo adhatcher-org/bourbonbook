@@ -165,6 +165,7 @@ async def search_prices(
                         "messages": messages,
                         "tools": [WEB_SEARCH_TOOL, WEB_FETCH_TOOL],
                         "stream": False,
+                        "options": {"num_ctx": settings.ollama_context_window(vision=False)},
                     },
                 )
                 response.raise_for_status()

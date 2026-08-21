@@ -320,7 +320,11 @@ def test_run_fixture_builds_photo_report(monkeypatch: pytest.MonkeyPatch, tmp_pa
     (fixture / "manifest.json").write_text(json.dumps(manifest))
 
     async def fake_analyze_bottle(path, settings):
-        return {**make_case()["expected"], "status": "Opened"}, "complete"
+        from bourbonbook.analysis import PhotoAnalysisResult
+
+        return PhotoAnalysisResult(
+            {**make_case()["expected"], "status": "Opened"}, "complete", None
+        )
 
     monkeypatch.setattr(benchmark_cli, "analyze_bottle", fake_analyze_bottle)
     monkeypatch.setattr(benchmark_cli.time, "perf_counter", iter([1.0, 1.4, 2.0, 2.2]).__next__)

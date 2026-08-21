@@ -40,6 +40,14 @@ CONFIG_FIELDS = (
     ConfigField("OLLAMA_URL", "ollama_url", "Ollama URL", "Analysis", "url"),
     ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama fallback model", "Analysis"),
     ConfigField(
+        "OLLAMA_NUM_CTX",
+        "ollama_num_ctx",
+        "Ollama fallback/text context window",
+        "Analysis",
+        "integer",
+        minimum=1,
+    ),
+    ConfigField(
         "OLLAMA_VISION_MODEL",
         "ollama_vision_model",
         "Ollama vision model",
@@ -51,6 +59,23 @@ CONFIG_FIELDS = (
         "ollama_text_model",
         "Ollama text model",
         "Analysis",
+        optional=True,
+    ),
+    ConfigField(
+        "OLLAMA_VISION_NUM_CTX",
+        "ollama_vision_num_ctx",
+        "Ollama vision context window",
+        "Analysis",
+        "integer",
+        minimum=1,
+    ),
+    ConfigField(
+        "OLLAMA_TEXT_NUM_CTX",
+        "ollama_text_num_ctx",
+        "Ollama text context window",
+        "Analysis",
+        "integer",
+        minimum=1,
         optional=True,
     ),
     ConfigField(

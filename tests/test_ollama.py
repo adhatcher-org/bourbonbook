@@ -61,11 +61,11 @@ def test_qwen_thinking_field_is_accepted(tmp_path, monkeypatch) -> None:
 
 
 def test_photo_and_name_analysis_select_their_configured_models(tmp_path, monkeypatch) -> None:
-    selected_models: list[str] = []
+    requests: list[dict] = []
 
     class RecordingClient(FakeClient):
         async def post(self, url: str, json: dict) -> FakeResponse:
-            selected_models.append(json["model"])
+            requests.append(json)
             return FakeResponse()
 
     photo = tmp_path / "bottle.jpg"
@@ -86,7 +86,10 @@ def test_photo_and_name_analysis_select_their_configured_models(tmp_path, monkey
 
     assert asyncio.run(request_analysis("photo prompt", settings, photo))[1] == "complete"
     assert asyncio.run(request_analysis("name prompt", settings))[1] == "complete"
-    assert selected_models == ["vision-model", "text-model"]
+    assert [request["model"] for request in requests] == ["vision-model", "text-model"]
+    assert [request["options"]["num_ctx"] for request in requests] == [32768, 4096]
+    assert "date_bottled" in requests[0]["prompt"]
+    assert "date_bottled" not in requests[1]["prompt"]
 
 
 def test_ollama_model_remains_the_default_for_both_analysis_paths(tmp_path, monkeypatch) -> None:
@@ -114,6 +117,36 @@ def test_ollama_model_remains_the_default_for_both_analysis_paths(tmp_path, monk
     assert asyncio.run(request_analysis("photo prompt", settings, photo))[1] == "complete"
     assert asyncio.run(request_analysis("name prompt", settings))[1] == "complete"
     assert selected_models == ["legacy-model", "legacy-model"]
+
+
+def test_ollama_context_windows_follow_the_model_role(tmp_path, monkeypatch) -> None:
+    requests: list[dict] = []
+
+    class RecordingClient(FakeClient):
+        async def post(self, url: str, json: dict) -> FakeResponse:
+            requests.append(json)
+            return FakeResponse()
+
+    photo = tmp_path / "bottle.jpg"
+    photo.write_bytes(b"photo-bytes")
+    monkeypatch.setattr("bourbonbook.provider_clients.httpx.AsyncClient", RecordingClient)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        session_secret="secret",
+        secure_cookies=False,
+        ollama_url="http://ollama.test",
+        ollama_model="legacy-model",
+        ollama_num_ctx=8192,
+        ollama_vision_num_ctx=24576,
+        ollama_text_num_ctx=12288,
+        max_users=1,
+        max_upload_mb=1,
+    )
+
+    assert asyncio.run(request_analysis("photo prompt", settings, photo))[1] == "complete"
+    assert asyncio.run(request_analysis("name prompt", settings))[1] == "complete"
+    assert [request["options"]["num_ctx"] for request in requests] == [24576, 12288]
 
 
 def test_status_is_derived_from_fill_level() -> None:
@@ -215,7 +248,10 @@ def test_warm_vision_model_loads_the_configured_vision_model_without_a_prompt(
     asyncio.run(warm_vision_model(settings))
 
     assert requests == [
-        {"url": "http://ollama.test/api/generate", "json": {"model": "vision-model"}}
+        {
+            "url": "http://ollama.test/api/generate",
+            "json": {"model": "vision-model", "options": {"num_ctx": 32768}},
+        }
     ]
 
 
@@ -241,7 +277,7 @@ def test_warm_vision_model_falls_back_to_the_legacy_model(tmp_path, monkeypatch)
 
     asyncio.run(warm_vision_model(settings))
 
-    assert requests == [{"model": "legacy-model"}]
+    assert requests == [{"model": "legacy-model", "options": {"num_ctx": 32768}}]
 
 
 def test_warm_vision_model_failure_is_non_fatal(tmp_path, monkeypatch) -> None:

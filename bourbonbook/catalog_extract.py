@@ -225,7 +225,7 @@ async def extract_catalog_chunk(
         "stream": False,
         "think": False,
         "format": "json",
-        "options": {"temperature": 0, "num_ctx": 8192},
+        "options": {"temperature": 0, "num_ctx": settings.ollama_context_window(vision=True)},
     }
     try:
         async with asyncio.timeout(timeout_seconds):

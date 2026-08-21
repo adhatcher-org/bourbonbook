@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from pathlib import Path
 
+from bourbonbook.analysis import PhotoAnalysisResult
 from bourbonbook.bottle_processing import (
     BottleProcessingStage,
     recover_orphaned_bottle_processing,
@@ -75,7 +77,7 @@ def test_run_add_bottle_pipeline_commits_each_stage_before_the_next(
     async def fake_analyze_bottle(photo, settings_arg):
         with database.session_factory() as session:
             observed_stages.append(session.get(Bottle, bottle_id).processing_stage)
-        return {"brand": "Eagle Rare"}, "complete"
+        return PhotoAnalysisResult({"brand": "Eagle Rare"}, "complete", date(2025, 3, 7))
 
     async def fake_enrich_bottle_by_name(bottle, settings_arg, *, allow_provider=True):
         with database.session_factory() as session:
@@ -110,6 +112,7 @@ def test_run_add_bottle_pipeline_commits_each_stage_before_the_next(
         assert bottle.processing_stage == BottleProcessingStage.COMPLETE.value
         assert bottle.analysis_status == "complete"
         assert bottle.brand == "Eagle Rare"
+        assert bottle.date_bottled == date(2025, 3, 7)
         assert bottle.processing_error is None
 
 
@@ -128,7 +131,9 @@ def test_run_add_bottle_pipeline_drops_a_noisy_proof_but_completes_and_keeps_the
     bottle_id = seed_bottle(database, owner_id, photo_name="fixture.jpg")
 
     async def fake_analyze_bottle(photo, settings_arg):
-        return {"name": "Eagle Rare 10 Year", "proof": "107 proof"}, "complete"
+        return PhotoAnalysisResult(
+            {"name": "Eagle Rare 10 Year", "proof": "107 proof"}, "complete", None
+        )
 
     async def fake_enrich_bottle_by_name(bottle, settings_arg, *, allow_provider=True):
         return {}, "unavailable"
@@ -172,7 +177,7 @@ def test_run_add_bottle_pipeline_skips_enrichment_and_pricing_for_a_placeholder_
     calls: list[str] = []
 
     async def fake_analyze_bottle(photo, settings_arg):
-        return {}, "unavailable"
+        return PhotoAnalysisResult({}, "unavailable", None)
 
     async def fake_enrich_bottle_by_name(bottle, settings_arg, *, allow_provider=True):
         calls.append("enrich")

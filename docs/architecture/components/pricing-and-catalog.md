@@ -154,6 +154,9 @@ already trusts, and its records must carry provenance the admin UI supplies inte
 | `OLLAMA_TEXT_MODEL` | falls back to `OLLAMA_MODEL` | Model used for the Ollama price-search tool loop |
 | `OLLAMA_VISION_MODEL` | falls back to `OLLAMA_MODEL` | Vision model used by catalog price-sheet extraction (`catalog_extract.py`) |
 | `OLLAMA_MODEL` | `qwen3.6:35b` | Universal Ollama fallback for both vision and text calls app-wide |
+| `OLLAMA_NUM_CTX` | `4096` | Fallback/text context window for name analysis, refinement, and Ollama price chat |
+| `OLLAMA_TEXT_NUM_CTX` | falls back to `OLLAMA_NUM_CTX` | Optional context window for a separate text model |
+| `OLLAMA_VISION_NUM_CTX` | `32768` | Vision context window for bottle photos, catalog extraction, and warm-up |
 
 `PRICE_CACHE_TTL` (90 days) and `USER_PRICE_OVERRIDE_TTL` (183 days) are hardcoded `main.py`
 constants, not environment-configurable.

@@ -38,6 +38,9 @@ class Settings:
     catalog_import_poll_seconds: float = 1.0
     ollama_vision_model: str | None = None
     ollama_text_model: str | None = None
+    ollama_num_ctx: int = 4096
+    ollama_vision_num_ctx: int = 32768
+    ollama_text_num_ctx: int | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_price_collection: str = "bourbonbook_prices"
@@ -96,6 +99,11 @@ class Settings:
             ollama_model=get("OLLAMA_MODEL", "qwen3.6:35b"),
             ollama_vision_model=get("OLLAMA_VISION_MODEL") or None,
             ollama_text_model=get("OLLAMA_TEXT_MODEL") or None,
+            ollama_num_ctx=int(get("OLLAMA_NUM_CTX", "4096")),
+            ollama_vision_num_ctx=int(get("OLLAMA_VISION_NUM_CTX", "32768")),
+            ollama_text_num_ctx=(
+                int(get("OLLAMA_TEXT_NUM_CTX", "")) if get("OLLAMA_TEXT_NUM_CTX") else None
+            ),
             qdrant_url=get("QDRANT_URL", "").rstrip("/") or None,
             qdrant_api_key=get("QDRANT_API_KEY") or None,
             qdrant_price_collection=get("QDRANT_PRICE_COLLECTION", "bourbonbook_prices"),
@@ -209,7 +217,19 @@ class Settings:
             raise ValueError("CATALOG_IMPORT_LEASE_HEARTBEAT_SECONDS must be within the lease")
         if self.catalog_import_poll_seconds <= 0:
             raise ValueError("CATALOG_IMPORT_POLL_SECONDS must be positive")
+        if self.ollama_num_ctx < 1:
+            raise ValueError("OLLAMA_NUM_CTX must be positive")
+        if self.ollama_vision_num_ctx < 1:
+            raise ValueError("OLLAMA_VISION_NUM_CTX must be positive")
+        if self.ollama_text_num_ctx is not None and self.ollama_text_num_ctx < 1:
+            raise ValueError("OLLAMA_TEXT_NUM_CTX must be positive")
         self._warn_if_ollama_url_is_https_on_a_private_host()
+
+    def ollama_context_window(self, *, vision: bool) -> int:
+        """Return the configured context window for one fixed Ollama model role."""
+        if vision:
+            return self.ollama_vision_num_ctx
+        return self.ollama_text_num_ctx or self.ollama_num_ctx
 
     def _warn_if_ollama_url_is_https_on_a_private_host(self) -> None:
         if self.analysis_provider != "ollama":

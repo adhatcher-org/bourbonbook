@@ -14,6 +14,18 @@ down_revision: str | Sequence[str] | None = "0009_bottle_processing_stage"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Alembic reads these four names off the module itself (alembic/script/base.py
+# does getattr(module, "down_revision") and errors when "revision" is absent),
+# so they are this module's public contract, not dead assignments.
+__all__ = [
+    "branch_labels",
+    "depends_on",
+    "down_revision",
+    "downgrade",
+    "revision",
+    "upgrade",
+]
+
 
 def upgrade() -> None:
     op.add_column("bottles", sa.Column("date_bottled", sa.Date(), nullable=True))

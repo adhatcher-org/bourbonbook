@@ -95,7 +95,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Local catalog/OHLQ cache exists, but no Qdrant embedding, index, filtered retrieval, or Ollama evidence synthesis is present. |
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
-| A14 | Bottle instances, editable barrel details, and lifecycle dates | In Progress | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence and context windows are implemented, but the date-state clarity amendment below must land before the draft is ready. |
+| A14 | Bottle instances, editable barrel details, and lifecycle dates | Complete | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence, per-role context windows, and explicit empty/recorded/clear date UX are complete. `make pr-review` passed (338 tests); independent browser check passed; reviewer and validator passed at `43b88a5`. |
 
 ## Implementation Audit
 

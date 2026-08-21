@@ -416,20 +416,18 @@ def parse_lifecycle_dates(
 ) -> tuple[dict[str, date | None], dict[str, str]]:
     """Parse lifecycle dates without accepting browser-dependent formats.
 
-    A blank bottled date deliberately has no mutation semantics: it preserves a
-    previously photo-derived or manually entered value. Its explicit removal is
-    the separately named checkbox, which also makes this safe for re-analysis.
+    A blank lifecycle date deliberately has no mutation semantics: it preserves
+    a previously photo-derived or manually entered value. Its explicit removal
+    is the separately named checkbox, which also makes this safe for re-analysis.
     """
     values: dict[str, date | None] = {}
     errors: dict[str, str] = {}
     for field in fields:
-        if field == "date_bottled" and clears_bottled_date(form):
+        if clears_lifecycle_date(form, field):
             values[field] = None
             continue
         raw_value = str(form.get(field, "")).strip()
         if not raw_value:
-            if field != "date_bottled":
-                values[field] = None
             continue
         if not LIFECYCLE_DATE_PATTERN.fullmatch(raw_value):
             errors[field] = "Use YYYY-MM-DD."
@@ -441,9 +439,9 @@ def parse_lifecycle_dates(
     return values, errors
 
 
-def clears_bottled_date(form: Any) -> bool:
-    """Whether this submission explicitly removes the optional bottled date."""
-    return str(form.get("clear_date_bottled", "")) == "true"
+def clears_lifecycle_date(form: Any, field: str) -> bool:
+    """Whether this submission explicitly removes an optional lifecycle date."""
+    return str(form.get(f"clear_{field}", "")) == "true"
 
 
 def update_bottle_from_form(
@@ -2773,7 +2771,7 @@ def register_routes(app: FastAPI) -> None:
                 )
             saved_bottle_id = bottle.id
             update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
-            clear_bottled_date = clears_bottled_date(form)
+            clear_bottled_date = clears_lifecycle_date(form, "date_bottled")
             user_price_applied = await apply_user_purchase_price(
                 session, bottle, app.state.qdrant_price_index
             )

@@ -95,7 +95,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A11 | Add Qdrant indexing and Ollama-first price retrieval | Deferred | `codex/qdrant-ollama-pricing` | Local catalog/OHLQ cache exists, but no Qdrant embedding, index, filtered retrieval, or Ollama evidence synthesis is present. |
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
-| A14 | Bottle instances, editable barrel details, and lifecycle dates | Complete | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); Date Bottled is photo-derived, optional, and explicitly removable; per-role Ollama context windows added. `make pr-review` passed (338 tests); reviewer and validator passed at `95f2318`. |
+| A14 | Bottle instances, editable barrel details, and lifecycle dates | In Progress | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence and context windows are implemented, but the date-state clarity amendment below must land before the draft is ready. |
 
 ## Implementation Audit
 
@@ -982,7 +982,10 @@ None.
 - `bourbonbook/templates/edit.html`
 - `bourbonbook/templates/detail.html`
 - `tests/test_app.py`
+- `bourbonbook/static/app.js`
+- `bourbonbook/static/app.css`
 - `tests/test_migrations.py`
+- `tests/test_quality_routes.py`
 
 ### Individual Implementation Instructions
 
@@ -1017,6 +1020,39 @@ None.
    and deterministic payload/validation tests.
 
 ### Completion Evidence
+### Pre-merge UX amendment — lifecycle-date state clarity
+
+Native date controls render browser-local placeholder-like segments when their value is actually
+empty. Do not put a current date, a fake placeholder, or a JavaScript-derived value into either
+input to compensate. The persisted `Date | None` value remains the source of truth.
+
+1. Wrap each native date control in one reusable `.date-field` pattern in the existing single
+   stylesheet/script and two-breakpoint PWA layout. It has a visible label, a native `type="date"`
+   control, and persistent state text associated through `aria-describedby`: **Not recorded** when
+   the stored value is null, or **Recorded: YYYY-MM-DD** when a date exists. Error text appends to
+   that description rather than replacing it. Never populate a synthetic/default browser date.
+2. On initial add, label Date Purchased as optional and show that an empty field records no purchase
+   date. Do not add Date Bottled to the capture form; only direct photo analysis may initially
+   propose it.
+3. On edit, preserve local-calendar semantics and do not convert dates to timestamps or relative
+   labels. A browser picker selection is visible in the control; the state text changes only after
+   save/re-render, making the saved/not-saved boundary unambiguous.
+4. Standardize **both** lifecycle dates on one exact server state machine for edit and all
+   photo/name/price re-analysis requests: explicit `clear_date_<field>=true` clears; otherwise an
+   exact valid nonblank `YYYY-MM-DD` replaces; otherwise blank/omitted preserves the stored value.
+   Parse both fields before mutation, upload, provider work, or commit. This supersedes the prior
+   implicit blank-clears-purchase-date behavior and prevents partial re-analysis forms from silently
+   deleting a stored date.
+5. Render a clear control only when its date is currently recorded; label it **Clear saved date**.
+   It is a real keyboard-operable checkbox posting only `clear_date_<field>=true`, explains that
+   removal takes effect only after Save/Analyze, and its client state reads **Will be cleared when
+   saved**. Checking it clears the visible native control; selecting/typing a valid replacement
+   unchecks it. The deterministic precedence is clear > valid manual replacement > preserved stored
+   value > direct-photo bottled-date proposal. Thus a clear wins over a same-request photo proposal,
+   while a later photo re-analysis may fill a still-null Date Bottled.
+6. Keep CSRF, verified-user checks, owner scoping, strict `YYYY-MM-DD` validation, and atomic
+   no-mutation-on-error behavior unchanged.
+
 
 - A blank-barrel existing bottle renders the open barrel editor and can save all barrel/date fields.
 - Date Purchased persists through initial photo add and normal edit. A direct photo analysis may
@@ -1029,6 +1065,12 @@ None.
 - An explicit clear keeps Date Bottled null during the same photo re-analysis, and context-window
   configuration is validated and used by every affected Ollama request path.
 - Independent review, `make pr-review`, a draft PR, and tracker evidence are recorded.
+- Browser, keyboard, and screen-reader-facing tests distinguish a null date from a recorded date,
+  verify explicit clear/preserve/replace semantics for both fields, and retain the existing 422,
+  CSRF, owner-scope, and no-partial-mutation checks.
+- A real-browser `pwa-visual-check` covers the native date fields, clear-state transition, focus and
+  touch-target behavior at iPhone-width and desktop-width viewports; it confirms no layout clipping
+  or false saved-date cue in either theme-supported rendering.
 
 ## Plan-Review Prompt
 

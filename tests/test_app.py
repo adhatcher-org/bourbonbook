@@ -469,6 +469,8 @@ def test_edit_font_assets_are_self_hosted_and_scoped(tmp_path: Path) -> None:
         license_response = client.get("/static/fonts/OFL.txt")
 
     assert css_response.status_code == 200
+    assert ".date-clear-message{color:var(--red)}" in css_response.text
+    assert ".date-clear-message[hidden]{display:none}" in css_response.text
     assert regular_response.status_code == 200
     assert bold_response.status_code == 200
     assert license_response.status_code == 200
@@ -637,6 +639,10 @@ def test_add_review_edit_and_view_bottle(tmp_path: Path, monkeypatch) -> None:
     with client:
         register(client)
         new_page = client.get("/bottles/new")
+        assert 'name="date_bottled"' not in new_page.text
+        assert "Date purchased" in new_page.text
+        assert "(optional)" in new_page.text
+        assert "Not recorded — leave blank to save no purchase date." in new_page.text
         assert 'name="date_bottled"' not in new_page.text
         assert (
             'name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" '
@@ -889,13 +895,19 @@ def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_ins
             first_id, second_id = first.id, second.id
 
         edit = client.get(f"/bottles/{first_id}/edit")
+        assert "Recorded: 2025-01-02" in edit.text
+        assert "Recorded: 2025-01-03" in edit.text
+        assert edit.text.count("Clear saved date") == 2
+        assert (
+            edit.text.count('data-date-clear-message role="status" aria-live="polite" hidden') == 2
+        )
         invalid_edit = client.post(
             f"/bottles/{first_id}/edit",
             data={"csrf_token": csrf(edit), "date_bottled": "01/02/2025"},
         )
         assert invalid_edit.status_code == 422
         assert "Use YYYY-MM-DD." in invalid_edit.text
-        assert 'aria-describedby="date-bottled-error"' in invalid_edit.text
+        assert 'aria-describedby="date-bottled-state date-bottled-error"' in invalid_edit.text
 
         invalid_reanalysis = client.post(
             f"/bottles/{first_id}/analyze",
@@ -941,6 +953,46 @@ def test_lifecycle_dates_validate_before_side_effects_and_persist_per_bottle_ins
             assert second.date_purchased == date(2025, 2, 3)
             assert second.barrel_number == "B-2"
 
+        preserved = client.post(
+            f"/bottles/{first_id}/edit",
+            data={
+                "csrf_token": csrf(client.get(f"/bottles/{first_id}/edit")),
+                "name": "Same Product",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+                "date_bottled": "",
+                "date_purchased": "",
+            },
+            follow_redirects=False,
+        )
+        assert preserved.status_code == 303
+        with app.state.database.session_factory() as session:
+            first = session.get(Bottle, first_id)
+            assert first is not None
+            assert first.date_bottled == date(2026, 3, 4)
+            assert first.date_purchased == date(2026, 3, 5)
+
+        cleared_purchase = client.post(
+            f"/bottles/{first_id}/edit",
+            data={
+                "csrf_token": csrf(client.get(f"/bottles/{first_id}/edit")),
+                "name": "Same Product",
+                "status": "Unopened",
+                "fill_level": "100",
+                "quantity": "1",
+                "clear_date_purchased": "true",
+                "date_purchased": "2026-12-31",
+            },
+            follow_redirects=False,
+        )
+        assert cleared_purchase.status_code == 303
+        with app.state.database.session_factory() as session:
+            first = session.get(Bottle, first_id)
+            assert first is not None
+            assert first.date_bottled == date(2026, 3, 4)
+            assert first.date_purchased is None
+
 
 def test_photo_reanalysis_respects_an_explicit_bottled_date_clear(
     tmp_path: Path, monkeypatch
@@ -963,7 +1015,12 @@ def test_photo_reanalysis_respects_an_explicit_bottled_date_clear(
         with app.state.database.session_factory() as session:
             owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
             assert owner is not None
-            bottle = Bottle(owner_id=owner.id, name="Photo bottle", photo_name="photo.jpg")
+            bottle = Bottle(
+                owner_id=owner.id,
+                name="Photo bottle",
+                photo_name="photo.jpg",
+                date_purchased=date(2025, 1, 2),
+            )
             session.add(bottle)
             session.commit()
             bottle_id = bottle.id
@@ -983,7 +1040,9 @@ def test_photo_reanalysis_respects_an_explicit_bottled_date_clear(
         )
         assert first_refresh.status_code == 303
         with app.state.database.session_factory() as session:
-            assert session.get(Bottle, bottle_id).date_bottled == date(2025, 3, 7)
+            refreshed_bottle = session.get(Bottle, bottle_id)
+            assert refreshed_bottle.date_bottled == date(2025, 3, 7)
+            assert refreshed_bottle.date_purchased == date(2025, 1, 2)
 
         refreshed = client.get(first_refresh.headers["location"])
         preserved = client.post(

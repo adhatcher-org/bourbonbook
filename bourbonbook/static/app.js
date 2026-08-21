@@ -106,6 +106,25 @@ if (fillRange) {
   updateFill();
 }
 
+document.querySelectorAll('[data-date-field]').forEach((field) => {
+  const input = field.querySelector('[data-date-input]');
+  const clear = field.querySelector('[data-date-clear]');
+  const clearMessage = field.querySelector('[data-date-clear-message]');
+  if (!(input instanceof HTMLInputElement) || !(clear instanceof HTMLInputElement)) return;
+  const syncClearState = () => {
+    if (clearMessage) clearMessage.toggleAttribute('hidden', !clear.checked);
+  };
+  clear.addEventListener('change', () => {
+    if (clear.checked) input.value = '';
+    syncClearState();
+  });
+  input.addEventListener('input', () => {
+    if (input.value) clear.checked = false;
+    syncClearState();
+  });
+  syncClearState();
+});
+
 const purchasePrice = document.querySelector('input[name="purchase_price"]');
 const quantity = document.querySelector('input[name="quantity"]');
 const msrp = document.querySelector('input[name="msrp"]');

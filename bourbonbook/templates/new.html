@@ -19,7 +19,7 @@
     </label>
     <div class="capture-metadata">
       <label>Purchase price <span class="money-input"><i>$</i><input name="purchase_price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Optional"></span></label>
-      <label>Date purchased<input name="date_purchased" type="date"></label>
+      <div class="date-field" data-date-field><label for="date-purchased">Date purchased <span>(optional)</span><input id="date-purchased" name="date_purchased" type="date" aria-describedby="date-purchased-state" data-date-input></label><small id="date-purchased-state" class="date-field-state" data-date-state>Not recorded — leave blank to save no purchase date.</small></div>
       <label>Bottles owned <span class="quantity-input"><input name="quantity" type="number" min="1" max="99" value="1" inputmode="numeric"><i>qty</i></span></label>
     </div>
     <div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Private by design.</strong> The photo is sent only to your configured bottle analyzer.</p></div>

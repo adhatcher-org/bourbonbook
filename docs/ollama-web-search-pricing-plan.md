@@ -78,9 +78,11 @@ dispatch matching the existing `_request_provider_analysis` pattern:
 async def search_bottle_prices(name, settings, *, size=None):
     if settings.analysis_provider == "openai":
         from bourbonbook.openai_provider import search_prices
+
         return await search_prices(name, settings, size=size)
     if settings.analysis_provider == "ollama":
         from bourbonbook.ollama_search import search_prices
+
         return await search_prices(name, settings, size=size)
     return {}, [], "unavailable"
 ```

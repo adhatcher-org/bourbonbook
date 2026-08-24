@@ -127,6 +127,7 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
     monkeypatch.setenv("OLLAMA_VISION_NUM_CTX", "32768")
     monkeypatch.setenv("OLLAMA_TEXT_NUM_CTX", "16384")
+    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", "true")
 
     settings = Settings.from_env()
 
@@ -142,6 +143,55 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
     assert settings.ollama_text_model == "qwen3:30b-a3b"
     assert settings.ollama_context_window(vision=True) == 32768
     assert settings.ollama_context_window(vision=False) == 16384
+    assert settings.ollama_structured_output is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("True", True),
+        (" false ", False),
+        ('"true"', True),
+        ('"false"', False),
+    ],
+)
+def test_ollama_structured_output_parses_the_accepted_vocabulary(
+    monkeypatch, tmp_path: Path, raw: str, expected: bool
+) -> None:
+    """The managed writer emits `KEY="true"`, and that file is the container's --env-file."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", raw)
+
+    assert Settings.from_env().ollama_structured_output is expected
+
+
+@pytest.mark.parametrize("raw", ["1", "yes", "on", "maybe"])
+def test_ollama_structured_output_rejects_unrecognised_values(
+    monkeypatch, tmp_path: Path, raw: str
+) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", raw)
+
+    with pytest.raises(ValueError, match="OLLAMA_STRUCTURED_OUTPUT"):
+        Settings.from_env()
+
+
+def test_ollama_structured_output_treats_unset_and_blank_as_the_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A blank env_file line must not crash a container over a feature flag."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("OLLAMA_STRUCTURED_OUTPUT", raising=False)
+    assert Settings.from_env().ollama_structured_output is False
+
+    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", "")
+    assert Settings.from_env().ollama_structured_output is False
+
+
+def test_ollama_structured_output_defaults_to_disabled(tmp_path: Path) -> None:
+    assert settings_for(tmp_path).ollama_structured_output is False
 
 
 @pytest.mark.parametrize(

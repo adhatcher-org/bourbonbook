@@ -79,6 +79,13 @@ CONFIG_FIELDS = (
         optional=True,
     ),
     ConfigField(
+        "OLLAMA_STRUCTURED_OUTPUT",
+        "ollama_structured_output",
+        "Ollama structured output",
+        "Analysis",
+        "boolean",
+    ),
+    ConfigField(
         "OLLAMA_API_KEY",
         "ollama_api_key",
         "Ollama Cloud API key",

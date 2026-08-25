@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-import bourbonbook.analysis
 from bourbonbook.analysis import (
+    ANALYSIS_FIELD_SPECS,
     ANALYSIS_STATUS_VALUES,
     OUTPUT_FIELDS,
     PHOTO_OUTPUT_FIELDS,
@@ -436,21 +436,25 @@ def test_analysis_schema_matches_the_golden_snapshot() -> None:
 
 
 def test_analysis_schema_fails_fast_on_field_set_drift(monkeypatch) -> None:
-    """Called directly: `ollama.py` binds the tuple at import, so a patch cannot reach it."""
-    specs = dict(bourbonbook.analysis.ANALYSIS_FIELD_SPECS)
+    """Called directly: `ollama.py` binds the tuple at import, so a patch cannot reach it.
+
+    The patches use string targets so this module needs only the `from ... import` form.
+    `analysis_schema` resolves both globals from its own module on every call, so patching the
+    module attribute reaches it regardless of how the function itself was imported here.
+    """
+    specs = dict(ANALYSIS_FIELD_SPECS)
     specs["orphan_field"] = {"type": ["string", "null"]}
-    monkeypatch.setattr(bourbonbook.analysis, "ANALYSIS_FIELD_SPECS", specs)
+    monkeypatch.setattr("bourbonbook.analysis.ANALYSIS_FIELD_SPECS", specs)
     with pytest.raises(ValueError, match="orphan_field"):
-        bourbonbook.analysis.analysis_schema(photo=True)
+        analysis_schema(photo=True)
     monkeypatch.undo()
 
     monkeypatch.setattr(
-        bourbonbook.analysis,
-        "PHOTO_OUTPUT_FIELDS",
-        bourbonbook.analysis.PHOTO_OUTPUT_FIELDS + ("unspecified_field",),
+        "bourbonbook.analysis.PHOTO_OUTPUT_FIELDS",
+        PHOTO_OUTPUT_FIELDS + ("unspecified_field",),
     )
     with pytest.raises(ValueError, match="unspecified_field"):
-        bourbonbook.analysis.analysis_schema(photo=True)
+        analysis_schema(photo=True)
 
 
 def test_analysis_schema_returns_an_isolated_copy_per_call() -> None:

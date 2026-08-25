@@ -468,7 +468,9 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool
     for key, value in analysis.items():
         if key in ANALYSIS_EXCLUDED_FIELDS or (key == "msrp" and not allow_msrp):
             continue
-        if not hasattr(bottle, key) or value is None:
+        # A schema that requires every key makes "" as likely an answer as null, and an
+        # empty string would otherwise be written over a user-entered column.
+        if not hasattr(bottle, key) or value is None or value == "":
             continue
         if key in NUMERIC_ANALYSIS_FIELDS:
             # Vision-model output is untyped free text; never let a non-numeric value

@@ -19,16 +19,20 @@ covers the implementation.
 async def refresh_prices(session, bottle, settings, *, force=False, price_index=None) -> str:
     if not bottle.name or bottle.name == "Untitled bottle":
         return "unavailable"
-    cached = cached_catalog_price(session, bottle, require_fresh=not force)      # Tier 1
-    if cached: ...; return "cached"
-    matched = await qdrant_catalog_price(                                        # Tier 2
+    cached = cached_catalog_price(session, bottle, require_fresh=not force)  # Tier 1
+    if cached:
+        ...
+        return "cached"
+    matched = await qdrant_catalog_price(  # Tier 2
         session, bottle, price_index, require_fresh=not force
     )
-    if matched: ...; return "local_match"
-    prices, sources, status = await search_bottle_prices(...)                    # Tier 3
+    if matched:
+        ...
+        return "local_match"
+    prices, sources, status = await search_bottle_prices(...)  # Tier 3
     apply_price_search(bottle, prices, sources)
     if status == "complete":
-        cached = cache_catalog_price(session, bottle, prices, sources)           # writeback
+        cached = cache_catalog_price(session, bottle, prices, sources)  # writeback
         if cached and price_index:
             await price_index.upsert(cached)
     return status

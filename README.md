@@ -128,6 +128,7 @@ the value actually configured in Unraid.
 | `OLLAMA_VISION_NUM_CTX` | Variable | `OLLAMA_VISION_NUM_CTX` | `32768` | Photo and catalog-extraction context window | No |
 | `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | unset (falls back to `OLLAMA_MODEL`) | Name-only analysis | No |
 | `OLLAMA_TEXT_NUM_CTX` | Variable | `OLLAMA_TEXT_NUM_CTX` | unset (falls back to `OLLAMA_NUM_CTX`) | Optional text-model context window | No |
+| `OLLAMA_STRUCTURED_OUTPUT` | Variable | `OLLAMA_STRUCTURED_OUTPUT` | `false` | Constrains analysis output with a JSON Schema | No |
 | `QDRANT_URL` | Variable | `QDRANT_URL` | `http://qdrant:6333` | Local price search index | No |
 | `QDRANT_API_KEY` | Variable | `QDRANT_API_KEY` | masked value | If Qdrant requires authentication | Yes |
 | `QDRANT_PRICE_COLLECTION` | Variable | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Local price-search collection | No |
@@ -176,6 +177,11 @@ instead of loading a separate model per task.
 Context windows are configured by role: `OLLAMA_VISION_NUM_CTX` defaults to `32768` for bottle
 photos, catalog extraction, and vision warm-up. `OLLAMA_NUM_CTX` defaults to `4096` for text work;
 set the optional `OLLAMA_TEXT_NUM_CTX` only when the text model needs a different positive value.
+
+`OLLAMA_STRUCTURED_OUTPUT` ships disabled and constrains bottle analysis with an explicit JSON
+Schema when enabled, so it requires an Ollama build with structured-output support on
+`/api/generate` -- acceptance was confirmed on Ollama `0.32.13`, the only compatibility claim this
+project makes, so probe your own endpoint before enabling.
 
 Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
 are process-local; add a shared limiter before scaling workers or replicas.

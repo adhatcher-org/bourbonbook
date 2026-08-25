@@ -414,6 +414,55 @@ def test_analysis_accepts_verified_catalog_msrp_when_allowed() -> None:
     assert bottle.brand == "New Riff"
 
 
+def test_apply_analysis_ignores_an_all_empty_string_schema_shaped_analysis() -> None:
+    """A required-every-key schema makes "" as likely an answer as null (A15 section 5)."""
+    bottle = Bottle(
+        name="Example",
+        brand="Buffalo Trace",
+        release="Antique Collection",
+        warehouse="C",
+        mash_bill="Rye",
+        proof=90.0,
+        fill_level=40,
+        status="Opened",
+    )
+    before = {
+        field: getattr(bottle, field)
+        for field in ("name", "brand", "release", "warehouse", "mash_bill", "proof", "fill_level")
+    }
+
+    apply_analysis(
+        bottle,
+        dict.fromkeys(
+            (
+                "name",
+                "brand",
+                "release",
+                "edition",
+                "spirit_type",
+                "distilled_by",
+                "mash_bill",
+                "proof",
+                "abv",
+                "size",
+                "age_statement",
+                "barrel_number",
+                "bottle_number",
+                "warehouse",
+                "floor",
+                "status",
+                "fill_level",
+                "msrp",
+                "ocr_text",
+            ),
+            "",
+        ),
+    )
+
+    assert {field: getattr(bottle, field) for field in before} == before
+    assert bottle.status == "Opened"
+
+
 def test_apply_analysis_drops_a_noisy_non_numeric_proof_instead_of_raising() -> None:
     bottle = Bottle(name="Example", proof=90.0)
 

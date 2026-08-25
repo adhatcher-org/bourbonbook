@@ -1341,6 +1341,88 @@ def test_admin_can_save_validated_configuration_and_secrets_are_masked(
     assert reloaded.openai_model == "gpt-test"
 
 
+def test_admin_config_round_trips_the_ollama_structured_output_switch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The rollout switch must be flippable and rollback-able through the admin surface."""
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+
+        page = client.get("/admin/config")
+        assert "Ollama structured output" in page.text
+
+        enabled = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="true"),
+                "csrf_token": csrf(page),
+            },
+        )
+        assert enabled.status_code == 200
+        assert read_managed_config(tmp_path / ".env")["OLLAMA_STRUCTURED_OUTPUT"] == "true"
+
+        disabled = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="false"),
+                "csrf_token": csrf(page),
+            },
+        )
+        assert disabled.status_code == 200
+
+    # The byte on disk is JSON-quoted; assert the decoded round trip, not the raw line.
+    assert read_managed_config(tmp_path / ".env")["OLLAMA_STRUCTURED_OUTPUT"] == "false"
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert Settings.from_env().ollama_structured_output is False
+
+
+def test_admin_config_rejects_an_unparseable_structured_output_value(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+        page = client.get("/admin/config")
+
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="maybe"),
+                "csrf_token": csrf(page),
+            },
+        )
+
+        assert response.status_code == 400
+        assert "OLLAMA_STRUCTURED_OUTPUT must be true or false" in response.text
+        assert not (tmp_path / ".env").exists()
+
+
+def test_ollama_structured_output_is_not_a_secret_field() -> None:
+    field = next(f for f in CONFIG_FIELDS if f.key == "OLLAMA_STRUCTURED_OUTPUT")
+
+    assert field.secret is False
+    assert field.optional is False
+    assert field.kind == "boolean"
+    assert field.group == "Analysis"
+
+
+def test_admin_config_page_renders_with_a_quoted_managed_boolean(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The baseline column parses os.environ directly, quotes and all."""
+    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", '"true"')
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "admin")
+        promote_admin(app, "admin@example.com")
+
+        page = client.get("/admin/config")
+
+        assert page.status_code == 200
+        assert "Ollama structured output" in page.text
+
+
 def test_admin_config_rejects_invalid_choices_without_writing(tmp_path: Path) -> None:
     client, app = make_client(tmp_path)
     with client:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -53,6 +54,163 @@ MISSING_FIELDS = (
     "status",
     "fill_level",
 )
+
+ANALYSIS_STATUS_VALUES = ("Unopened", "Opened", "Empty")
+# JSON Schema specification per output field. Membership is the PHOTO_OUTPUT_FIELDS superset;
+# the name path selects a subset and overrides ocr_text only. Shape is constrained here, never
+# truth: no pattern, minimum, maximum, format, or business range belongs in these specifications.
+ANALYSIS_FIELD_SPECS: dict[str, dict[str, Any]] = {
+    "name": {"type": ["string", "null"]},
+    "brand": {"type": ["string", "null"]},
+    "release": {"type": ["string", "null"]},
+    "edition": {"type": ["string", "null"]},
+    "spirit_type": {"type": ["string", "null"]},
+    "distilled_by": {"type": ["string", "null"]},
+    "mash_bill": {"type": ["string", "null"]},
+    "proof": {"type": ["number", "null"]},
+    "abv": {"type": ["number", "null"]},
+    "size": {"type": ["string", "null"]},
+    "age_statement": {"type": ["string", "null"]},
+    "barrel_number": {"type": ["string", "null"]},
+    "bottle_number": {"type": ["string", "null"]},
+    "warehouse": {"type": ["string", "null"]},
+    "floor": {"type": ["string", "null"]},
+    "status": {"type": ["string", "null"], "enum": [*ANALYSIS_STATUS_VALUES, None]},
+    "fill_level": {"type": ["integer", "null"]},
+    "msrp": {"type": "null"},
+    "ocr_text": {"type": ["string", "null"]},
+    "date_bottled": {"type": ["string", "null"]},
+}
+# Emission order, deliberately not tuple order: an all-required object is generated as a fixed
+# sequence and the model cannot stop before the last property, so where the free-text
+# transcription sits decides what survives a degenerate generation.
+#
+# ocr_text was placed FIRST until 2026-08-23, on the reasoning that the transcription should be
+# generated before the fields it informs. Measurement against Ollama 0.32.13 / qwen3-vl:8b
+# reversed that: the model reliably falls into a newline repetition loop inside the ocr_text
+# string, the grammar cannot break a loop inside a legal string value, and the server aborts the
+# generation mid-string. With ocr_text first that destroys the whole object.
+#
+#   ocr_text first: 0/10 runs produced parseable JSON (done=false, truncated ~350 chars)
+#   ocr_text last:  8/9 runs produced all 20 keys, valid, done_reason="stop", ~3.3s
+#
+# Last position does not prevent the loop; it means the other 19 fields are already emitted
+# before it can start. Do not move this back without re-running that comparison.
+ANALYSIS_SCHEMA_FIELD_ORDER = tuple(
+    field for field in PHOTO_OUTPUT_FIELDS if field != "ocr_text"
+) + ("ocr_text",)
+# A name-only call has no image, so any non-null ocr_text from it is by construction a
+# hallucination -- and a hallucinated transcription is a live route to a false verified-catalog
+# match that writes an MSRP. The property stays present, to keep membership equal to the output
+# tuple and aligned with the prompt key list, but it can only be null.
+NAME_PATH_OCR_TEXT_SPEC: dict[str, Any] = {"type": "null"}
+
+
+def _validate_analysis_field_specs() -> None:
+    """Fail fast when the output tuples and the schema specifications drift apart.
+
+    Called at import of this module -- where a developer error belongs, and where it cannot
+    reach an HTTP handler -- and again as the first statement of :func:`analysis_schema`, which
+    is the only call site a test monkeypatch can reach. Both globals are read from the module,
+    never from arguments, so a patched global is seen on the next call.
+    """
+    specified = set(ANALYSIS_FIELD_SPECS)
+    declared = set(PHOTO_OUTPUT_FIELDS)
+    missing = sorted(declared - specified)
+    if missing:
+        raise ValueError(
+            "ANALYSIS_FIELD_SPECS has no JSON Schema specification for: " + ", ".join(missing)
+        )
+    extra = sorted(specified - declared)
+    if extra:
+        raise ValueError(
+            "ANALYSIS_FIELD_SPECS specifies fields absent from PHOTO_OUTPUT_FIELDS: "
+            + ", ".join(extra)
+        )
+
+
+class SchemaConformanceError(ValueError):
+    """A parsed provider response did not conform to the schema that was sent with the request."""
+
+
+def validate_against_schema(parsed: Any, schema: dict[str, Any]) -> None:
+    """Verify a parsed response actually conforms to the schema the request carried.
+
+    Sending a schema is not the same as receiving a constrained response. Measured against
+    Ollama 0.32.13 on 2026-08-23: a generation aborted by the server (``done`` false) or stopped
+    by context exhaustion (``done_reason`` "length") returns a truncated or non-conforming object,
+    and ``maxLength`` is silently dropped by the grammar converter -- so individual keywords are
+    not guaranteed to have been applied either. Verifying the result here turns an assumed
+    guarantee into a checked one, and does so independently of which response channel carried it.
+    """
+    if not isinstance(parsed, dict):
+        raise SchemaConformanceError(f"expected a JSON object, got {type(parsed).__name__}")
+    properties: dict[str, Any] = schema.get("properties", {})
+    missing = sorted(set(properties) - set(parsed))
+    if missing:
+        raise SchemaConformanceError("response is missing required keys: " + ", ".join(missing))
+    extra = sorted(set(parsed) - set(properties))
+    if extra:
+        raise SchemaConformanceError("response carries unspecified keys: " + ", ".join(extra))
+    for field, spec in properties.items():
+        value = parsed[field]
+        allowed = spec.get("type")
+        allowed = [allowed] if isinstance(allowed, str) else list(allowed or ())
+        if not _matches_json_type(value, allowed):
+            raise SchemaConformanceError(
+                f"{field} is {type(value).__name__}, schema allows {'/'.join(allowed)}"
+            )
+        choices = spec.get("enum")
+        if choices is not None and value not in choices:
+            raise SchemaConformanceError(f"{field} value {value!r} is outside the schema enum")
+
+
+def _matches_json_type(value: Any, allowed: list[str]) -> bool:
+    if not allowed:
+        return True
+    if value is None:
+        return "null" in allowed
+    if isinstance(value, bool):
+        # JSON Schema does not treat a boolean as a number; neither do we.
+        return "boolean" in allowed
+    if isinstance(value, int):
+        return bool({"integer", "number"} & set(allowed))
+    if isinstance(value, float):
+        return "number" in allowed or ("integer" in allowed and value.is_integer())
+    if isinstance(value, str):
+        return "string" in allowed
+    if isinstance(value, list):
+        return "array" in allowed
+    if isinstance(value, dict):
+        return "object" in allowed
+    return False
+
+
+def analysis_schema(*, photo: bool) -> dict[str, Any]:
+    """Return the JSON Schema constraining one bottle-analysis response.
+
+    Every property is required and nullable: "unknown" is expressed as null, not by omission.
+    The returned tree is freshly assembled and deeply isolated, so a caller may mutate it.
+    """
+    _validate_analysis_field_specs()
+    selected = set(PHOTO_OUTPUT_FIELDS if photo else OUTPUT_FIELDS)
+    properties: dict[str, Any] = {}
+    for field in ANALYSIS_SCHEMA_FIELD_ORDER:
+        if field not in selected:
+            continue
+        if field == "ocr_text" and not photo:
+            properties[field] = copy.deepcopy(NAME_PATH_OCR_TEXT_SPEC)
+        else:
+            properties[field] = copy.deepcopy(ANALYSIS_FIELD_SPECS[field])
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_validate_analysis_field_specs()
 
 PHOTO_PROMPT = """You are a meticulous American-whiskey bottle archivist. Inspect the entire image,
 including the neck label, main label, small-print proof/ABV line, handwritten barrel tag, and the

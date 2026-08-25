@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+import bourbonbook.analysis
 from bourbonbook.analysis import (
+    ANALYSIS_STATUS_VALUES,
+    OUTPUT_FIELDS,
+    PHOTO_OUTPUT_FIELDS,
     PhotoAnalysisResult,
     _as_float,
+    analysis_schema,
     analyze_bottle,
     analyze_bottle_name,
     enrich_from_verified_catalog,
@@ -258,3 +265,206 @@ def test_normalize_analysis_leaves_a_non_standard_size_untouched() -> None:
     values = normalize_analysis({"size": "620ml"})
 
     assert values["size"] == "620ml"
+
+
+# --- the analysis JSON Schema (A15) -------------------------------------------------
+
+PHOTO_SCHEMA_PROPERTY_ORDER = [
+    "name",
+    "brand",
+    "release",
+    "edition",
+    "spirit_type",
+    "distilled_by",
+    "mash_bill",
+    "proof",
+    "abv",
+    "size",
+    "age_statement",
+    "barrel_number",
+    "bottle_number",
+    "warehouse",
+    "floor",
+    "status",
+    "fill_level",
+    "msrp",
+    "date_bottled",
+    "ocr_text",
+]
+NAME_SCHEMA_PROPERTY_ORDER = [
+    name for name in PHOTO_SCHEMA_PROPERTY_ORDER if name != "date_bottled"
+]
+TEXTUAL_SCHEMA_FIELDS = (
+    "name",
+    "brand",
+    "release",
+    "edition",
+    "spirit_type",
+    "distilled_by",
+    "mash_bill",
+    "size",
+    "age_statement",
+    "barrel_number",
+    "bottle_number",
+    "warehouse",
+    "floor",
+    "date_bottled",
+)
+
+
+def test_analysis_schema_membership_matches_the_output_field_tuples() -> None:
+    photo_schema = analysis_schema(photo=True)
+    name_schema = analysis_schema(photo=False)
+
+    assert set(photo_schema["properties"]) == set(PHOTO_OUTPUT_FIELDS)
+    assert set(name_schema["properties"]) == set(OUTPUT_FIELDS)
+    assert photo_schema["required"] == list(photo_schema["properties"])
+    assert name_schema["required"] == list(name_schema["properties"])
+    assert "date_bottled" not in name_schema["properties"]
+    # ocr_text is emitted LAST. A degenerate repetition loop inside the free-text transcription
+    # truncates the object; last position means the other fields are already emitted when it
+    # starts. Measured 2026-08-23: ocr_text first produced 0/10 parseable responses, last 8/9.
+    assert list(photo_schema["properties"])[-1] == "ocr_text"
+    assert list(name_schema["properties"])[-1] == "ocr_text"
+    assert list(photo_schema["properties"])[-2] == "date_bottled"
+
+
+def test_analysis_schema_property_order_is_the_pinned_order() -> None:
+    """Order is a design decision, so it is pinned as data rather than recomputed."""
+    assert list(analysis_schema(photo=True)["properties"]) == PHOTO_SCHEMA_PROPERTY_ORDER
+    assert list(analysis_schema(photo=False)["properties"]) == NAME_SCHEMA_PROPERTY_ORDER
+
+
+def test_analysis_schema_types_are_nullable_and_msrp_is_null_only() -> None:
+    schema = analysis_schema(photo=True)
+    properties = schema["properties"]
+
+    assert properties["proof"] == {"type": ["number", "null"]}
+    assert properties["abv"] == {"type": ["number", "null"]}
+    assert properties["fill_level"] == {"type": ["integer", "null"]}
+    for field in TEXTUAL_SCHEMA_FIELDS:
+        assert properties[field] == {"type": ["string", "null"]}, field
+    assert properties["msrp"] == {"type": "null"}
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert analysis_schema(photo=False)["additionalProperties"] is False
+
+
+def test_analysis_schema_ocr_text_is_nullable_on_photo_and_null_only_on_name() -> None:
+    assert analysis_schema(photo=True)["properties"]["ocr_text"] == {"type": ["string", "null"]}
+    assert analysis_schema(photo=False)["properties"]["ocr_text"] == {"type": "null"}
+
+
+def test_analysis_schema_status_enum_matches_the_normalizer_vocabulary() -> None:
+    enum = analysis_schema(photo=True)["properties"]["status"]["enum"]
+
+    assert enum == ["Unopened", "Opened", "Empty", None]
+    assigned = {
+        normalize_analysis({"fill_level": 100})["status"],
+        normalize_analysis({"fill_level": 50})["status"],
+        normalize_analysis({"fill_level": 0})["status"],
+    }
+    assert set(enum) - {None} == set(ANALYSIS_STATUS_VALUES) == assigned
+
+
+def test_analysis_schema_matches_the_golden_snapshot() -> None:
+    """The one test that makes any schema change visible in review."""
+    expected_photo = {
+        "type": "object",
+        "properties": {
+            "name": {"type": ["string", "null"]},
+            "brand": {"type": ["string", "null"]},
+            "release": {"type": ["string", "null"]},
+            "edition": {"type": ["string", "null"]},
+            "spirit_type": {"type": ["string", "null"]},
+            "distilled_by": {"type": ["string", "null"]},
+            "mash_bill": {"type": ["string", "null"]},
+            "proof": {"type": ["number", "null"]},
+            "abv": {"type": ["number", "null"]},
+            "size": {"type": ["string", "null"]},
+            "age_statement": {"type": ["string", "null"]},
+            "barrel_number": {"type": ["string", "null"]},
+            "bottle_number": {"type": ["string", "null"]},
+            "warehouse": {"type": ["string", "null"]},
+            "floor": {"type": ["string", "null"]},
+            "status": {
+                "type": ["string", "null"],
+                "enum": ["Unopened", "Opened", "Empty", None],
+            },
+            "fill_level": {"type": ["integer", "null"]},
+            "msrp": {"type": "null"},
+            "date_bottled": {"type": ["string", "null"]},
+            "ocr_text": {"type": ["string", "null"]},
+        },
+        "required": PHOTO_SCHEMA_PROPERTY_ORDER,
+        "additionalProperties": False,
+    }
+    expected_name = {
+        "type": "object",
+        "properties": {
+            "name": {"type": ["string", "null"]},
+            "brand": {"type": ["string", "null"]},
+            "release": {"type": ["string", "null"]},
+            "edition": {"type": ["string", "null"]},
+            "spirit_type": {"type": ["string", "null"]},
+            "distilled_by": {"type": ["string", "null"]},
+            "mash_bill": {"type": ["string", "null"]},
+            "proof": {"type": ["number", "null"]},
+            "abv": {"type": ["number", "null"]},
+            "size": {"type": ["string", "null"]},
+            "age_statement": {"type": ["string", "null"]},
+            "barrel_number": {"type": ["string", "null"]},
+            "bottle_number": {"type": ["string", "null"]},
+            "warehouse": {"type": ["string", "null"]},
+            "floor": {"type": ["string", "null"]},
+            "status": {
+                "type": ["string", "null"],
+                "enum": ["Unopened", "Opened", "Empty", None],
+            },
+            "fill_level": {"type": ["integer", "null"]},
+            "msrp": {"type": "null"},
+            "ocr_text": {"type": "null"},
+        },
+        "required": NAME_SCHEMA_PROPERTY_ORDER,
+        "additionalProperties": False,
+    }
+
+    assert analysis_schema(photo=True) == expected_photo
+    assert analysis_schema(photo=False) == expected_name
+    assert list(analysis_schema(photo=True)["properties"]) == list(expected_photo["properties"])
+    assert list(analysis_schema(photo=False)["properties"]) == list(expected_name["properties"])
+
+
+def test_analysis_schema_fails_fast_on_field_set_drift(monkeypatch) -> None:
+    """Called directly: `ollama.py` binds the tuple at import, so a patch cannot reach it."""
+    specs = dict(bourbonbook.analysis.ANALYSIS_FIELD_SPECS)
+    specs["orphan_field"] = {"type": ["string", "null"]}
+    monkeypatch.setattr(bourbonbook.analysis, "ANALYSIS_FIELD_SPECS", specs)
+    with pytest.raises(ValueError, match="orphan_field"):
+        bourbonbook.analysis.analysis_schema(photo=True)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(
+        bourbonbook.analysis,
+        "PHOTO_OUTPUT_FIELDS",
+        bourbonbook.analysis.PHOTO_OUTPUT_FIELDS + ("unspecified_field",),
+    )
+    with pytest.raises(ValueError, match="unspecified_field"):
+        bourbonbook.analysis.analysis_schema(photo=True)
+
+
+def test_analysis_schema_returns_an_isolated_copy_per_call() -> None:
+    first = analysis_schema(photo=True)
+    first["properties"]["name"]["type"] = "mutated"
+    first["properties"]["injected"] = {"type": "null"}
+    first["required"].append("injected")
+
+    second = analysis_schema(photo=True)
+
+    assert second["properties"]["name"] == {"type": ["string", "null"]}
+    assert "injected" not in second["properties"]
+    assert "injected" not in second["required"]
+    third = analysis_schema(photo=True)
+    assert second["properties"] is not third["properties"]
+    assert second["properties"]["status"] is not third["properties"]["status"]
+    assert second["required"] is not third["required"]

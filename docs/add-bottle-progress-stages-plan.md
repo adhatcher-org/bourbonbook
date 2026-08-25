@@ -66,13 +66,14 @@ New module `bourbonbook/bottle_processing.py` defines the vocabulary (mirrors
 
 ```python
 class BottleProcessingStage(StrEnum):
-    IDLE = "idle"            # default; bottle never went through the async pipeline
-    QUEUED = "queued"        # row created, BackgroundTasks callback scheduled
+    IDLE = "idle"  # default; bottle never went through the async pipeline
+    QUEUED = "queued"  # row created, BackgroundTasks callback scheduled
     ANALYZING = "analyzing"  # stage 1: analyze_bottle() (vision call)
     ENRICHING = "enriching"  # stage 2: enrich_bottle_by_name()
-    PRICING = "pricing"      # stage 3: apply_user_purchase_price() / refresh_prices()
-    COMPLETE = "complete"    # pipeline finished (outcome quality is in analysis_status, not here)
-    FAILED = "failed"        # unexpected exception, or orphaned by a server restart
+    PRICING = "pricing"  # stage 3: apply_user_purchase_price() / refresh_prices()
+    COMPLETE = "complete"  # pipeline finished (outcome quality is in analysis_status, not here)
+    FAILED = "failed"  # unexpected exception, or orphaned by a server restart
+
 
 IN_PROGRESS_STAGES = (
     BottleProcessingStage.QUEUED,
@@ -96,6 +97,7 @@ without Alembic's batch mode here, same as every prior migration in this repo):
 revision = "0009_bottle_processing_stage"
 down_revision = "0008_catalog_import_persistence"
 
+
 def upgrade() -> None:
     op.add_column(
         "bottles",
@@ -103,6 +105,7 @@ def upgrade() -> None:
     )
     op.add_column("bottles", sa.Column("processing_error", sa.Text(), nullable=True))
     op.create_index("ix_bottles_processing_stage", "bottles", ["processing_stage"])
+
 
 def downgrade() -> None:
     op.drop_index("ix_bottles_processing_stage", table_name="bottles")
@@ -175,8 +178,10 @@ def recover_orphaned_bottle_processing(session: Session) -> int:
     result = session.execute(
         update(Bottle)
         .where(Bottle.processing_stage.in_([s.value for s in IN_PROGRESS_STAGES]))
-        .values(processing_stage=BottleProcessingStage.FAILED.value,
-                processing_error="Interrupted by server restart")
+        .values(
+            processing_stage=BottleProcessingStage.FAILED.value,
+            processing_error="Interrupted by server restart",
+        )
     )
     return int(result.rowcount or 0)
 ```
@@ -209,10 +214,12 @@ def recover_orphaned_bottle_processing(session: Session) -> int:
       verify_csrf(request, csrf)
       with app.state.database.session_factory() as session:
           user = require_verified_user(request, session)
-          photo_name = await save_photo(photo, app.state.settings.data_dir / "uploads",
-                                         app.state.settings.max_upload_mb)
+          photo_name = await save_photo(
+              photo, app.state.settings.data_dir / "uploads", app.state.settings.max_upload_mb
+          )
           bottle = Bottle(
-              owner_id=user.id, photo_name=photo_name,
+              owner_id=user.id,
+              photo_name=photo_name,
               purchase_price=parse_float(purchase_price),
               quantity=parse_int(quantity, 1, 1, 99),
               processing_stage=BottleProcessingStage.QUEUED.value,
@@ -221,8 +228,13 @@ def recover_orphaned_bottle_processing(session: Session) -> int:
           session.commit()
           bottle_id = bottle.id
       background_tasks.add_task(
-          run_add_bottle_pipeline, app.state.database.session_factory, bottle_id,
-          app.state.settings, app.state.qdrant_price_index, app.state.usage_recorder, user.id,
+          run_add_bottle_pipeline,
+          app.state.database.session_factory,
+          bottle_id,
+          app.state.settings,
+          app.state.qdrant_price_index,
+          app.state.usage_recorder,
+          user.id,
       )
       return JSONResponse({"bottle_id": bottle_id}, status_code=202)
   ```
@@ -243,13 +255,16 @@ def recover_orphaned_bottle_processing(session: Session) -> int:
           bottle = owned_bottle(session, user, bottle_id)
           if not bottle:
               return JSONResponse({"error": "not_found"}, status_code=404)
-          done = bottle.processing_stage in {s.value for s in
-                                              (BottleProcessingStage.COMPLETE, BottleProcessingStage.FAILED)}
-          return JSONResponse({
-              "stage": bottle.processing_stage,
-              "analysis_status": bottle.analysis_status,
-              "done": done,
-          })
+          done = bottle.processing_stage in {
+              s.value for s in (BottleProcessingStage.COMPLETE, BottleProcessingStage.FAILED)
+          }
+          return JSONResponse(
+              {
+                  "stage": bottle.processing_stage,
+                  "analysis_status": bottle.analysis_status,
+                  "done": done,
+              }
+          )
   ```
 
   Auth: reuses `require_verified_user` + `owned_bottle` exactly like every other bottle route —

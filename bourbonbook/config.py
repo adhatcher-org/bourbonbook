@@ -11,6 +11,31 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
+_ENV_BOOLEAN_VALUES = {"true": True, "false": False}
+
+
+def _parse_env_boolean(key: str, raw: str | None, default: bool) -> bool:
+    """Parse a boolean environment value the way machine-written files supply it.
+
+    Unset or empty means the default: a blank ``env_file`` line or a ``${VAR}`` that resolved
+    empty must not crash a container over a feature flag. Surrounding double quotes are stripped
+    first, because the managed-config writer serialises with ``json.dumps`` and that same file is
+    fed to the container as ``--env-file``. Case and surrounding whitespace are forgiven. Only a
+    non-empty unrecognised value raises -- unlike the admin form parser, which is strict about a
+    value a human just typed.
+    """
+    if raw is None:
+        return default
+    value = raw.strip()
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+    value = value.strip().lower()
+    if not value:
+        return default
+    if value not in _ENV_BOOLEAN_VALUES:
+        raise ValueError(f"{key} must be true or false")
+    return _ENV_BOOLEAN_VALUES[value]
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -41,6 +66,7 @@ class Settings:
     ollama_num_ctx: int = 4096
     ollama_vision_num_ctx: int = 32768
     ollama_text_num_ctx: int | None = None
+    ollama_structured_output: bool = False
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_price_collection: str = "bourbonbook_prices"
@@ -103,6 +129,9 @@ class Settings:
             ollama_vision_num_ctx=int(get("OLLAMA_VISION_NUM_CTX", "32768")),
             ollama_text_num_ctx=(
                 int(get("OLLAMA_TEXT_NUM_CTX", "")) if get("OLLAMA_TEXT_NUM_CTX") else None
+            ),
+            ollama_structured_output=_parse_env_boolean(
+                "OLLAMA_STRUCTURED_OUTPUT", get("OLLAMA_STRUCTURED_OUTPUT"), False
             ),
             qdrant_url=get("QDRANT_URL", "").rstrip("/") or None,
             qdrant_api_key=get("QDRANT_API_KEY") or None,

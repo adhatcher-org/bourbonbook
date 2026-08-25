@@ -323,10 +323,26 @@ def analysis_prompt(values: dict[str, Any], *, source: str) -> str:
         for key, value in values.items()
         if key in OUTPUT_FIELDS and value not in (None, "")
     }
-    return f"""Use the {source} and the known bottle values to fill any missing fields.
-Do not change any field already present in the JSON below.
-Do not invent pricing. MSRP must stay null.
-If the exact bottle is not certain, leave the field null.
+    return f"""Identify this exact whiskey product, then fill any field below that is still missing.
+
+You are identifying a product, not transcribing a label. Facts such as the producing distillery
+and the general mash bill are almost never printed on a bottle -- supply them from established
+product knowledge when, and only when, you are certain which product this is.
+
+Field rules:
+- distilled_by is the company or distillery that actually produces this whiskey. Many brands are
+  owned by a parent company and produced at a distillery with a different name, so the brand name
+  followed by the word "Distillery" is usually wrong. If you cannot name the real producer, or you
+  would be inferring it from the brand name, return null.
+- mash_bill is the grain recipe in general terms, and it must agree with the spirit type: a rye
+  whiskey is not wheated. Return null unless you know this specific product's recipe. Never invent
+  percentages.
+- Do not change any field already present in the JSON below.
+- Do not invent pricing. MSRP must stay null.
+- A null is the correct answer whenever you are not certain. A plausible guess is worse than an
+  empty field here, because nothing downstream can tell the two apart.
+
+The {source} is provided as context, but a fact absent from it is not therefore unknown.
 
 Known values:
 {json.dumps(known, indent=2, sort_keys=True, default=str)}
@@ -392,10 +408,83 @@ def snap_size(normalized: dict[str, Any]) -> None:
         normalized["size"] = f"{nearest}ml"
 
 
+_PRODUCER_SUFFIXES = (
+    "distillery",
+    "distilleries",
+    "distilling",
+    "distilling co",
+    "distilling company",
+    "distillery co",
+    "distillery company",
+    "distillers",
+    "distillery inc",
+)
+_WHEATED_MARKERS = ("wheat", "wheated")
+_RYE_MARKERS = ("rye",)
+
+
+def _brand_echo(value: str, other: str) -> bool:
+    """True when ``value`` is ``other`` with a producer word bolted on."""
+    stripped = value.strip().lower()
+    other = other.strip().lower()
+    if not stripped or not other or stripped == other:
+        return stripped == other and bool(stripped)
+    return any(stripped == f"{other} {suffix}" for suffix in _PRODUCER_SUFFIXES)
+
+
+def implausible_distiller(distilled_by: Any, values: dict[str, Any]) -> bool:
+    """Reject a producer that is merely the brand with "Distillery" appended.
+
+    Measured failure mode, 2026-08: the model returned "Elijah Craig Distillery" (Heaven Hill),
+    "E.H. Taylor Distillery" (Buffalo Trace) and "Buffalo Trace Distillery" for a Wild Turkey
+    product. Brand-echo is the single most common shape, it is always wrong when the brand is
+    owned by a differently-named producer, and unlike a wrong-but-real answer it is detectable
+    without a reference source.
+    """
+    if not isinstance(distilled_by, str) or not distilled_by.strip():
+        return False
+    for key in ("brand", "release", "name"):
+        candidate = values.get(key)
+        if isinstance(candidate, str) and _brand_echo(distilled_by, candidate):
+            return True
+    return False
+
+
+def implausible_mash_bill(mash_bill: Any, values: dict[str, Any]) -> bool:
+    """Reject a mash bill that contradicts the product's own spirit type.
+
+    A wheated mash bill replaces rye as the flavouring grain, so "wheated" and a rye whiskey are
+    mutually exclusive. The model produced exactly that contradiction ("wheated rye whiskey") and
+    reached for "wheated bourbon" on three separate rye-recipe bourbons.
+    """
+    if not isinstance(mash_bill, str) or not mash_bill.strip():
+        return False
+    claim = mash_bill.strip().lower()
+    context = " ".join(
+        str(values.get(key) or "") for key in ("spirit_type", "name", "release")
+    ).lower()
+    wheated_claim = any(marker in claim for marker in _WHEATED_MARKERS)
+    rye_product = any(marker in context for marker in _RYE_MARKERS)
+    return wheated_claim and rye_product
+
+
+def drop_implausible_attributions(values: dict[str, Any]) -> None:
+    """Null out producer/mash-bill values a deterministic check can prove untrustworthy.
+
+    This runs on provider output only. Catalog enrichment merges afterwards and is unaffected, so
+    a verified product can still supply either field.
+    """
+    if implausible_distiller(values.get("distilled_by"), values):
+        values["distilled_by"] = None
+    if implausible_mash_bill(values.get("mash_bill"), values):
+        values["mash_bill"] = None
+
+
 def normalize_analysis(values: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
     reconcile_proof_and_abv(normalized)
     snap_size(normalized)
+    drop_implausible_attributions(normalized)
     fill_level = normalized.get("fill_level")
     try:
         fill = max(0, min(100, int(round(float(str(fill_level).rstrip("%"))))))

@@ -55,6 +55,20 @@ MISSING_FIELDS = (
     "fill_level",
 )
 
+# The single spirit-type vocabulary. The edit form renders these options and the analysis schema
+# constrains the model to them, so an extraction cannot produce a value the form cannot display.
+# "Rye Whiskey" rather than "Rye": the model reaches for the full phrase unprompted, and the longer
+# name also matches the free-text "rye whiskey" already stored by earlier extractions.
+SPIRIT_TYPES = (
+    "Bourbon",
+    "Rye Whiskey",
+    "American Whiskey",
+    "Canadian Whiskey",
+    "Scotch",
+    "Irish Whiskey",
+    "Japanese Whisky",
+    "Other",
+)
 ANALYSIS_STATUS_VALUES = ("Unopened", "Opened", "Empty")
 # JSON Schema specification per output field. Membership is the PHOTO_OUTPUT_FIELDS superset;
 # the name path selects a subset and overrides ocr_text only. Shape is constrained here, never
@@ -64,7 +78,7 @@ ANALYSIS_FIELD_SPECS: dict[str, dict[str, Any]] = {
     "brand": {"type": ["string", "null"]},
     "release": {"type": ["string", "null"]},
     "edition": {"type": ["string", "null"]},
-    "spirit_type": {"type": ["string", "null"]},
+    "spirit_type": {"type": ["string", "null"], "enum": [*SPIRIT_TYPES, None]},
     "distilled_by": {"type": ["string", "null"]},
     "mash_bill": {"type": ["string", "null"]},
     "proof": {"type": ["number", "null"]},

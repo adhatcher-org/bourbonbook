@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +10,7 @@ from bourbonbook.analysis import (
     ANALYSIS_STATUS_VALUES,
     OUTPUT_FIELDS,
     PHOTO_OUTPUT_FIELDS,
+    SPIRIT_TYPES,
     PhotoAnalysisResult,
     _as_float,
     analysis_prompt,
@@ -302,7 +304,6 @@ TEXTUAL_SCHEMA_FIELDS = (
     "brand",
     "release",
     "edition",
-    "spirit_type",
     "distilled_by",
     "mash_bill",
     "size",
@@ -347,6 +348,20 @@ def test_analysis_schema_types_are_nullable_and_msrp_is_null_only() -> None:
     assert properties["fill_level"] == {"type": ["integer", "null"]}
     for field in TEXTUAL_SCHEMA_FIELDS:
         assert properties[field] == {"type": ["string", "null"]}, field
+    assert properties["spirit_type"] == {
+        "type": ["string", "null"],
+        "enum": [
+            "Bourbon",
+            "Rye Whiskey",
+            "American Whiskey",
+            "Canadian Whiskey",
+            "Scotch",
+            "Irish Whiskey",
+            "Japanese Whisky",
+            "Other",
+            None,
+        ],
+    }
     assert properties["msrp"] == {"type": "null"}
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
@@ -379,7 +394,20 @@ def test_analysis_schema_matches_the_golden_snapshot() -> None:
             "brand": {"type": ["string", "null"]},
             "release": {"type": ["string", "null"]},
             "edition": {"type": ["string", "null"]},
-            "spirit_type": {"type": ["string", "null"]},
+            "spirit_type": {
+                "type": ["string", "null"],
+                "enum": [
+                    "Bourbon",
+                    "Rye Whiskey",
+                    "American Whiskey",
+                    "Canadian Whiskey",
+                    "Scotch",
+                    "Irish Whiskey",
+                    "Japanese Whisky",
+                    "Other",
+                    None,
+                ],
+            },
             "distilled_by": {"type": ["string", "null"]},
             "mash_bill": {"type": ["string", "null"]},
             "proof": {"type": ["number", "null"]},
@@ -409,7 +437,20 @@ def test_analysis_schema_matches_the_golden_snapshot() -> None:
             "brand": {"type": ["string", "null"]},
             "release": {"type": ["string", "null"]},
             "edition": {"type": ["string", "null"]},
-            "spirit_type": {"type": ["string", "null"]},
+            "spirit_type": {
+                "type": ["string", "null"],
+                "enum": [
+                    "Bourbon",
+                    "Rye Whiskey",
+                    "American Whiskey",
+                    "Canadian Whiskey",
+                    "Scotch",
+                    "Irish Whiskey",
+                    "Japanese Whisky",
+                    "Other",
+                    None,
+                ],
+            },
             "distilled_by": {"type": ["string", "null"]},
             "mash_bill": {"type": ["string", "null"]},
             "proof": {"type": ["number", "null"]},
@@ -546,3 +587,40 @@ def test_refinement_prompt_asks_for_identification_not_transcription() -> None:
     assert "identifying a product, not transcribing a label" in prompt
     assert "Return null unless" in prompt
     assert "usually wrong" not in prompt
+
+
+def test_spirit_type_enum_is_the_form_vocabulary() -> None:
+    """One list, two consumers. The schema constrains the model to what the form can display.
+
+    Before this, `spirit_type` was free text in the schema and the option list was hardcoded in
+    `edit.html`. The model wrote "rye whiskey", the form matched nothing, and saving replaced it
+    with the first option. Constraining the model is what stops that class of value existing.
+    """
+    enum = analysis_schema(photo=True)["properties"]["spirit_type"]["enum"]
+
+    assert enum == [*SPIRIT_TYPES, None]
+    assert analysis_schema(photo=False)["properties"]["spirit_type"]["enum"] == enum
+    assert "Rye Whiskey" in SPIRIT_TYPES
+    assert "Rye" not in SPIRIT_TYPES
+
+
+def test_edit_form_renders_the_shared_vocabulary() -> None:
+    """The template must not carry its own copy of the list."""
+    template = (
+        Path(__file__).resolve().parents[1] / "bourbonbook" / "templates" / "edit.html"
+    ).read_text(encoding="utf-8")
+
+    assert "set type_options = spirit_types" in template
+    assert "'Bourbon','Rye'" not in template
+
+
+def test_previously_stored_free_text_now_matches_the_vocabulary() -> None:
+    """Renaming "Rye" to "Rye Whiskey" makes existing rows match case-insensitively.
+
+    Rows written before the enum hold "rye whiskey" verbatim. The form compares case-insensitively,
+    so those select the real option instead of rendering as a preserved one-off.
+    """
+    lowered = [option.lower() for option in SPIRIT_TYPES]
+
+    assert "rye whiskey" in lowered
+    assert "bourbon whiskey" not in lowered

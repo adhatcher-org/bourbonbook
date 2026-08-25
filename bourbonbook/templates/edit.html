@@ -30,7 +30,7 @@
     browser showed the first option, and saving the form silently wrote "Bourbon" over the stored
     value. Match case-insensitively, and when a stored value matches no option at all, keep it as a
     selected option of its own rather than replacing it. -#}
-{%- set type_options = ['Bourbon','Rye','American Whiskey','Canadian Whiskey','Scotch','Irish Whiskey','Japanese Whisky','Other'] -%}
+{%- set type_options = spirit_types -%}
 {%- set current = (bottle.spirit_type or '')|trim -%}
 {%- set matched = current|lower in type_options|map('lower')|list -%}
 <select name="spirit_type">

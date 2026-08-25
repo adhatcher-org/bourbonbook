@@ -41,6 +41,7 @@ from bourbonbook.admin_config import (
     write_managed_config,
 )
 from bourbonbook.analysis import (
+    SPIRIT_TYPES,
     analyze_bottle,
     analyze_bottle_name,
     search_bottle_prices,
@@ -144,6 +145,8 @@ def money(value: float | None) -> str:
 
 
 templates.env.filters["money"] = money
+# One vocabulary for the form and the analysis schema; see analysis.SPIRIT_TYPES.
+templates.env.globals["spirit_types"] = SPIRIT_TYPES
 
 
 def enforce_catalog_import_request_size(request: Request, maximum_bytes: int) -> None:

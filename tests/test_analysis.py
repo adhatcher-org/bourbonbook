@@ -11,10 +11,13 @@ from bourbonbook.analysis import (
     PHOTO_OUTPUT_FIELDS,
     PhotoAnalysisResult,
     _as_float,
+    analysis_prompt,
     analysis_schema,
     analyze_bottle,
     analyze_bottle_name,
     enrich_from_verified_catalog,
+    implausible_distiller,
+    implausible_mash_bill,
     merge_analysis,
     normalize_analysis,
     reconcile_proof_and_abv,
@@ -472,3 +475,74 @@ def test_analysis_schema_returns_an_isolated_copy_per_call() -> None:
     assert second["properties"] is not third["properties"]
     assert second["properties"]["status"] is not third["properties"]["status"]
     assert second["required"] is not third["required"]
+
+
+def test_brand_echo_producers_are_rejected() -> None:
+    """The observed failure shape: the brand name with a producer word bolted on.
+
+    Measured 2026-08 against qwen3-vl:8b -- "Elijah Craig Distillery" (really Heaven Hill),
+    "E.H. Taylor Distillery" (really Buffalo Trace). Unlike a wrong-but-real producer, this shape
+    is provably untrustworthy without consulting any reference source.
+    """
+    assert implausible_distiller("Elijah Craig Distillery", {"brand": "Elijah Craig"})
+    assert implausible_distiller("E.H. Taylor Distillery", {"brand": "E.H. Taylor"})
+    assert implausible_distiller("new riff distilling", {"brand": "New Riff"})
+
+
+def test_real_producers_are_kept() -> None:
+    """A producer whose name differs from the brand is exactly what the field is for."""
+    assert not implausible_distiller("Heaven Hill Distillery", {"brand": "Elijah Craig"})
+    assert not implausible_distiller("Buffalo Trace Distillery", {"brand": "W.L. Weller"})
+    assert not implausible_distiller(None, {"brand": "Elijah Craig"})
+    assert not implausible_distiller("", {"brand": "Elijah Craig"})
+
+
+def test_wheated_mash_bill_on_a_rye_is_rejected() -> None:
+    """Wheat replaces rye as the flavouring grain, so a wheated rye is a contradiction."""
+    assert implausible_mash_bill("wheated rye whiskey", {"spirit_type": "rye whiskey"})
+    assert implausible_mash_bill("wheated", {"name": "Elijah Craig Barrel Proof Rye"})
+
+
+def test_consistent_mash_bills_are_kept() -> None:
+    assert not implausible_mash_bill("wheated bourbon", {"spirit_type": "Bourbon"})
+    assert not implausible_mash_bill("high-rye bourbon", {"spirit_type": "Bourbon"})
+    assert not implausible_mash_bill(None, {"spirit_type": "rye whiskey"})
+
+
+def test_normalize_analysis_drops_implausible_attributions() -> None:
+    """Provider output only -- catalog enrichment merges afterwards and can still fill them."""
+    normalized = normalize_analysis(
+        {
+            "name": "Elijah Craig Barrel Proof Rye",
+            "brand": "Elijah Craig",
+            "spirit_type": "rye whiskey",
+            "distilled_by": "Elijah Craig Distillery",
+            "mash_bill": "wheated rye whiskey",
+            "proof": 108,
+        }
+    )
+
+    assert normalized["distilled_by"] is None
+    assert normalized["mash_bill"] is None
+    assert normalized["proof"] == 108
+    assert normalized["spirit_type"] == "rye whiskey"
+
+
+def test_refinement_prompt_asks_for_identification_not_transcription() -> None:
+    """The refine pass returned null for distilled_by because it was told to read the label.
+
+    Measured: the same model answered `name_prompt` correctly for a product whose refine-prompt
+    answer was null. The prompt asks what the product is, and asks for a null rather than a
+    substitute when the producer is not known.
+
+    It deliberately does NOT tell the model that a brand name plus "Distillery" is usually wrong.
+    Measured 2026-08-25: that instruction stopped brand echo and pushed both models to name a
+    different real distillery instead -- qwen3.8 answered "Buffalo Trace Distillery" for four
+    consecutive products from four different producers. That trades a failure
+    `implausible_distiller` can detect for one nothing can.
+    """
+    prompt = analysis_prompt({"name": "Elijah Craig Barrel Proof Rye"}, source="label text")
+
+    assert "identifying a product, not transcribing a label" in prompt
+    assert "Return null unless" in prompt
+    assert "usually wrong" not in prompt

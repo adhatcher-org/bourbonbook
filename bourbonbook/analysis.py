@@ -12,6 +12,24 @@ from urllib.parse import urlsplit, urlunsplit
 from bourbonbook.catalog import verified_product, verified_product_from_text
 from bourbonbook.config import Settings
 
+
+@dataclass(frozen=True)
+class GroundedFieldResult:
+    """One independently validated attribution result from recorded search evidence."""
+
+    outcome: str
+    value: str | None = None
+    title: str | None = None
+    url: str | None = None
+    basis: str | None = None
+
+
+@dataclass(frozen=True)
+class GroundedAttributions:
+    distilled_by: GroundedFieldResult | None = None
+    mash_bill: GroundedFieldResult | None = None
+
+
 STANDARD_SIZES_ML = (50, 200, 375, 750, 1000, 1750)
 SIZE_SNAP_TOLERANCE_ML = 15
 PROOF_ABV_TOLERANCE = 1.0

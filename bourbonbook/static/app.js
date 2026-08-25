@@ -33,6 +33,7 @@ if (uploadForm) {
   const STAGE_TEXT = {
     queued: 'Starting…',
     enriching: 'Getting bottle details…',
+    attributing: 'Confirming producer and mash bill…',
     pricing: 'Checking pricing…',
   };
   // analyzing is a single opaque Ollama call with no real sub-progress, and it dominates the

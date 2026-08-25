@@ -22,7 +22,13 @@ from bourbonbook.main import (
     refresh_prices,
 )
 from bourbonbook.migrations import bootstrap_database
-from bourbonbook.models import Bottle, CatalogPrice, User
+from bourbonbook.models import (
+    Bottle,
+    BottleAttributionProvenance,
+    CatalogPrice,
+    ProductAttributionFact,
+    User,
+)
 from bourbonbook.qdrant_prices import PriceMatch
 from bourbonbook.tokens import token_digest
 
@@ -633,6 +639,45 @@ def test_bottles_are_scoped_to_current_user(tmp_path: Path) -> None:
         client.post("/logout", data={"csrf_token": csrf(library)})
         register(client, "someone_else")
         assert "Eagle Rare" not in client.get("/").text
+
+
+def test_grounded_attribution_source_is_owner_detail_only(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client)
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "aaron@example.com"))
+            assert owner
+            bottle = Bottle(
+                owner_id=owner.id, name="Example", brand="Example", distilled_by="Heaven Hill"
+            )
+            fact = ProductAttributionFact(
+                product_key="name=example",
+                field="distilled_by",
+                value="Heaven Hill",
+                outcome="resolved",
+                title="Heaven Hill",
+                url="https://heavenhill.com/example",
+                basis="Producer",
+            )
+            session.add_all([bottle, fact])
+            session.flush()
+            session.add(
+                BottleAttributionProvenance(
+                    bottle_id=bottle.id,
+                    field="distilled_by",
+                    authority="grounded_web",
+                    fact_id=fact.id,
+                )
+            )
+            session.commit()
+            bottle_id = bottle.id
+        detail = client.get(f"/bottles/{bottle_id}")
+        assert "https://heavenhill.com/example" in detail.text
+        library = client.get("/")
+        client.post("/logout", data={"csrf_token": csrf(library)})
+        register(client, "other")
+        assert client.get(f"/bottles/{bottle_id}", follow_redirects=False).status_code == 303
 
 
 def test_rejects_bad_csrf(tmp_path: Path) -> None:

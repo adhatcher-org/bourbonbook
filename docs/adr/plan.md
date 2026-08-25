@@ -1234,6 +1234,16 @@ PR and status update succeed, create a new Codex session for the next Incomplete
 
 ## Current Work
 
+### A16 — Source-grounded producer and mash-bill attributions
+
+**Status:** In progress. Add exact-product, field-level SQLite facts with source provenance for
+`distilled_by` and `mash_bill`; run after catalog enrichment and before pricing, never fetching
+web pages. Automatic application is limited by [ADR 0004](0004-source-grounded-product-attributions.md)
+to blank or provider-recall values and only to evidence whose title and canonical public URL came
+from the same provider-recorded search result. Verify fresh/expired/no-evidence caching, authority
+precedence, migration upgrade/backfill, both provider fakes, owner-only source display, background
+and reanalysis sequencing, and deterministic failure degradation.
+
 A01 and A02 are complete and merged through PRs #11 and #12. Physical iPhone Safari/PWA picker and
 HEIC behavior remain an explicit device acceptance check because desktop automation cannot
 faithfully emulate the native iOS picker.

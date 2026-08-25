@@ -19,10 +19,12 @@ from bourbonbook.migrations import (
 )
 from bourbonbook.models import (
     Bottle,
+    BottleAttributionProvenance,
     CatalogImportBatch,
     CatalogImportProposal,
     CatalogPrice,
     PriceSource,
+    ProductAttributionFact,
     User,
 )
 
@@ -57,10 +59,12 @@ def test_fresh_database_reaches_head_and_bootstrap_is_idempotent(tmp_path: Path)
             "alembic_version",
             "api_usage",
             "bottles",
+            "bottle_attribution_provenance",
             "catalog_import_batches",
             "catalog_import_proposals",
             "catalog_prices",
             "price_sources",
+            "product_attribution_facts",
             "user_tokens",
             "users",
         }
@@ -405,5 +409,63 @@ def test_sqlite_connections_use_wal_and_a_busy_timeout(tmp_path: Path) -> None:
         with database.engine.connect() as connection:
             assert connection.execute(text("PRAGMA journal_mode")).scalar_one() == "wal"
             assert connection.execute(text("PRAGMA busy_timeout")).scalar_one() == 5000
+    finally:
+        database.engine.dispose()
+
+
+def test_product_attribution_migration_backfills_and_foreign_keys(tmp_path: Path) -> None:
+    settings = migration_settings(tmp_path)
+    config = alembic_config(settings.database_url)
+    command.upgrade(config, "0010_bottle_lifecycle_dates")
+    legacy_database = Database(settings)
+    with legacy_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (username, display_name, password_hash, created_at) "
+                "VALUES ('a16-user', 'A16 User', 'hash', CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO bottles (owner_id, name, brand, release, edition, spirit_type, "
+                "distilled_by, mash_bill, size, age_statement, barrel_number, bottle_number, "
+                "warehouse, floor, status, fill_level, quantity, storage_location, rating, "
+                "tasting_notes, notes, analysis_status, processing_stage, created_at, updated_at) "
+                "VALUES (1, 'Legacy', '', '', '', 'Bourbon', 'Legacy Distillery', '', '750ml', "
+                "'', '', '', '', '', 'Unopened', 100, 1, '', 0, '', '', 'manual', 'idle', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    legacy_database.engine.dispose()
+    command.upgrade(config, "head")
+    database = Database(settings)
+    try:
+        with database.session_factory() as session:
+            bottle = session.scalar(select(Bottle))
+            assert bottle is not None
+            provenance = session.scalar(select(BottleAttributionProvenance))
+            assert provenance and provenance.authority == "legacy_unknown"
+            fact = ProductAttributionFact(
+                product_key="name=legacy",
+                field="distilled_by",
+                value="Source",
+                outcome="resolved",
+                title="Source",
+                url="https://example.com",
+                basis="Source",
+            )
+            session.add(fact)
+            session.flush()
+            provenance.fact = fact
+            session.commit()
+            fact_id = fact.id
+            session.delete(fact)
+            session.commit()
+            session.expire(provenance)
+            assert session.get(BottleAttributionProvenance, provenance.id).fact_id is None
+            session.delete(bottle)
+            session.commit()
+            assert session.scalar(select(BottleAttributionProvenance)) is None
+            assert session.get(ProductAttributionFact, fact_id) is None
     finally:
         database.engine.dispose()

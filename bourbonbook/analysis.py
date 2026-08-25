@@ -332,7 +332,7 @@ product knowledge when, and only when, you are certain which product this is.
 Field rules:
 - distilled_by is the company or distillery that actually produces this whiskey. Return null unless
   you specifically know this product's producer. Do not derive one, and do not substitute a
-  distillery that merely seems likely -- an empty field is recoverable, a confident wrong one is not.
+  distillery that merely seems likely: an empty field is recoverable, a wrong one is not.
 - mash_bill is the grain recipe in general terms, and it must agree with the spirit type: a rye
   whiskey is not wheated. Return null unless you know this specific product's recipe. Never invent
   percentages.

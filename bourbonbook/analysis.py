@@ -330,10 +330,9 @@ and the general mash bill are almost never printed on a bottle -- supply them fr
 product knowledge when, and only when, you are certain which product this is.
 
 Field rules:
-- distilled_by is the company or distillery that actually produces this whiskey. Many brands are
-  owned by a parent company and produced at a distillery with a different name, so the brand name
-  followed by the word "Distillery" is usually wrong. If you cannot name the real producer, or you
-  would be inferring it from the brand name, return null.
+- distilled_by is the company or distillery that actually produces this whiskey. Return null unless
+  you specifically know this product's producer. Do not derive one, and do not substitute a
+  distillery that merely seems likely -- an empty field is recoverable, a confident wrong one is not.
 - mash_bill is the grain recipe in general terms, and it must agree with the spirit type: a rye
   whiskey is not wheated. Return null unless you know this specific product's recipe. Never invent
   percentages.

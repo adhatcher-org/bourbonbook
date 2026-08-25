@@ -532,11 +532,17 @@ def test_refinement_prompt_asks_for_identification_not_transcription() -> None:
     """The refine pass returned null for distilled_by because it was told to read the label.
 
     Measured: the same model answered `name_prompt` correctly for a product whose refine-prompt
-    answer was null. The prompt must ask what the product is, and must say that a brand name plus
-    "Distillery" is usually the wrong producer.
+    answer was null. The prompt asks what the product is, and asks for a null rather than a
+    substitute when the producer is not known.
+
+    It deliberately does NOT tell the model that a brand name plus "Distillery" is usually wrong.
+    Measured 2026-08-25: that instruction stopped brand echo and pushed both models to name a
+    different real distillery instead -- qwen3.8 answered "Buffalo Trace Distillery" for four
+    consecutive products from four different producers. That trades a failure
+    `implausible_distiller` can detect for one nothing can.
     """
     prompt = analysis_prompt({"name": "Elijah Craig Barrel Proof Rye"}, source="label text")
 
     assert "identifying a product, not transcribing a label" in prompt
-    assert "Distillery" in prompt
-    assert "null" in prompt
+    assert "Return null unless" in prompt
+    assert "usually wrong" not in prompt

@@ -116,6 +116,7 @@ from bourbonbook.observability import (
 from bourbonbook.photos import save_avatar, save_photo
 from bourbonbook.product_attributions import (
     apply_user_edits,
+    provenance_for,
     resolve_attributions,
     set_provenance,
     source_context,
@@ -484,6 +485,11 @@ def apply_analysis(
         # empty string would otherwise be written over a user-entered column.
         if not hasattr(bottle, key) or value is None or value == "":
             continue
+        # Preserve verified_catalog provenance - don't overwrite fields with better provenance
+        if key in {"distilled_by", "mash_bill"}:
+            current_provenance = provenance_for(bottle, key)
+            if current_provenance and current_provenance.authority == "verified_catalog":
+                continue  # Don't overwrite verified_catalog values
         if key in NUMERIC_ANALYSIS_FIELDS:
             # Vision-model output is untyped free text; never let a non-numeric value
             # (e.g. "107 proof") reach a Float column and blow up the commit.
@@ -796,6 +802,7 @@ async def refresh_prices(
 async def enrich_bottle_by_name(
     bottle: Bottle, settings: Settings, *, allow_provider: bool = True
 ) -> tuple[dict[str, Any], str]:
+    print(f"DEBUG: enrich_bottle_by_name called with bottle.name={bottle.name}, allow_provider={allow_provider}")
     verified = verified_product(bottle.name)
     if verified:
         return verified, "verified"
@@ -2779,9 +2786,13 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/bottles/{bottle_id}/analyze")
     async def refresh_bottle_analysis(request: Request, bottle_id: int) -> Response:
+        with open("/tmp/debug.log", "a") as f:
+            f.write(f"DEBUG: refresh_bottle_analysis called with bottle_id={bottle_id}\n")
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         mode = str(form.get("analysis_mode", "photo"))
+        with open("/tmp/debug.log", "a") as f:
+            f.write(f"DEBUG: mode={mode}\n")
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
@@ -2854,7 +2865,13 @@ def register_routes(app: FastAPI) -> None:
                 bottle, analysis, allow_msrp=analysis_status == "verified"
             )
             for field in {"distilled_by", "mash_bill"} & recall_fields:
-                set_provenance(bottle, field, "provider_recall")
+                current_provenance = provenance_for(bottle, field)
+                if current_provenance and current_provenance.authority == "verified_catalog":
+                    continue  # Don't downgrade verified_catalog provenance
+                authority = (
+                    "verified_catalog" if analysis_status == "verified" else "provider_recall"
+                )
+                set_provenance(bottle, field, authority)
             if mode == "photo" and bottle.name:
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, app.state.settings, allow_provider=False

@@ -587,15 +587,25 @@ async def analyze_bottle(photo: Path, settings: Settings) -> PhotoAnalysisResult
 
 
 async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, Any], str]:
+    print(f"DEBUG: analyze_bottle_name called with name={name}")
     values, matched = enrich_from_verified_catalog({"name": name})
+    print(f"DEBUG: After first enrich_from_verified_catalog: values={values}, matched={matched}")
     if matched:
         return values, "verified"
     analyzed, status = await _request_provider_analysis(name_prompt(name), settings)
+    print(f"DEBUG: Provider analysis: analyzed={analyzed}, status={status}")
     if not analyzed:
         return {}, status
-    values = merge_analysis(values, analyzed)
+    # Only merge provider analysis if it doesn't conflict with verified catalog values
+    # Check if verified catalog already has mash_bill or distilled_by
+    if not any(values.get(field) for field in {"mash_bill", "distilled_by"}):
+        values = merge_analysis(values, analyzed)
+    print(f"DEBUG: After merge: values={values}")
     values, matched = enrich_from_verified_catalog(values)
+    print(f"DEBUG: After second enrich_from_verified_catalog: values={values}, matched={matched}")
     if matched:
+        # If we matched the verified catalog, return only the verified catalog values
+        # and mark as verified to indicate provenance
         return values, "verified"
     if values and settings.analysis_provider == "ollama" and missing_fields(values):
         return await _refine_analysis(values, settings, source="known bottle name")

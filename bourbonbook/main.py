@@ -114,6 +114,13 @@ from bourbonbook.observability import (
     usage_context,
 )
 from bourbonbook.photos import save_avatar, save_photo
+from bourbonbook.product_attributions import (
+    apply_user_edits,
+    provenance_for,
+    resolve_attributions,
+    set_provenance,
+    source_context,
+)
 from bourbonbook.provider_clients import (
     reset_shared_ollama_client,
     reset_shared_openai_client,
@@ -467,7 +474,10 @@ NUMERIC_ANALYSIS_FIELDS = {"proof", "abv", "msrp"}
 ANALYSIS_EXCLUDED_FIELDS = set(LIFECYCLE_DATE_FIELDS)
 
 
-def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool = False) -> None:
+def apply_analysis(
+    bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool = False
+) -> set[str]:
+    changed: set[str] = set()
     for key, value in analysis.items():
         if key in ANALYSIS_EXCLUDED_FIELDS or (key == "msrp" and not allow_msrp):
             continue
@@ -475,14 +485,25 @@ def apply_analysis(bottle: Bottle, analysis: dict[str, Any], *, allow_msrp: bool
         # empty string would otherwise be written over a user-entered column.
         if not hasattr(bottle, key) or value is None or value == "":
             continue
+        # Preserve verified_catalog provenance - don't overwrite fields with better provenance
+        if key in {"distilled_by", "mash_bill"}:
+            current_provenance = provenance_for(bottle, key)
+            if current_provenance and current_provenance.authority == "verified_catalog":
+                continue  # Don't overwrite verified_catalog values
         if key in NUMERIC_ANALYSIS_FIELDS:
             # Vision-model output is untyped free text; never let a non-numeric value
             # (e.g. "107 proof") reach a Float column and blow up the commit.
-            setattr(bottle, key, parse_float(value))
+            normalized = parse_float(value)
+            if getattr(bottle, key) != normalized:
+                setattr(bottle, key, normalized)
+                changed.add(key)
         else:
-            setattr(bottle, key, value)
+            if getattr(bottle, key) != value:
+                setattr(bottle, key, value)
+                changed.add(key)
     bottle.name = bottle.name or bottle.release or bottle.brand or "Untitled bottle"
     bottle.fill_level = parse_int(bottle.fill_level, 100, 0, 100)
+    return changed
 
 
 def apply_photo_bottled_date(bottle: Bottle, photo_bottled_date: date | None) -> None:
@@ -781,6 +802,7 @@ async def refresh_prices(
 async def enrich_bottle_by_name(
     bottle: Bottle, settings: Settings, *, allow_provider: bool = True
 ) -> tuple[dict[str, Any], str]:
+    print(f"DEBUG: enrich_bottle_by_name called with bottle.name={bottle.name}, allow_provider={allow_provider}")
     verified = verified_product(bottle.name)
     if verified:
         return verified, "verified"
@@ -2672,7 +2694,13 @@ def register_routes(app: FastAPI) -> None:
             bottle = owned_bottle(session, user, bottle_id)
             if not bottle:
                 return RedirectResponse("/", 303)
-            return render(request, "detail.html", user=user, bottle=bottle)
+            return render(
+                request,
+                "detail.html",
+                user=user,
+                bottle=bottle,
+                attribution_sources=source_context(bottle),
+            )
 
     @app.get("/bottles/{bottle_id}/edit", response_class=HTMLResponse)
     def bottle_edit(request: Request, bottle_id: int, new: int = 0, analysis: str = "") -> Response:
@@ -2712,9 +2740,13 @@ def register_routes(app: FastAPI) -> None:
                     status_code=422,
                 )
             saved_bottle_id = bottle.id
+            prior_attribution_values = {
+                field: getattr(bottle, field) for field in ("distilled_by", "mash_bill")
+            }
             previous_status = bottle.status
             previous_prices = {"msrp": bottle.msrp}
             update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
+            apply_user_edits(bottle, prior_attribution_values)
             if previous_status != "Empty" and bottle.status == "Empty":
                 empty_action = str(form.get("empty_action", ""))
                 if empty_action == "remove":
@@ -2754,9 +2786,13 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/bottles/{bottle_id}/analyze")
     async def refresh_bottle_analysis(request: Request, bottle_id: int) -> Response:
+        with open("/tmp/debug.log", "a") as f:
+            f.write(f"DEBUG: refresh_bottle_analysis called with bottle_id={bottle_id}\n")
         form = await request.form()
         verify_csrf(request, str(form.get("csrf_token", "")))
         mode = str(form.get("analysis_mode", "photo"))
+        with open("/tmp/debug.log", "a") as f:
+            f.write(f"DEBUG: mode={mode}\n")
         with app.state.database.session_factory() as session:
             user = require_verified_user(request, session)
             bottle = owned_bottle(session, user, bottle_id)
@@ -2775,7 +2811,11 @@ def register_routes(app: FastAPI) -> None:
                     status_code=422,
                 )
             saved_bottle_id = bottle.id
+            prior_attribution_values = {
+                field: getattr(bottle, field) for field in ("distilled_by", "mash_bill")
+            }
             update_bottle_from_form(bottle, form, lifecycle_dates=lifecycle_dates)
+            apply_user_edits(bottle, prior_attribution_values)
             clear_bottled_date = clears_lifecycle_date(form, "date_bottled")
             user_price_applied = await apply_user_purchase_price(
                 session, bottle, app.state.qdrant_price_index
@@ -2821,14 +2861,33 @@ def register_routes(app: FastAPI) -> None:
                     apply_photo_bottled_date(bottle, photo_result.date_bottled)
             else:
                 analysis, analysis_status = {}, "unavailable"
-            apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")
+            recall_fields = apply_analysis(
+                bottle, analysis, allow_msrp=analysis_status == "verified"
+            )
+            for field in {"distilled_by", "mash_bill"} & recall_fields:
+                current_provenance = provenance_for(bottle, field)
+                if current_provenance and current_provenance.authority == "verified_catalog":
+                    continue  # Don't downgrade verified_catalog provenance
+                authority = (
+                    "verified_catalog" if analysis_status == "verified" else "provider_recall"
+                )
+                set_provenance(bottle, field, authority)
             if mode == "photo" and bottle.name:
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, app.state.settings, allow_provider=False
                 )
-                apply_analysis(bottle, enrichment, allow_msrp=enrichment_status == "verified")
+                enriched_fields = apply_analysis(
+                    bottle, enrichment, allow_msrp=enrichment_status == "verified"
+                )
+                for field in {"distilled_by", "mash_bill"} & enriched_fields:
+                    authority = (
+                        "verified_catalog" if enrichment_status == "verified" else "provider_recall"
+                    )
+                    set_provenance(bottle, field, authority)
                 if enrichment:
                     analysis_status = enrichment_status
+            if mode in {"name", "photo"} and bottle.name:
+                await resolve_attributions(session, bottle, app.state.settings)
             if mode in {"name", "photo"} and bottle.name and not user_price_applied:
                 with usage_context(app.state.usage_recorder, user.id):
                     price_status = await refresh_prices(

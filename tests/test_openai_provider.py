@@ -9,6 +9,7 @@ from bourbonbook.openai_provider import (
     PriceAnalysis,
     request_analysis,
     search_prices,
+    search_product_attributions,
 )
 from bourbonbook.provider_clients import reset_shared_openai_client, set_shared_openai_client
 
@@ -98,6 +99,53 @@ def test_missing_openai_key_is_unavailable(tmp_path, monkeypatch) -> None:
 
     assert status == "unavailable"
     assert result == {}
+
+
+def test_grounded_attributions_require_a_source_from_this_search_response(
+    tmp_path, monkeypatch
+) -> None:
+    class FakeResponses:
+        async def parse(self, **kwargs):
+            assert kwargs["text_format"].__name__ == "AttributionAnalysis"
+            return SimpleNamespace(
+                output_parsed=SimpleNamespace(
+                    distilled_by="Heaven Hill",
+                    distilled_by_source_url="https://heavenhill.com/product",
+                    distilled_by_basis="Producer statement",
+                    mash_bill="75% corn",
+                    mash_bill_source_url="https://unrecorded.example/mash",
+                    mash_bill_basis="Unrecorded",
+                ),
+                output=[
+                    SimpleNamespace(
+                        type="web_search_call",
+                        model_dump=lambda: {
+                            "action": {
+                                "sources": [
+                                    {
+                                        "title": "Heaven Hill",
+                                        "url": "https://heavenhill.com/product",
+                                    }
+                                ]
+                            }
+                        },
+                    )
+                ],
+            )
+
+    class FakeClient:
+        responses = FakeResponses()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr("bourbonbook.provider_clients.AsyncOpenAI", lambda **kwargs: FakeClient())
+    result = asyncio.run(search_product_attributions("name=example", settings_for(tmp_path)))
+    assert result.distilled_by and result.distilled_by.outcome == "resolved"
+    assert result.mash_bill and result.mash_bill.outcome == "no_evidence"
 
 
 def test_shared_openai_client_is_reused(tmp_path, monkeypatch) -> None:

@@ -125,7 +125,12 @@ VERIFIED_PRODUCTS: dict[str, dict[str, Any]] = {
         },
     },
     "eagle-rare-10": {
-        "aliases": {"eagle rare", "eagle rare 10", "eagle rare 10 year", "eagle rare kentucky straight bourbon"},
+        "aliases": {
+            "eagle rare",
+            "eagle rare 10",
+            "eagle rare 10 year",
+            "eagle rare kentucky straight bourbon",
+        },
         "values": {
             "name": "Eagle Rare 10 Year",
             "brand": "Eagle Rare",

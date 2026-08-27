@@ -29,6 +29,7 @@ from bourbonbook.models import (
     ProductAttributionFact,
     User,
 )
+from bourbonbook.product_attributions import set_provenance
 from bourbonbook.qdrant_prices import PriceMatch
 from bourbonbook.tokens import token_digest
 
@@ -1520,14 +1521,22 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Regression test for A16: name mode preserves verified_catalog provenance."""
+    catalog_mash_bill = "Corn, rye, and malted barley (Buffalo Trace Mash Bill #1, low rye)"
 
     # Create a verified catalog bottle
     client, app = make_client(tmp_path)
+
+    async def fake_photo_analysis(*args, **kwargs) -> PhotoAnalysisResult:
+        return PhotoAnalysisResult({}, "unavailable", None)
+
+    monkeypatch.setattr("bourbonbook.bottle_processing.analyze_bottle", fake_photo_analysis)
     with client:
         register(client)
 
         # Create a bottle that matches the verified catalog
         new_page = client.get("/bottles/new")
+        image = BytesIO()
+        Image.new("RGB", (120, 200), "#7a3f1c").save(image, "JPEG")
         response = client.post(
             "/bottles",
             data={
@@ -1542,13 +1551,13 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance(
                 "quantity": "1",
                 "purchase_price": "45.00",
             },
+            files={"photo": ("test.jpg", image.getvalue(), "image/jpeg")},
             follow_redirects=False,
         )
         assert response.status_code == 202
         bottle_id = response.json()["bottle_id"]
 
         # Set initial verified catalog values
-        detail_page = client.get(f"/bottles/{bottle_id}")
         edit_page = client.get(f"/bottles/{bottle_id}/edit")
 
         # Manually set the fields to simulate verified catalog values
@@ -1573,14 +1582,29 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance(
         )
         assert edit_response.status_code == 303
 
-        # Verify initial state
-        detail_page = client.get(edit_response.headers["location"])
+        with app.state.database.session_factory() as session:
+            bottle = session.get(Bottle, bottle_id)
+            assert bottle is not None
+            bottle.distilled_by = "Buffalo Trace Distillery"
+            bottle.mash_bill = catalog_mash_bill
+            set_provenance(bottle, "distilled_by", "verified_catalog")
+            set_provenance(bottle, "mash_bill", "verified_catalog")
+            session.commit()
+
+        async def fake_name_enrichment(*args, **kwargs) -> tuple[dict[str, str], str]:
+            return {
+                "distilled_by": "Incorrect Distillery",
+                "mash_bill": "100% rye",
+            }, "complete"
+
+        monkeypatch.setattr("bourbonbook.main.enrich_bottle_by_name", fake_name_enrichment)
 
         # Now re-analyze with name mode - this should preserve verified_catalog provenance
+        analysis_page = client.get(f"/bottles/{bottle_id}/edit")
         refresh_response = client.post(
             f"/bottles/{bottle_id}/analyze",
             data={
-                "csrf_token": csrf(detail_page),
+                "csrf_token": csrf(analysis_page),
                 "analysis_mode": "name",
                 "name": "Eagle Rare Kentucky Straight Bourbon",
                 "brand": "Eagle Rare",
@@ -1590,6 +1614,8 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance(
                 "fill_level": "100",
                 "quantity": "1",
                 "purchase_price": "45.00",
+                "distilled_by": "Buffalo Trace Distillery",
+                "mash_bill": catalog_mash_bill,
             },
             follow_redirects=False,
         )
@@ -1598,41 +1624,43 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance(
         # Check the final state
         final_page = client.get(refresh_response.headers["location"])
         assert "Buffalo Trace Distillery" in final_page.text
-        assert "Corn, rye, and malted barley (Buffalo Trace Mash Bill #1, low rye)" in final_page.text  # The verified catalog value for Eagle Rare mash bill
+        assert catalog_mash_bill in final_page.text
 
         # Verify the provenance is correct (verified_catalog, not provider_recall)
-        with app.database.session_factory() as session:
-            from bourbonbook.models import Bottle, BottleAttributionProvenance
-
+        with app.state.database.session_factory() as session:
             bottle = session.get(Bottle, bottle_id)
             assert bottle is not None
             assert bottle.distilled_by == "Buffalo Trace Distillery"
-            assert bottle.mash_bill == "Corn, rye, and malted barley (Buffalo Trace Mash Bill #1, low rye)"  # The verified catalog value for Eagle Rare mash bill
+            assert bottle.mash_bill == catalog_mash_bill
 
-            # Check provenance fields
-            assert bottle.distilled_by_provenance == "verified_catalog"
-            assert bottle.mash_bill_provenance == "verified_catalog"
+            provenance = {
+                item.field: item.authority
+                for item in session.query(BottleAttributionProvenance).filter(
+                    BottleAttributionProvenance.bottle_id == bottle_id
+                )
+            }
+            assert provenance == {
+                "distilled_by": "verified_catalog",
+                "mash_bill": "verified_catalog",
+            }
 
-            # Check that no web-sourced overwrite occurred
-            from bourbonbook.models import ProductAttributionFact
-
-            facts = (
-                session.query(ProductAttributionFact)
-                .filter(ProductAttributionFact.bottle_id == bottle_id)
-                .all()
-            )
-            # Should have no web-sourced facts since this is a verified catalog match
-            web_sourced = [f for f in facts if "web" in f.url.lower() if f.url]
-            assert len(web_sourced) == 0
+            facts = session.query(ProductAttributionFact).all()
+            assert facts == []
 
 
 def test_name_mode_analysis_preserves_verified_catalog_provenance_with_photo(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Regression test for A16: name mode preserves verified_catalog provenance."""
-    
+    catalog_mash_bill = "Corn, rye, and malted barley (Buffalo Trace Mash Bill #1, low rye)"
+
     # Create a bottle via photo analysis first
     client, app = make_client(tmp_path)
+
+    async def fake_photo_analysis(*args, **kwargs) -> PhotoAnalysisResult:
+        return PhotoAnalysisResult({}, "unavailable", None)
+
+    monkeypatch.setattr("bourbonbook.bottle_processing.analyze_bottle", fake_photo_analysis)
     with client:
         register(client)
         new_page = client.get("/bottles/new")
@@ -1650,11 +1678,7 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance_with_photo(
         )
         assert response.status_code == 202
         bottle_id = response.json()["bottle_id"]
-        
-        # Wait for processing to complete
-        import time
-        time.sleep(0.5)
-        
+
         # Set initial verified catalog values via edit
         edit_page = client.get(f"/bottles/{bottle_id}/edit")
         edit_response = client.post(
@@ -1677,10 +1701,25 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance_with_photo(
             follow_redirects=False,
         )
         assert edit_response.status_code == 303
-        
-        # Now re-analyze with name mode - this should preserve verified_catalog provenance
-        # Get the edit page to extract CSRF token (analyze endpoint requires CSRF)
-        detail_page = client.get(edit_response.headers["location"])
+
+        with app.state.database.session_factory() as session:
+            bottle = session.get(Bottle, bottle_id)
+            assert bottle is not None
+            bottle.distilled_by = "Buffalo Trace Distillery"
+            bottle.mash_bill = catalog_mash_bill
+            set_provenance(bottle, "distilled_by", "verified_catalog")
+            set_provenance(bottle, "mash_bill", "verified_catalog")
+            session.commit()
+
+        async def fake_name_enrichment(*args, **kwargs) -> tuple[dict[str, str], str]:
+            return {
+                "distilled_by": "Incorrect Distillery",
+                "mash_bill": "100% rye",
+            }, "complete"
+
+        monkeypatch.setattr("bourbonbook.main.enrich_bottle_by_name", fake_name_enrichment)
+
+        # Now re-analyze with name mode - this should preserve verified_catalog provenance.
         edit_page_for_analysis = client.get(f"/bottles/{bottle_id}/edit")
         refresh_response = client.post(
             f"/bottles/{bottle_id}/analyze",
@@ -1695,50 +1734,39 @@ def test_name_mode_analysis_preserves_verified_catalog_provenance_with_photo(
                 "fill_level": "100",
                 "quantity": "1",
                 "purchase_price": "45.00",
+                "distilled_by": "Buffalo Trace Distillery",
+                "mash_bill": catalog_mash_bill,
             },
             follow_redirects=False,
         )
         assert refresh_response.status_code == 303
-        
+
         # Check the final state - verify database values
-        with open("/tmp/test_debug.log", "w") as f:
-            f.write("DEBUG TEST: About to check database values\n")
         with app.state.database.session_factory() as session:
-            from bourbonbook.models import Bottle, BottleAttributionProvenance
-            
             bottle = session.get(Bottle, bottle_id)
             assert bottle is not None
             assert bottle.distilled_by == "Buffalo Trace Distillery"
-            assert bottle.mash_bill == "Corn, rye, and malted barley (Buffalo Trace Mash Bill #1, low rye)"  # The verified catalog value for Eagle Rare mash bill
-            
+            assert bottle.mash_bill == catalog_mash_bill
+
             # Check provenance records
-            provenance_records = session.query(BottleAttributionProvenance).filter(
-                BottleAttributionProvenance.bottle_id == bottle_id
-            ).all()
-            
+            provenance_records = (
+                session.query(BottleAttributionProvenance)
+                .filter(BottleAttributionProvenance.bottle_id == bottle_id)
+                .all()
+            )
+
             # Should have provenance records for distilled_by and mash_bill
             distilled_by_provenance = next(
-                (p for p in provenance_records if p.field == "distilled_by"),
-                None
+                (p for p in provenance_records if p.field == "distilled_by"), None
             )
             mash_bill_provenance = next(
-                (p for p in provenance_records if p.field == "mash_bill"),
-                None
+                (p for p in provenance_records if p.field == "mash_bill"), None
             )
-            
+
             assert distilled_by_provenance is not None
             assert distilled_by_provenance.authority == "verified_catalog"
             assert mash_bill_provenance is not None
             assert mash_bill_provenance.authority == "verified_catalog"
-            
-            # Check that no web-sourced overwrite occurred
-            from bourbonbook.models import ProductAttributionFact
-            
-            facts = (
-                session.query(ProductAttributionFact)
-                .filter(ProductAttributionFact.bottle_id == bottle_id)
-                .all()
-            )
-            # Should have no web-sourced facts since this is a verified catalog match
-            web_sourced = [f for f in facts if f.url and "web" in f.url.lower()]
-            assert len(web_sourced) == 0
+
+            facts = session.query(ProductAttributionFact).all()
+            assert facts == []

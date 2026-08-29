@@ -1,3 +1,5 @@
+HOST_DATA_DIR="${HOST_DATA_DIR:-$HOME/Development/bourbonbook/data}"
+
 #stop docker container
 docker stop bourbonbook
 
@@ -11,6 +13,8 @@ docker run -d \
   --network bridge \
   -p 8000:8000 \
   --env DATA_DIR=/data \
-  --volume "/Users/aaron/Documents/Development/apps/bourbonbook/data:/data" \
-  --env-file "/Users/aaron/Documents/Development/apps/bourbonbook/data/.env" \
+  --volume "$HOST_DATA_DIR:/data" \
+  --env-file "$HOST_DATA_DIR/.env" \
   bourbonbook:local-v1
+
+  docker logs bourbonbook -f | grep -vE "healthz|status"

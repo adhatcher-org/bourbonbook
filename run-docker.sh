@@ -16,5 +16,3 @@ docker run -d \
   --volume "$HOST_DATA_DIR:/data" \
   --env-file "$HOST_DATA_DIR/.env" \
   bourbonbook:local-v1
-
-  docker logs bourbonbook -f | grep -vE "healthz|status"

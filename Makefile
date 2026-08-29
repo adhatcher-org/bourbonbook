@@ -7,13 +7,14 @@ IMAGE ?= bourbonbook
 TAG ?= local-v1
 HOST ?= 127.0.0.1
 PORT ?= 8000
+DATA_DIR ?= $(HOME)/Development/bourbonbook/data
 BENCHMARK_ROOT ?= data/benchmarks
 BENCHMARK_FIXTURE ?= $(BENCHMARK_ROOT)/fixtures/collection-v1
 BENCHMARK_BASELINE ?= $(BENCHMARK_ROOT)/reports/current-baseline.json
 BENCHMARK_CANDIDATE ?= $(BENCHMARK_ROOT)/reports/candidate.json
-PRICE_CATALOG ?= data/catalog-prices.jsonl
+PRICE_CATALOG ?= $(DATA_DIR)/catalog-prices.jsonl
 CATALOG_SCREENSHOTS ?= AmericanWhiskey1.png AmericanWhiskey2.png
-CATALOG_SCREENSHOT_OUTPUT ?= data/ohlq-screenshot-prices.jsonl
+CATALOG_SCREENSHOT_OUTPUT ?= $(DATA_DIR)/ohlq-screenshot-prices.jsonl
 
 .PHONY: help install build build-local check pre-ci ci test coverage run_local update lint format \
 	pr-review pr-check security dependency-check benchmark-export benchmark-run benchmark-compare \
@@ -80,18 +81,18 @@ benchmark-run: ## Run the local benchmark fixture against the active provider.
 
 benchmark-compare: ## Compare the local benchmark baseline and candidate reports.
 	@echo "Comparing $(BENCHMARK_BASELINE) against $(BENCHMARK_CANDIDATE)"
-	$(UV) run --env-file data/.env python -m bourbonbook.benchmark_cli compare \
+	$(UV) run --env-file $(DATA_DIR)/.env python -m bourbonbook.benchmark_cli compare \
 		--baseline $(BENCHMARK_BASELINE) \
 		--candidate $(BENCHMARK_CANDIDATE)
 
 price-catalog-ingest: ## Import validated local price records from PRICE_CATALOG JSON Lines.
-	$(UV) run --env-file data/.env python -m bourbonbook.catalog_cli ingest-jsonl $(PRICE_CATALOG)
+	$(UV) run --env-file $(DATA_DIR)/.env python -m bourbonbook.catalog_cli ingest-jsonl $(PRICE_CATALOG)
 
 price-catalog-reindex: ## Rebuild the configured Qdrant price index from the SQLite catalog.
-	$(UV) run --env-file data/.env python -m bourbonbook.catalog_cli reindex
+	$(UV) run --env-file $(DATA_DIR)/.env python -m bourbonbook.catalog_cli reindex
 
 price-catalog-extract-screenshots: ## Extract local screenshot records through the configured Ollama vision model.
-	$(UV) run --env-file data/.env python -m scripts.extract_catalog_screenshots $(CATALOG_SCREENSHOTS) \
+	$(UV) run --env-file $(DATA_DIR)/.env python -m scripts.extract_catalog_screenshots $(CATALOG_SCREENSHOTS) \
 		--output $(CATALOG_SCREENSHOT_OUTPUT) --ingest
 
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.
@@ -109,7 +110,7 @@ pr-review: check build ## Run every required check before opening or updating a 
 	@echo "PR review checks passed; this branch is ready to push."
 
 run_local: ## Run Uvicorn locally with reload and proxy trust disabled.
-	SECURE_COOKIES=$${SECURE_COOKIES:-false} $(UV) run --env-file data/.env uvicorn bourbonbook.main:app \
+	SECURE_COOKIES=$${SECURE_COOKIES:-false} $(UV) run --env-file $(DATA_DIR)/.env uvicorn bourbonbook.main:app \
 		--reload --host $(HOST) --port $(PORT) --no-proxy-headers
 
 update: ## Upgrade dependencies intentionally, audit them, and run pre-CI.

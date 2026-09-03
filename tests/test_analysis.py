@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+
+import pytest
 
 from bourbonbook.analysis import (
+    ANALYSIS_FIELD_SPECS,
+    ANALYSIS_STATUS_VALUES,
+    OUTPUT_FIELDS,
+    PHOTO_OUTPUT_FIELDS,
+    SPIRIT_TYPES,
     PhotoAnalysisResult,
     _as_float,
+    analysis_prompt,
+    analysis_schema,
     analyze_bottle,
     analyze_bottle_name,
     enrich_from_verified_catalog,
+    implausible_distiller,
+    implausible_mash_bill,
     merge_analysis,
     normalize_analysis,
     reconcile_proof_and_abv,
@@ -306,3 +318,357 @@ def test_normalize_analysis_leaves_a_non_standard_size_untouched() -> None:
     values = normalize_analysis({"size": "620ml"})
 
     assert values["size"] == "620ml"
+
+
+# --- the analysis JSON Schema (A15) -------------------------------------------------
+
+PHOTO_SCHEMA_PROPERTY_ORDER = [
+    "name",
+    "brand",
+    "release",
+    "edition",
+    "spirit_type",
+    "distilled_by",
+    "mash_bill",
+    "proof",
+    "abv",
+    "size",
+    "age_statement",
+    "barrel_number",
+    "bottle_number",
+    "warehouse",
+    "floor",
+    "status",
+    "fill_level",
+    "msrp",
+    "date_bottled",
+    "ocr_text",
+]
+NAME_SCHEMA_PROPERTY_ORDER = [
+    name for name in PHOTO_SCHEMA_PROPERTY_ORDER if name != "date_bottled"
+]
+TEXTUAL_SCHEMA_FIELDS = (
+    "name",
+    "brand",
+    "release",
+    "edition",
+    "distilled_by",
+    "mash_bill",
+    "size",
+    "age_statement",
+    "barrel_number",
+    "bottle_number",
+    "warehouse",
+    "floor",
+    "date_bottled",
+)
+
+
+def test_analysis_schema_membership_matches_the_output_field_tuples() -> None:
+    photo_schema = analysis_schema(photo=True)
+    name_schema = analysis_schema(photo=False)
+
+    assert set(photo_schema["properties"]) == set(PHOTO_OUTPUT_FIELDS)
+    assert set(name_schema["properties"]) == set(OUTPUT_FIELDS)
+    assert photo_schema["required"] == list(photo_schema["properties"])
+    assert name_schema["required"] == list(name_schema["properties"])
+    assert "date_bottled" not in name_schema["properties"]
+    # ocr_text is emitted LAST. A degenerate repetition loop inside the free-text transcription
+    # truncates the object; last position means the other fields are already emitted when it
+    # starts. Measured 2026-08-23: ocr_text first produced 0/10 parseable responses, last 8/9.
+    assert list(photo_schema["properties"])[-1] == "ocr_text"
+    assert list(name_schema["properties"])[-1] == "ocr_text"
+    assert list(photo_schema["properties"])[-2] == "date_bottled"
+
+
+def test_analysis_schema_property_order_is_the_pinned_order() -> None:
+    """Order is a design decision, so it is pinned as data rather than recomputed."""
+    assert list(analysis_schema(photo=True)["properties"]) == PHOTO_SCHEMA_PROPERTY_ORDER
+    assert list(analysis_schema(photo=False)["properties"]) == NAME_SCHEMA_PROPERTY_ORDER
+
+
+def test_analysis_schema_types_are_nullable_and_msrp_is_null_only() -> None:
+    schema = analysis_schema(photo=True)
+    properties = schema["properties"]
+
+    assert properties["proof"] == {"type": ["number", "null"]}
+    assert properties["abv"] == {"type": ["number", "null"]}
+    assert properties["fill_level"] == {"type": ["integer", "null"]}
+    for field in TEXTUAL_SCHEMA_FIELDS:
+        assert properties[field] == {"type": ["string", "null"]}, field
+    assert properties["spirit_type"] == {
+        "type": ["string", "null"],
+        "enum": [
+            "Bourbon",
+            "Rye Whiskey",
+            "American Whiskey",
+            "Canadian Whiskey",
+            "Scotch",
+            "Irish Whiskey",
+            "Japanese Whisky",
+            "Other",
+            None,
+        ],
+    }
+    assert properties["msrp"] == {"type": "null"}
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert analysis_schema(photo=False)["additionalProperties"] is False
+
+
+def test_analysis_schema_ocr_text_is_nullable_on_photo_and_null_only_on_name() -> None:
+    assert analysis_schema(photo=True)["properties"]["ocr_text"] == {"type": ["string", "null"]}
+    assert analysis_schema(photo=False)["properties"]["ocr_text"] == {"type": "null"}
+
+
+def test_analysis_schema_status_enum_matches_the_normalizer_vocabulary() -> None:
+    enum = analysis_schema(photo=True)["properties"]["status"]["enum"]
+
+    assert enum == ["Unopened", "Opened", "Empty", None]
+    assigned = {
+        normalize_analysis({"fill_level": 100})["status"],
+        normalize_analysis({"fill_level": 50})["status"],
+        normalize_analysis({"fill_level": 0})["status"],
+    }
+    assert set(enum) - {None} == set(ANALYSIS_STATUS_VALUES) == assigned
+
+
+def test_analysis_schema_matches_the_golden_snapshot() -> None:
+    """The one test that makes any schema change visible in review."""
+    expected_photo = {
+        "type": "object",
+        "properties": {
+            "name": {"type": ["string", "null"]},
+            "brand": {"type": ["string", "null"]},
+            "release": {"type": ["string", "null"]},
+            "edition": {"type": ["string", "null"]},
+            "spirit_type": {
+                "type": ["string", "null"],
+                "enum": [
+                    "Bourbon",
+                    "Rye Whiskey",
+                    "American Whiskey",
+                    "Canadian Whiskey",
+                    "Scotch",
+                    "Irish Whiskey",
+                    "Japanese Whisky",
+                    "Other",
+                    None,
+                ],
+            },
+            "distilled_by": {"type": ["string", "null"]},
+            "mash_bill": {"type": ["string", "null"]},
+            "proof": {"type": ["number", "null"]},
+            "abv": {"type": ["number", "null"]},
+            "size": {"type": ["string", "null"]},
+            "age_statement": {"type": ["string", "null"]},
+            "barrel_number": {"type": ["string", "null"]},
+            "bottle_number": {"type": ["string", "null"]},
+            "warehouse": {"type": ["string", "null"]},
+            "floor": {"type": ["string", "null"]},
+            "status": {
+                "type": ["string", "null"],
+                "enum": ["Unopened", "Opened", "Empty", None],
+            },
+            "fill_level": {"type": ["integer", "null"]},
+            "msrp": {"type": "null"},
+            "date_bottled": {"type": ["string", "null"]},
+            "ocr_text": {"type": ["string", "null"]},
+        },
+        "required": PHOTO_SCHEMA_PROPERTY_ORDER,
+        "additionalProperties": False,
+    }
+    expected_name = {
+        "type": "object",
+        "properties": {
+            "name": {"type": ["string", "null"]},
+            "brand": {"type": ["string", "null"]},
+            "release": {"type": ["string", "null"]},
+            "edition": {"type": ["string", "null"]},
+            "spirit_type": {
+                "type": ["string", "null"],
+                "enum": [
+                    "Bourbon",
+                    "Rye Whiskey",
+                    "American Whiskey",
+                    "Canadian Whiskey",
+                    "Scotch",
+                    "Irish Whiskey",
+                    "Japanese Whisky",
+                    "Other",
+                    None,
+                ],
+            },
+            "distilled_by": {"type": ["string", "null"]},
+            "mash_bill": {"type": ["string", "null"]},
+            "proof": {"type": ["number", "null"]},
+            "abv": {"type": ["number", "null"]},
+            "size": {"type": ["string", "null"]},
+            "age_statement": {"type": ["string", "null"]},
+            "barrel_number": {"type": ["string", "null"]},
+            "bottle_number": {"type": ["string", "null"]},
+            "warehouse": {"type": ["string", "null"]},
+            "floor": {"type": ["string", "null"]},
+            "status": {
+                "type": ["string", "null"],
+                "enum": ["Unopened", "Opened", "Empty", None],
+            },
+            "fill_level": {"type": ["integer", "null"]},
+            "msrp": {"type": "null"},
+            "ocr_text": {"type": "null"},
+        },
+        "required": NAME_SCHEMA_PROPERTY_ORDER,
+        "additionalProperties": False,
+    }
+
+    assert analysis_schema(photo=True) == expected_photo
+    assert analysis_schema(photo=False) == expected_name
+    assert list(analysis_schema(photo=True)["properties"]) == list(expected_photo["properties"])
+    assert list(analysis_schema(photo=False)["properties"]) == list(expected_name["properties"])
+
+
+def test_analysis_schema_fails_fast_on_field_set_drift(monkeypatch) -> None:
+    """Called directly: `ollama.py` binds the tuple at import, so a patch cannot reach it.
+
+    The patches use string targets so this module needs only the `from ... import` form.
+    `analysis_schema` resolves both globals from its own module on every call, so patching the
+    module attribute reaches it regardless of how the function itself was imported here.
+    """
+    specs = dict(ANALYSIS_FIELD_SPECS)
+    specs["orphan_field"] = {"type": ["string", "null"]}
+    monkeypatch.setattr("bourbonbook.analysis.ANALYSIS_FIELD_SPECS", specs)
+    with pytest.raises(ValueError, match="orphan_field"):
+        analysis_schema(photo=True)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(
+        "bourbonbook.analysis.PHOTO_OUTPUT_FIELDS",
+        PHOTO_OUTPUT_FIELDS + ("unspecified_field",),
+    )
+    with pytest.raises(ValueError, match="unspecified_field"):
+        analysis_schema(photo=True)
+
+
+def test_analysis_schema_returns_an_isolated_copy_per_call() -> None:
+    first = analysis_schema(photo=True)
+    first["properties"]["name"]["type"] = "mutated"
+    first["properties"]["injected"] = {"type": "null"}
+    first["required"].append("injected")
+
+    second = analysis_schema(photo=True)
+
+    assert second["properties"]["name"] == {"type": ["string", "null"]}
+    assert "injected" not in second["properties"]
+    assert "injected" not in second["required"]
+    third = analysis_schema(photo=True)
+    assert second["properties"] is not third["properties"]
+    assert second["properties"]["status"] is not third["properties"]["status"]
+    assert second["required"] is not third["required"]
+
+
+def test_brand_echo_producers_are_rejected() -> None:
+    """The observed failure shape: the brand name with a producer word bolted on.
+
+    Measured 2026-08 against qwen3-vl:8b -- "Elijah Craig Distillery" (really Heaven Hill),
+    "E.H. Taylor Distillery" (really Buffalo Trace). Unlike a wrong-but-real producer, this shape
+    is provably untrustworthy without consulting any reference source.
+    """
+    assert implausible_distiller("Elijah Craig Distillery", {"brand": "Elijah Craig"})
+    assert implausible_distiller("E.H. Taylor Distillery", {"brand": "E.H. Taylor"})
+    assert implausible_distiller("new riff distilling", {"brand": "New Riff"})
+
+
+def test_real_producers_are_kept() -> None:
+    """A producer whose name differs from the brand is exactly what the field is for."""
+    assert not implausible_distiller("Heaven Hill Distillery", {"brand": "Elijah Craig"})
+    assert not implausible_distiller("Buffalo Trace Distillery", {"brand": "W.L. Weller"})
+    assert not implausible_distiller(None, {"brand": "Elijah Craig"})
+    assert not implausible_distiller("", {"brand": "Elijah Craig"})
+
+
+def test_wheated_mash_bill_on_a_rye_is_rejected() -> None:
+    """Wheat replaces rye as the flavouring grain, so a wheated rye is a contradiction."""
+    assert implausible_mash_bill("wheated rye whiskey", {"spirit_type": "rye whiskey"})
+    assert implausible_mash_bill("wheated", {"name": "Elijah Craig Barrel Proof Rye"})
+
+
+def test_consistent_mash_bills_are_kept() -> None:
+    assert not implausible_mash_bill("wheated bourbon", {"spirit_type": "Bourbon"})
+    assert not implausible_mash_bill("high-rye bourbon", {"spirit_type": "Bourbon"})
+    assert not implausible_mash_bill(None, {"spirit_type": "rye whiskey"})
+
+
+def test_normalize_analysis_drops_implausible_attributions() -> None:
+    """Provider output only -- catalog enrichment merges afterwards and can still fill them."""
+    normalized = normalize_analysis(
+        {
+            "name": "Elijah Craig Barrel Proof Rye",
+            "brand": "Elijah Craig",
+            "spirit_type": "rye whiskey",
+            "distilled_by": "Elijah Craig Distillery",
+            "mash_bill": "wheated rye whiskey",
+            "proof": 108,
+        }
+    )
+
+    assert normalized["distilled_by"] is None
+    assert normalized["mash_bill"] is None
+    assert normalized["proof"] == 108
+    assert normalized["spirit_type"] == "rye whiskey"
+
+
+def test_refinement_prompt_asks_for_identification_not_transcription() -> None:
+    """The refine pass returned null for distilled_by because it was told to read the label.
+
+    Measured: the same model answered `name_prompt` correctly for a product whose refine-prompt
+    answer was null. The prompt asks what the product is, and asks for a null rather than a
+    substitute when the producer is not known.
+
+    It deliberately does NOT tell the model that a brand name plus "Distillery" is usually wrong.
+    Measured 2026-08-25: that instruction stopped brand echo and pushed both models to name a
+    different real distillery instead -- qwen3.8 answered "Buffalo Trace Distillery" for four
+    consecutive products from four different producers. That trades a failure
+    `implausible_distiller` can detect for one nothing can.
+    """
+    prompt = analysis_prompt({"name": "Elijah Craig Barrel Proof Rye"}, source="label text")
+
+    assert "identifying a product, not transcribing a label" in prompt
+    assert "Return null unless" in prompt
+    assert "usually wrong" not in prompt
+
+
+def test_spirit_type_enum_is_the_form_vocabulary() -> None:
+    """One list, two consumers. The schema constrains the model to what the form can display.
+
+    Before this, `spirit_type` was free text in the schema and the option list was hardcoded in
+    `edit.html`. The model wrote "rye whiskey", the form matched nothing, and saving replaced it
+    with the first option. Constraining the model is what stops that class of value existing.
+    """
+    enum = analysis_schema(photo=True)["properties"]["spirit_type"]["enum"]
+
+    assert enum == [*SPIRIT_TYPES, None]
+    assert analysis_schema(photo=False)["properties"]["spirit_type"]["enum"] == enum
+    assert "Rye Whiskey" in SPIRIT_TYPES
+    assert "Rye" not in SPIRIT_TYPES
+
+
+def test_edit_form_renders_the_shared_vocabulary() -> None:
+    """The template must not carry its own copy of the list."""
+    template = (
+        Path(__file__).resolve().parents[1] / "bourbonbook" / "templates" / "edit.html"
+    ).read_text(encoding="utf-8")
+
+    assert "set type_options = spirit_types" in template
+    assert "'Bourbon','Rye'" not in template
+
+
+def test_previously_stored_free_text_now_matches_the_vocabulary() -> None:
+    """Renaming "Rye" to "Rye Whiskey" makes existing rows match case-insensitively.
+
+    Rows written before the enum hold "rye whiskey" verbatim. The form compares case-insensitively,
+    so those select the real option instead of rendering as a preserved one-off.
+    """
+    lowered = [option.lower() for option in SPIRIT_TYPES]
+
+    assert "rye whiskey" in lowered
+    assert "bourbon whiskey" not in lowered

@@ -14,8 +14,11 @@ from bourbonbook.analysis import (
     OUTPUT_FIELDS,
     PHOTO_OUTPUT_FIELDS,
     PHOTO_PROMPT,
+    SchemaConformanceError,
+    analysis_schema,
     name_prompt,
     normalize_analysis,
+    validate_against_schema,
 )
 from bourbonbook.config import Settings
 from bourbonbook.logging_config import log_event
@@ -116,15 +119,21 @@ async def request_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:
     model = analysis_model(settings, photo)
-    output_fields = PHOTO_OUTPUT_FIELDS if photo else OUTPUT_FIELDS
+    has_photo = photo is not None
+    output_fields = PHOTO_OUTPUT_FIELDS if has_photo else OUTPUT_FIELDS
     field_list = ", ".join(output_fields)
+    structured = settings.ollama_structured_output
+    schema = analysis_schema(photo=has_photo) if structured else None
     payload: dict[str, Any] = {
         "model": model,
         "prompt": f"{prompt}\nReturn ONLY one JSON object with these keys: {field_list}.",
         "stream": False,
         "think": False,
-        "format": "json",
-        "options": {"temperature": 0.1, "num_ctx": analysis_context_window(settings, photo)},
+        "format": schema if structured else "json",
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": analysis_context_window(settings, photo),
+        },
     }
     if photo:
         payload["images"] = [base64.b64encode(photo.read_bytes()).decode("ascii")]
@@ -132,6 +141,7 @@ async def request_analysis(
     operation = "photo_analysis" if photo else "name_analysis"
     start = time.perf_counter()
     metadata = UsageMetadata()
+    incomplete_generation = False
     log_event(
         logger,
         logging.INFO,
@@ -150,9 +160,25 @@ async def request_analysis(
         fallback_ms = round((time.perf_counter() - start) * 1000)
         metadata = ollama_usage_metadata(body)
         duration_ms = ollama_duration_ms(body, fallback_ms)
+        # Which channel carries the output is a property of the model, not of the schema.
+        # Measured on Ollama 0.32.13 (2026-08-23): thinking-capable models (qwen3-vl:8b,
+        # qwen3.8:27b, qwen3.6:27b) emit a grammar-constrained object into `thinking` and leave
+        # `response` empty, while a non-thinking model (qwen2.5-coder:7b) does the opposite. So
+        # the fallback is load-bearing for model portability and is kept in both states; the
+        # guarantee comes from validating the result below, not from trusting a channel.
         raw_output = body.get("response") or body.get("thinking")
+        if structured and not (body.get("done") is True and body.get("done_reason") == "stop"):
+            # A server abort (`done` false) or context exhaustion (`done_reason` "length")
+            # returns a truncated string that may still parse. Refuse it before it can be
+            # mistaken for a complete answer.
+            incomplete_generation = True
+            raw_output = None
         parsed = json.loads(raw_output)
-        values = {key: parsed.get(key) for key in output_fields if parsed.get(key) is not None}
+        if structured and schema is not None:
+            validate_against_schema(parsed, schema)
+        values = {
+            key: parsed.get(key) for key in output_fields if parsed.get(key) not in (None, "")
+        }
         if recorder:
             recorder.record(
                 provider="ollama",
@@ -175,10 +201,22 @@ async def request_analysis(
             fields_returned=len(values),
         )
         return normalize_analysis(values), "complete"
-    except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, OSError) as exc:
         error_type = bounded_error_type(exc)
         duration_ms = round((time.perf_counter() - start) * 1000)
         context = failure_context(exc, settings, operation, model, duration_ms)
+        if incomplete_generation:
+            context["failure_kind"] = "incomplete_generation"
+        elif isinstance(exc, SchemaConformanceError):
+            context["failure_kind"] = "schema_nonconforming"
+        elif (
+            structured
+            and isinstance(exc, httpx.HTTPStatusError)
+            and exc.response.status_code == 400
+        ):
+            # Ollama also returns 400 for an undecodable or oversized image, and no token
+            # separating the two may be logged, so the name states the ambiguity.
+            context["failure_kind"] = "schema_rejected_or_bad_request"
         if recorder:
             recorder.record(
                 provider="ollama",

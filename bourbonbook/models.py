@@ -110,6 +110,11 @@ class Bottle(Base):
     price_sources: Mapped[list[PriceSource]] = relationship(
         back_populates="bottle", cascade="all, delete-orphan", order_by="PriceSource.kind"
     )
+    attribution_provenance: Mapped[list[BottleAttributionProvenance]] = relationship(
+        back_populates="bottle",
+        cascade="all, delete-orphan",
+        order_by="BottleAttributionProvenance.field",
+    )
 
     @property
     def estimated_value(self) -> float:
@@ -144,6 +149,42 @@ class CatalogPrice(Base):
     url: Mapped[str] = mapped_column(Text)
     basis: Mapped[str] = mapped_column(Text, default="")
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProductAttributionFact(Base):
+    """Reusable, field-level evidence for one exact normalized product."""
+
+    __tablename__ = "product_attribution_facts"
+    __table_args__ = (UniqueConstraint("product_key", "field"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_key: Mapped[str] = mapped_column(String(500), index=True)
+    field: Mapped[str] = mapped_column(String(20))
+    value: Mapped[str | None] = mapped_column(String(240))
+    outcome: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str | None] = mapped_column(String(240))
+    url: Mapped[str | None] = mapped_column(Text)
+    basis: Mapped[str | None] = mapped_column(String(500))
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    provenance: Mapped[list[BottleAttributionProvenance]] = relationship(
+        back_populates="fact", passive_deletes=True
+    )
+
+
+class BottleAttributionProvenance(Base):
+    __tablename__ = "bottle_attribution_provenance"
+    __table_args__ = (UniqueConstraint("bottle_id", "field"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bottle_id: Mapped[int] = mapped_column(ForeignKey("bottles.id", ondelete="CASCADE"), index=True)
+    field: Mapped[str] = mapped_column(String(20))
+    authority: Mapped[str] = mapped_column(String(20))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    fact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_attribution_facts.id", ondelete="SET NULL"), index=True
+    )
+    bottle: Mapped[Bottle] = relationship(back_populates="attribution_provenance")
+    fact: Mapped[ProductAttributionFact | None] = relationship(back_populates="provenance")
 
 
 class CatalogImportBatch(Base):

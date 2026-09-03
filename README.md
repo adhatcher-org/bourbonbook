@@ -205,6 +205,11 @@ Context windows are configured by role: `OLLAMA_VISION_NUM_CTX` defaults to `327
 photos, catalog extraction, and vision warm-up. `OLLAMA_NUM_CTX` defaults to `4096` for text work;
 set the optional `OLLAMA_TEXT_NUM_CTX` only when the text model needs a different positive value.
 
+`OLLAMA_STRUCTURED_OUTPUT` ships disabled and constrains bottle analysis with an explicit JSON
+Schema when enabled, so it requires an Ollama build with structured-output support on
+`/api/generate` -- acceptance was confirmed on Ollama `0.32.13`, the only compatibility claim this
+project makes, so probe your own endpoint before enabling.
+
 Keep the container at one Uvicorn worker. Login, registration, verification, and reset rate limits
 are process-local; add a shared limiter before scaling workers or replicas.
 

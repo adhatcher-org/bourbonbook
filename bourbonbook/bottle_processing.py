@@ -41,6 +41,7 @@ class BottleProcessingStage(StrEnum):
     ANALYZING = "analyzing"  # stage 1: analyze_bottle() (vision call)
     ENRICHING = "enriching"  # stage 2: enrich_bottle_by_name()
     PRICING = "pricing"  # stage 3: apply_user_purchase_price() / refresh_prices()
+    ATTRIBUTING = "attributing"  # source-grounded producer/mash-bill evidence
     COMPLETE = "complete"  # pipeline finished (outcome quality is in analysis_status, not here)
     FAILED = "failed"  # unexpected exception, or orphaned by a server restart
 
@@ -50,6 +51,7 @@ IN_PROGRESS_STAGES = (
     BottleProcessingStage.ANALYZING,
     BottleProcessingStage.ENRICHING,
     BottleProcessingStage.PRICING,
+    BottleProcessingStage.ATTRIBUTING,
 )
 
 
@@ -80,6 +82,8 @@ async def run_add_bottle_pipeline(
         enrich_bottle_by_name,
         normalized_analysis_status,
         refresh_prices,
+        resolve_attributions,
+        set_provenance,
     )
 
     try:
@@ -102,7 +106,11 @@ async def run_add_bottle_pipeline(
                 analysis, analysis_status = {}, "unavailable"
             analysis_status = normalized_analysis_status(analysis_status)
             bottle.analysis_status = analysis_status
-            apply_analysis(bottle, analysis, allow_msrp=analysis_status == "verified")
+            recall_fields = apply_analysis(
+                bottle, analysis, allow_msrp=analysis_status == "verified"
+            )
+            for field in {"distilled_by", "mash_bill"} & recall_fields:
+                set_provenance(bottle, field, "provider_recall")
 
             bottle.processing_stage = BottleProcessingStage.ENRICHING.value
             session.commit()
@@ -116,9 +124,25 @@ async def run_add_bottle_pipeline(
                 enrichment, enrichment_status = await enrich_bottle_by_name(
                     bottle, settings, allow_provider=False
                 )
-                apply_analysis(bottle, enrichment, allow_msrp=enrichment_status == "verified")
+                enriched_fields = apply_analysis(
+                    bottle, enrichment, allow_msrp=enrichment_status == "verified"
+                )
+                for field in {"distilled_by", "mash_bill"} & enriched_fields:
+                    set_provenance(
+                        bottle,
+                        field,
+                        "verified_catalog"
+                        if enrichment_status == "verified"
+                        else "provider_recall",
+                    )
                 if enrichment:
                     bottle.analysis_status = normalized_analysis_status(enrichment_status)
+
+            bottle.processing_stage = BottleProcessingStage.ATTRIBUTING.value
+            session.commit()
+
+            if should_enrich_and_price:
+                await resolve_attributions(session, bottle, settings)
 
             bottle.processing_stage = BottleProcessingStage.PRICING.value
             session.commit()

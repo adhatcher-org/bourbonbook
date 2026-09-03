@@ -96,6 +96,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
 | A14 | Bottle instances, editable barrel details, and lifecycle dates | Complete | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence, per-role context windows, and explicit empty/recorded/clear date UX are complete. `make pr-review` passed (338 tests); independent browser check passed; reviewer and validator passed at `43b88a5`. |
+| A15 | Constrain Ollama bottle-analysis output | In progress | `codex/ollama-structured-output` | Adds `OLLAMA_STRUCTURED_OUTPUT` (default **disabled**) and an explicit JSON Schema on the local analysis request. Step 0 probe passed on Ollama **0.32.13** with `qwen3-vl:8b`; that version is the stated minimum-version prerequisite for enabling the switch. |
 
 ## Implementation Audit
 
@@ -1072,6 +1073,137 @@ input to compensate. The persisted `Date | None` value remains the source of tru
   touch-target behavior at iPhone-width and desktop-width viewports; it confirms no layout clipping
   or false saved-date cue in either theme-supported rendering.
 
+## A15 — Constrain Ollama Bottle-Analysis Output
+
+### Goal
+
+Replace the local bottle-analysis request's unconstrained `"format": "json"` with an explicit JSON
+Schema, behind a managed operator switch that ships **disabled**, so the Ollama path is compared
+with the already schema-constrained OpenAI path on equal terms. The authoritative specification is
+`docs/ollama-structured-output-plan.md`.
+
+### Dependencies
+
+None outstanding. A14 / PR #68 is merged at `419d248`.
+
+### Step 0 outcome and minimum Ollama version
+
+The endpoint compatibility probe ran against the operator's own `OLLAMA_URL` with
+`OLLAMA_VISION_MODEL=qwen3-vl:8b` on 2026-08-22. `GET /api/version` reported **`0.32.13`**.
+
+- **P0** (`"format": "json"`) — pass.
+- **P1** (minimal object schema, one `{"type": ["string","null"]}` property, `required`,
+  `additionalProperties: false`) — pass.
+- **P2** (union type carrying an `enum` including `null`) — pass.
+- **P3** (a bare `{"type": "null"}` on a required property) — pass.
+- **P4** (the full 20-property `analysis_schema(photo=True)` draft) — pass; the returned object
+  carried every property, in schema order.
+
+**Which channel these results were read from, stated explicitly.** The probe payload is the one
+section 0 of `docs/ollama-structured-output-plan.md` specifies — `model`, `prompt`,
+`"stream": false`, `format`, and no image — so it does **not** send `"think": false`, which the
+production payload does (`bourbonbook/ollama.py:128`). Under that payload every probe returned
+`"response": ""` with the JSON in `"thinking"`, and the probe script read whichever channel was
+non-empty. Two things follow, and they must not be conflated. P0-P4's pass/fail is an
+**acceptance** result: the endpoint took each `format` value and did not reject it. P4's "every
+property, in schema order" was observed on the **`thinking`** channel; it is not an observation of
+the `response` channel and must not be read as one.
+
+A deliberately invalid schema returned HTTP 400, proving the server really converts `format` to a
+grammar rather than ignoring it, so the acceptance passes are meaningful.
+
+All of P1-P4 passed, so **section 1 is implemented exactly as written** and neither fallback
+representation R1 nor R2 is used. **Ollama `0.32.13` is the stated minimum-version prerequisite**
+for enabling `OLLAMA_STRUCTURED_OUTPUT`; that version string is the only compatibility claim this
+project makes and it is not generalised to other builds.
+
+### Rollout consequence the probe did not settle
+
+Section 6 is implemented as specified: with the switch enabled, `request_analysis` reads only
+`body.get("response")` and an empty one is a failure —
+`failure_kind = "empty_response_channel"`, returning `({}, "unavailable")`
+(`bourbonbook/ollama.py:161-167`, `:197-199`). Read together with the channel observation above,
+the probe therefore did **not** establish that this endpoint can serve a schema-constrained
+analysis: if the production payload also returns an empty `response`, every photo and name request
+degrades to manual review the moment the switch is flipped. That is the mandated behaviour rather
+than a defect — an empty `response` under a schema means the grammar was not applied to the
+channel being parsed, and parsing `thinking` instead would assert a shape guarantee that is false.
+
+The probe differed from the production payload in exactly one respect that plausibly explains the
+empty channel (`"think": false`), so this is unresolved rather than known-broken. Settle it before
+enabling, in the same operator session as the mandatory p95 observation and against the same
+endpoint: issue the **merged** payload shape — `"think": false` and the real analysis prompt —
+with the switch on, and confirm `response` is non-empty. If it is still empty, **do not enable the
+switch**; that endpoint is not a candidate until it changes, and no A15 code change would make it
+one.
+
+### Expected Files
+
+- `bourbonbook/analysis.py`
+- `bourbonbook/config.py`
+- `bourbonbook/admin_config.py`
+- `bourbonbook/ollama.py`
+- `bourbonbook/main.py`
+- `.env.example`
+- `README.md`
+- `tests/test_analysis.py`
+- `tests/test_ollama.py`
+- `tests/test_runtime_boundaries.py`
+- `tests/test_admin.py`
+- `tests/test_app.py`
+
+### Individual Implementation Instructions
+
+1. Add `ANALYSIS_STATUS_VALUES`, `ANALYSIS_FIELD_SPECS`, `ANALYSIS_SCHEMA_FIELD_ORDER`,
+   `analysis_schema(*, photo)`, and `_validate_analysis_field_specs()` to `bourbonbook/analysis.py`.
+   The parity helper is called both at module import and as `analysis_schema`'s first statement;
+   `analysis_schema` resolves its globals per call, is not cached, and returns a deeply isolated
+   copy. `ocr_text` is emitted first and is null-only on the name path.
+2. Add `OLLAMA_STRUCTURED_OUTPUT` through all three registry surfaces at once: a
+   `Settings.ollama_structured_output: bool = False` field with a dedicated environment parse, a
+   `ConfigField` in the Analysis group, and an uncommented `.env.example` key at column 0. The
+   environment parse treats unset and empty as the default, strips the managed writer's surrounding
+   double quotes, trims and case-folds, and raises only for a non-empty unrecognised value.
+3. Select `format` behind the switch in `request_analysis`, leaving temperature at `0.1` and the
+   `num_ctx` expression unchanged in both states.
+4. Drop `""` as well as `None` from the parsed values, and skip `""` in `apply_analysis`, so a
+   required-every-key schema cannot blank a user-entered column.
+5. Read only the `response` channel when the switch is enabled, reporting an empty channel as
+   `failure_kind = "empty_response_channel"`; preserve the `thinking` fallback exactly when it is
+   disabled.
+6. Keep `error_type = "provider_error"` on a schema-enabled HTTP 400 and express the hypothesis as
+   `failure_kind = "schema_rejected_or_bad_request"`. Never retry without the schema.
+
+### Completion Evidence
+
+- Deterministic offline tests only; no test contacts an Ollama endpoint.
+- `make pr-review`, an independent review, a draft PR recording the Step 0 result, and this tracker
+  row updated to Complete.
+- **Resolved — `make dependency-check` passes.** It exited 1 at first review on `pip 26.1.2` /
+  `PYSEC-2026-3721` (fixed in `pip 26.2`). The advisory predated A15 and was not caused by it, but
+  the operator elected to close it inside this change rather than take a waiver, so the scope fence
+  that excluded it is deliberately lifted for this one item. `uv lock --upgrade-package pip` bumped
+  the single transitive package (`pip-audit` -> `pip-api` -> `pip`) from `26.1.2` to `26.2.1`;
+  `uv.lock` is the only file touched, three lines, and `pyproject.toml` is unchanged because `pip`
+  is not a declared dependency. Re-verified on 2026-08-22: `make dependency-check` exits 0 with
+  "No known vulnerabilities found", `uv lock --check` passes, 371 tests pass, ruff check/format are
+  clean, `make pr-check` and `make security` exit 0.
+- **Open at review time — the PR description is not yet written**, because the branch is created
+  after implementation. It must record the Step 0 result verbatim from "Step 0 outcome and minimum
+  Ollama version" above: Ollama `0.32.13`, P1-P4 all passed as acceptance results, section 1
+  implemented as written with neither R1 nor R2 selected, and the channel caveat plus the
+  pre-enable `response`-channel check from "Rollout consequence the probe did not settle".
+- Before enabling the switch in production, the mandatory p95 observation over at least 10 photo
+  requests with the switch on and off, with the stated 60s ceiling.
+- **The pre-enable `response`-channel confirmation is withdrawn (2026-08-23).** It rested on the
+  premise that an empty `response` under a schema meant the grammar had not been applied. Measured
+  against this endpoint, that premise is false: thinking-capable models emit the constrained object
+  into `thinking` and leave `response` permanently empty, so the check could never pass and would
+  have blocked enablement indefinitely. The code now reads either channel and verifies the result
+  instead -- see "Round-4 revision" in `docs/ollama-structured-output-plan.md`. A separate
+  operational note: on this endpoint the switch was verified working end to end on 2026-08-23,
+  returning a complete, schema-conforming 20-field object.
+
 ## Plan-Review Prompt
 
 Use this prompt in a fresh context window before implementation:
@@ -1101,6 +1233,16 @@ PR and status update succeed, create a new Codex session for the next Incomplete
 ```
 
 ## Current Work
+
+### A16 — Source-grounded producer and mash-bill attributions
+
+**Status:** In progress. Add exact-product, field-level SQLite facts with source provenance for
+`distilled_by` and `mash_bill`; run after catalog enrichment and before pricing, never fetching
+web pages. Automatic application is limited by [ADR 0004](0004-source-grounded-product-attributions.md)
+to blank or provider-recall values and only to evidence whose title and canonical public URL came
+from the same provider-recorded search result. Verify fresh/expired/no-evidence caching, authority
+precedence, migration upgrade/backfill, both provider fakes, owner-only source display, background
+and reanalysis sequencing, and deterministic failure degradation.
 
 A01 and A02 are complete and merged through PRs #11 and #12. Physical iPhone Safari/PWA picker and
 HEIC behavior remain an explicit device acceptance check because desktop automation cannot

@@ -1,3 +1,5 @@
+HOST_DATA_DIR="${HOST_DATA_DIR:-$HOME/Development/bourbonbook/data}"
+
 #stop docker container
 docker stop bourbonbook
 

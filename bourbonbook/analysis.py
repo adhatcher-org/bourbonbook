@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -10,6 +11,24 @@ from urllib.parse import urlsplit, urlunsplit
 
 from bourbonbook.catalog import verified_product, verified_product_from_text
 from bourbonbook.config import Settings
+
+
+@dataclass(frozen=True)
+class GroundedFieldResult:
+    """One independently validated attribution result from recorded search evidence."""
+
+    outcome: str
+    value: str | None = None
+    title: str | None = None
+    url: str | None = None
+    basis: str | None = None
+
+
+@dataclass(frozen=True)
+class GroundedAttributions:
+    distilled_by: GroundedFieldResult | None = None
+    mash_bill: GroundedFieldResult | None = None
+
 
 STANDARD_SIZES_ML = (50, 200, 375, 750, 1000, 1750)
 SIZE_SNAP_TOLERANCE_ML = 15
@@ -53,6 +72,177 @@ MISSING_FIELDS = (
     "status",
     "fill_level",
 )
+
+# The single spirit-type vocabulary. The edit form renders these options and the analysis schema
+# constrains the model to them, so an extraction cannot produce a value the form cannot display.
+# "Rye Whiskey" rather than "Rye": the model reaches for the full phrase unprompted, and the longer
+# name also matches the free-text "rye whiskey" already stored by earlier extractions.
+SPIRIT_TYPES = (
+    "Bourbon",
+    "Rye Whiskey",
+    "American Whiskey",
+    "Canadian Whiskey",
+    "Scotch",
+    "Irish Whiskey",
+    "Japanese Whisky",
+    "Other",
+)
+ANALYSIS_STATUS_VALUES = ("Unopened", "Opened", "Empty")
+# JSON Schema specification per output field. Membership is the PHOTO_OUTPUT_FIELDS superset;
+# the name path selects a subset and overrides ocr_text only. Shape is constrained here, never
+# truth: no pattern, minimum, maximum, format, or business range belongs in these specifications.
+ANALYSIS_FIELD_SPECS: dict[str, dict[str, Any]] = {
+    "name": {"type": ["string", "null"]},
+    "brand": {"type": ["string", "null"]},
+    "release": {"type": ["string", "null"]},
+    "edition": {"type": ["string", "null"]},
+    "spirit_type": {"type": ["string", "null"], "enum": [*SPIRIT_TYPES, None]},
+    "distilled_by": {"type": ["string", "null"]},
+    "mash_bill": {"type": ["string", "null"]},
+    "proof": {"type": ["number", "null"]},
+    "abv": {"type": ["number", "null"]},
+    "size": {"type": ["string", "null"]},
+    "age_statement": {"type": ["string", "null"]},
+    "barrel_number": {"type": ["string", "null"]},
+    "bottle_number": {"type": ["string", "null"]},
+    "warehouse": {"type": ["string", "null"]},
+    "floor": {"type": ["string", "null"]},
+    "status": {"type": ["string", "null"], "enum": [*ANALYSIS_STATUS_VALUES, None]},
+    "fill_level": {"type": ["integer", "null"]},
+    "msrp": {"type": "null"},
+    "ocr_text": {"type": ["string", "null"]},
+    "date_bottled": {"type": ["string", "null"]},
+}
+# Emission order, deliberately not tuple order: an all-required object is generated as a fixed
+# sequence and the model cannot stop before the last property, so where the free-text
+# transcription sits decides what survives a degenerate generation.
+#
+# ocr_text was placed FIRST until 2026-08-23, on the reasoning that the transcription should be
+# generated before the fields it informs. Measurement against Ollama 0.32.13 / qwen3-vl:8b
+# reversed that: the model reliably falls into a newline repetition loop inside the ocr_text
+# string, the grammar cannot break a loop inside a legal string value, and the server aborts the
+# generation mid-string. With ocr_text first that destroys the whole object.
+#
+#   ocr_text first: 0/10 runs produced parseable JSON (done=false, truncated ~350 chars)
+#   ocr_text last:  8/9 runs produced all 20 keys, valid, done_reason="stop", ~3.3s
+#
+# Last position does not prevent the loop; it means the other 19 fields are already emitted
+# before it can start. Do not move this back without re-running that comparison.
+ANALYSIS_SCHEMA_FIELD_ORDER = tuple(
+    field for field in PHOTO_OUTPUT_FIELDS if field != "ocr_text"
+) + ("ocr_text",)
+# A name-only call has no image, so any non-null ocr_text from it is by construction a
+# hallucination -- and a hallucinated transcription is a live route to a false verified-catalog
+# match that writes an MSRP. The property stays present, to keep membership equal to the output
+# tuple and aligned with the prompt key list, but it can only be null.
+NAME_PATH_OCR_TEXT_SPEC: dict[str, Any] = {"type": "null"}
+
+
+def _validate_analysis_field_specs() -> None:
+    """Fail fast when the output tuples and the schema specifications drift apart.
+
+    Called at import of this module -- where a developer error belongs, and where it cannot
+    reach an HTTP handler -- and again as the first statement of :func:`analysis_schema`, which
+    is the only call site a test monkeypatch can reach. Both globals are read from the module,
+    never from arguments, so a patched global is seen on the next call.
+    """
+    specified = set(ANALYSIS_FIELD_SPECS)
+    declared = set(PHOTO_OUTPUT_FIELDS)
+    missing = sorted(declared - specified)
+    if missing:
+        raise ValueError(
+            "ANALYSIS_FIELD_SPECS has no JSON Schema specification for: " + ", ".join(missing)
+        )
+    extra = sorted(specified - declared)
+    if extra:
+        raise ValueError(
+            "ANALYSIS_FIELD_SPECS specifies fields absent from PHOTO_OUTPUT_FIELDS: "
+            + ", ".join(extra)
+        )
+
+
+class SchemaConformanceError(ValueError):
+    """A parsed provider response did not conform to the schema that was sent with the request."""
+
+
+def validate_against_schema(parsed: Any, schema: dict[str, Any]) -> None:
+    """Verify a parsed response actually conforms to the schema the request carried.
+
+    Sending a schema is not the same as receiving a constrained response. Measured against
+    Ollama 0.32.13 on 2026-08-23: a generation aborted by the server (``done`` false) or stopped
+    by context exhaustion (``done_reason`` "length") returns a truncated or non-conforming object,
+    and ``maxLength`` is silently dropped by the grammar converter -- so individual keywords are
+    not guaranteed to have been applied either. Verifying the result here turns an assumed
+    guarantee into a checked one, and does so independently of which response channel carried it.
+    """
+    if not isinstance(parsed, dict):
+        raise SchemaConformanceError(f"expected a JSON object, got {type(parsed).__name__}")
+    properties: dict[str, Any] = schema.get("properties", {})
+    missing = sorted(set(properties) - set(parsed))
+    if missing:
+        raise SchemaConformanceError("response is missing required keys: " + ", ".join(missing))
+    extra = sorted(set(parsed) - set(properties))
+    if extra:
+        raise SchemaConformanceError("response carries unspecified keys: " + ", ".join(extra))
+    for field, spec in properties.items():
+        value = parsed[field]
+        allowed = spec.get("type")
+        allowed = [allowed] if isinstance(allowed, str) else list(allowed or ())
+        if not _matches_json_type(value, allowed):
+            raise SchemaConformanceError(
+                f"{field} is {type(value).__name__}, schema allows {'/'.join(allowed)}"
+            )
+        choices = spec.get("enum")
+        if choices is not None and value not in choices:
+            raise SchemaConformanceError(f"{field} value {value!r} is outside the schema enum")
+
+
+def _matches_json_type(value: Any, allowed: list[str]) -> bool:
+    if not allowed:
+        return True
+    if value is None:
+        return "null" in allowed
+    if isinstance(value, bool):
+        # JSON Schema does not treat a boolean as a number; neither do we.
+        return "boolean" in allowed
+    if isinstance(value, int):
+        return bool({"integer", "number"} & set(allowed))
+    if isinstance(value, float):
+        return "number" in allowed or ("integer" in allowed and value.is_integer())
+    if isinstance(value, str):
+        return "string" in allowed
+    if isinstance(value, list):
+        return "array" in allowed
+    if isinstance(value, dict):
+        return "object" in allowed
+    return False
+
+
+def analysis_schema(*, photo: bool) -> dict[str, Any]:
+    """Return the JSON Schema constraining one bottle-analysis response.
+
+    Every property is required and nullable: "unknown" is expressed as null, not by omission.
+    The returned tree is freshly assembled and deeply isolated, so a caller may mutate it.
+    """
+    _validate_analysis_field_specs()
+    selected = set(PHOTO_OUTPUT_FIELDS if photo else OUTPUT_FIELDS)
+    properties: dict[str, Any] = {}
+    for field in ANALYSIS_SCHEMA_FIELD_ORDER:
+        if field not in selected:
+            continue
+        if field == "ocr_text" and not photo:
+            properties[field] = copy.deepcopy(NAME_PATH_OCR_TEXT_SPEC)
+        else:
+            properties[field] = copy.deepcopy(ANALYSIS_FIELD_SPECS[field])
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_validate_analysis_field_specs()
 
 PHOTO_PROMPT = """You are a meticulous American-whiskey bottle archivist. Inspect the entire image,
 including the neck label, main label, small-print proof/ABV line, handwritten barrel tag, and the
@@ -164,10 +354,25 @@ def analysis_prompt(values: dict[str, Any], *, source: str) -> str:
         for key, value in values.items()
         if key in OUTPUT_FIELDS and value not in (None, "")
     }
-    return f"""Use the {source} and the known bottle values to fill any missing fields.
-Do not change any field already present in the JSON below.
-Do not invent pricing. MSRP must stay null.
-If the exact bottle is not certain, leave the field null.
+    return f"""Identify this exact whiskey product, then fill any field below that is still missing.
+
+You are identifying a product, not transcribing a label. Facts such as the producing distillery
+and the general mash bill are almost never printed on a bottle -- supply them from established
+product knowledge when, and only when, you are certain which product this is.
+
+Field rules:
+- distilled_by is the company or distillery that actually produces this whiskey. Return null unless
+  you specifically know this product's producer. Do not derive one, and do not substitute a
+  distillery that merely seems likely: an empty field is recoverable, a wrong one is not.
+- mash_bill is the grain recipe in general terms, and it must agree with the spirit type: a rye
+  whiskey is not wheated. Return null unless you know this specific product's recipe. Never invent
+  percentages.
+- Do not change any field already present in the JSON below.
+- Do not invent pricing. MSRP must stay null.
+- A null is the correct answer whenever you are not certain. A plausible guess is worse than an
+  empty field here, because nothing downstream can tell the two apart.
+
+The {source} is provided as context, but a fact absent from it is not therefore unknown.
 
 Known values:
 {json.dumps(known, indent=2, sort_keys=True, default=str)}
@@ -233,10 +438,83 @@ def snap_size(normalized: dict[str, Any]) -> None:
         normalized["size"] = f"{nearest}ml"
 
 
+_PRODUCER_SUFFIXES = (
+    "distillery",
+    "distilleries",
+    "distilling",
+    "distilling co",
+    "distilling company",
+    "distillery co",
+    "distillery company",
+    "distillers",
+    "distillery inc",
+)
+_WHEATED_MARKERS = ("wheat", "wheated")
+_RYE_MARKERS = ("rye",)
+
+
+def _brand_echo(value: str, other: str) -> bool:
+    """True when ``value`` is ``other`` with a producer word bolted on."""
+    stripped = value.strip().lower()
+    other = other.strip().lower()
+    if not stripped or not other or stripped == other:
+        return stripped == other and bool(stripped)
+    return any(stripped == f"{other} {suffix}" for suffix in _PRODUCER_SUFFIXES)
+
+
+def implausible_distiller(distilled_by: Any, values: dict[str, Any]) -> bool:
+    """Reject a producer that is merely the brand with "Distillery" appended.
+
+    Measured failure mode, 2026-08: the model returned "Elijah Craig Distillery" (Heaven Hill),
+    "E.H. Taylor Distillery" (Buffalo Trace) and "Buffalo Trace Distillery" for a Wild Turkey
+    product. Brand-echo is the single most common shape, it is always wrong when the brand is
+    owned by a differently-named producer, and unlike a wrong-but-real answer it is detectable
+    without a reference source.
+    """
+    if not isinstance(distilled_by, str) or not distilled_by.strip():
+        return False
+    for key in ("brand", "release", "name"):
+        candidate = values.get(key)
+        if isinstance(candidate, str) and _brand_echo(distilled_by, candidate):
+            return True
+    return False
+
+
+def implausible_mash_bill(mash_bill: Any, values: dict[str, Any]) -> bool:
+    """Reject a mash bill that contradicts the product's own spirit type.
+
+    A wheated mash bill replaces rye as the flavouring grain, so "wheated" and a rye whiskey are
+    mutually exclusive. The model produced exactly that contradiction ("wheated rye whiskey") and
+    reached for "wheated bourbon" on three separate rye-recipe bourbons.
+    """
+    if not isinstance(mash_bill, str) or not mash_bill.strip():
+        return False
+    claim = mash_bill.strip().lower()
+    context = " ".join(
+        str(values.get(key) or "") for key in ("spirit_type", "name", "release")
+    ).lower()
+    wheated_claim = any(marker in claim for marker in _WHEATED_MARKERS)
+    rye_product = any(marker in context for marker in _RYE_MARKERS)
+    return wheated_claim and rye_product
+
+
+def drop_implausible_attributions(values: dict[str, Any]) -> None:
+    """Null out producer/mash-bill values a deterministic check can prove untrustworthy.
+
+    This runs on provider output only. Catalog enrichment merges afterwards and is unaffected, so
+    a verified product can still supply either field.
+    """
+    if implausible_distiller(values.get("distilled_by"), values):
+        values["distilled_by"] = None
+    if implausible_mash_bill(values.get("mash_bill"), values):
+        values["mash_bill"] = None
+
+
 def normalize_analysis(values: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
     reconcile_proof_and_abv(normalized)
     snap_size(normalized)
+    drop_implausible_attributions(normalized)
     fill_level = normalized.get("fill_level")
     try:
         fill = max(0, min(100, int(round(float(str(fill_level).rstrip("%"))))))
@@ -325,15 +603,25 @@ async def analyze_bottle(photo: Path, settings: Settings) -> PhotoAnalysisResult
 
 
 async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, Any], str]:
+    print(f"DEBUG: analyze_bottle_name called with name={name}")
     values, matched = enrich_from_verified_catalog({"name": name})
+    print(f"DEBUG: After first enrich_from_verified_catalog: values={values}, matched={matched}")
     if matched:
         return values, "verified"
     analyzed, status = await _request_provider_analysis(name_prompt(name), settings)
+    print(f"DEBUG: Provider analysis: analyzed={analyzed}, status={status}")
     if not analyzed:
         return {}, status
-    values = merge_analysis(values, analyzed)
+    # Only merge provider analysis if it doesn't conflict with verified catalog values
+    # Check if verified catalog already has mash_bill or distilled_by
+    if not any(values.get(field) for field in {"mash_bill", "distilled_by"}):
+        values = merge_analysis(values, analyzed)
+    print(f"DEBUG: After merge: values={values}")
     values, matched = enrich_from_verified_catalog(values)
+    print(f"DEBUG: After second enrich_from_verified_catalog: values={values}, matched={matched}")
     if matched:
+        # If we matched the verified catalog, return only the verified catalog values
+        # and mark as verified to indicate provenance
         return values, "verified"
     if values and uses_local_models(settings) and missing_fields(values):
         return await _refine_analysis(values, settings, source="known bottle name")

@@ -156,7 +156,7 @@ async def search_product_attributions(product_key: str, settings: Settings) -> G
         return GroundedAttributions()
     try:
         async with ollama_client_session() as client:
-            search = await _run_cloud_tool(
+            search = await run_cloud_tool(
                 client,
                 "/api/web_search",
                 {"query": f"{product_key} distillery mash bill"},

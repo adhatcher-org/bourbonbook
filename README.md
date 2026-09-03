@@ -145,6 +145,7 @@ the value actually configured in Unraid.
 | `OLLAMA_VISION_NUM_CTX` | Variable | `OLLAMA_VISION_NUM_CTX` | `32768` | Photo and catalog-extraction context window | No |
 | `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | unset (falls back to `OLLAMA_MODEL`) | Name-only analysis | No |
 | `OLLAMA_TEXT_NUM_CTX` | Variable | `OLLAMA_TEXT_NUM_CTX` | unset (falls back to `OLLAMA_NUM_CTX`) | Optional text-model context window | No |
+| `OLLAMA_STRUCTURED_OUTPUT` | Variable | `OLLAMA_STRUCTURED_OUTPUT` | `false` | Constrains analysis output with a JSON Schema | No |
 | `LITELLM_URL` | Variable | `LITELLM_URL` | `http://litellm:4000/v1` | If using LiteLLM | No |
 | `LITELLM_API_KEY` | Variable | `LITELLM_API_KEY` | masked value | If the proxy requires a key | Yes |
 | `LITELLM_MODEL` | Variable | `LITELLM_MODEL` | `ollama/qwen3.6:35b` | Fallback for either LiteLLM task | No |

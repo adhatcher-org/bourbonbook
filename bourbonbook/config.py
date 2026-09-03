@@ -82,6 +82,7 @@ class Settings:
     ollama_num_ctx: int = 4096
     ollama_vision_num_ctx: int = 32768
     ollama_text_num_ctx: int | None = None
+    ollama_structured_output: bool = False
     litellm_url: str | None = None
     litellm_api_key: str | None = None
     litellm_model: str = "ollama/qwen3.6:35b"
@@ -160,6 +161,9 @@ class Settings:
             ollama_vision_num_ctx=int(get("OLLAMA_VISION_NUM_CTX", "32768")),
             ollama_text_num_ctx=(
                 int(get("OLLAMA_TEXT_NUM_CTX", "")) if get("OLLAMA_TEXT_NUM_CTX") else None
+            ),
+            ollama_structured_output=_parse_env_boolean(
+                "OLLAMA_STRUCTURED_OUTPUT", get("OLLAMA_STRUCTURED_OUTPUT"), False
             ),
             litellm_url=openai_compatible_base(get("LITELLM_URL", "")),
             litellm_api_key=get("LITELLM_API_KEY") or None,

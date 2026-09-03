@@ -204,12 +204,13 @@ def test_grounded_price_search_requires_consulted_source(tmp_path, monkeypatch) 
     ]
     assert captured["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
     assert captured["include"] == ["web_search_call.action.sources"]
-    assert "Search OHLQ.com first" in captured["input"]
     assert "'750ml' bottle size" in captured["input"]
     assert "reject prices for every other size" in captured["input"]
-    assert "If OHLQ is inaccessible" in captured["input"]
-    assert "broaden the web search" in captured["input"]
+    assert "official state price book" in captured["input"]
     assert "secondary-market prices" in captured["input"]
+    # OHLQ is named only to exclude it; Ollama Cloud's web_fetch cannot retrieve its pages.
+    assert "Do not use ohlq.com" in captured["input"]
+    assert "Search OHLQ.com first" not in captured["input"]
 
 
 def test_missing_parsed_openai_outputs_are_unavailable(tmp_path, monkeypatch) -> None:

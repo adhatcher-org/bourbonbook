@@ -117,13 +117,12 @@ def price_search_prompt(name: str, *, size: str | None = None) -> str:
     product = f"the exact whiskey {name!r}{size_requirement}"
     return f"""Research the current Ohio retail price for {product}.
 
-Search OHLQ.com first and use its Sizes & Pricing value when an exact product and bottle-size match
-is available. When a bottle size is supplied, reject prices for every other size. Treat that Ohio
-retail price as MSRP for this collection. If OHLQ is inaccessible or
-has no exact match, broaden the web search and use the producer, another official state price book,
-or a reputable whiskey publication.
-Do not use retailer asking prices, search snippets, Reddit estimates, secondary-market prices, or
-an edition/store pick that does not exactly match. Use a single USD value rather than a range.
+Use the producer's official listing, an official state price book, or a reputable whiskey
+publication, and require an exact product and bottle-size match. When a bottle size is supplied,
+reject prices for every other size. Treat that Ohio retail price as MSRP for this collection.
+Do not use ohlq.com. Do not use retailer asking prices, search snippets, Reddit estimates,
+secondary-market prices, or an edition/store pick that does not exactly match. Use a single USD
+value rather than a range.
 Return null when reliable evidence is unavailable or conflicting. Select one best direct source;
 its title and URL must come from the web results. Keep the basis to one short sentence in plain text
 without Markdown."""
@@ -265,6 +264,19 @@ def normalize_photo_bottled_date(value: Any) -> date | None:
         return None
 
 
+#: Providers that serve local models cheaply enough to be asked a second, refining question.
+LOCAL_MODEL_PROVIDERS = frozenset({"ollama", "litellm"})
+
+
+def uses_local_models(settings: Settings) -> bool:
+    """Whether the configured provider fronts local models.
+
+    LiteLLM proxies the same local Ollama models, so it earns the same second-pass
+    refinement that direct Ollama gets; a metered remote API does not.
+    """
+    return settings.analysis_provider in LOCAL_MODEL_PROVIDERS
+
+
 async def _request_provider_analysis(
     prompt: str, settings: Settings, photo: Path | None = None
 ) -> tuple[dict[str, Any], str]:
@@ -274,6 +286,10 @@ async def _request_provider_analysis(
         return await request_analysis(prompt, settings, photo)
     if settings.analysis_provider == "ollama":
         from bourbonbook.ollama import request_analysis
+
+        return await request_analysis(prompt, settings, photo)
+    if settings.analysis_provider == "litellm":
+        from bourbonbook.litellm_provider import request_analysis
 
         return await request_analysis(prompt, settings, photo)
     return {}, "unavailable"
@@ -300,7 +316,7 @@ async def analyze_bottle(photo: Path, settings: Settings) -> PhotoAnalysisResult
     values, matched = enrich_from_verified_catalog(values)
     if matched:
         return PhotoAnalysisResult(values, "verified", photo_bottled_date)
-    if settings.analysis_provider == "ollama" and missing_fields(values):
+    if uses_local_models(settings) and missing_fields(values):
         values, status = await _refine_analysis(
             values, settings, source="transcribed bottle-label text"
         )
@@ -319,7 +335,7 @@ async def analyze_bottle_name(name: str, settings: Settings) -> tuple[dict[str, 
     values, matched = enrich_from_verified_catalog(values)
     if matched:
         return values, "verified"
-    if values and settings.analysis_provider == "ollama" and missing_fields(values):
+    if values and uses_local_models(settings) and missing_fields(values):
         return await _refine_analysis(values, settings, source="known bottle name")
     return values, status
 
@@ -335,16 +351,24 @@ async def search_bottle_prices(
         from bourbonbook.ollama_search import search_prices
 
         return await search_prices(name, settings, size=size)
+    if settings.analysis_provider == "litellm":
+        from bourbonbook.litellm_provider import search_prices
+
+        return await search_prices(name, settings, size=size)
     return {}, [], "unavailable"
 
 
 async def warm_analysis_model(settings: Settings) -> None:
     """Best-effort pre-load of the vision model for providers with a real load cost.
 
-    Only Ollama evicts and reloads a model between requests; OpenAI is a remote API with no
-    load step to hide.
+    Only the local model hosts evict and reload a model between requests -- directly or
+    behind LiteLLM; OpenAI is a remote API with no load step to hide.
     """
     if settings.analysis_provider == "ollama":
         from bourbonbook.ollama import warm_vision_model
+
+        await warm_vision_model(settings)
+    elif settings.analysis_provider == "litellm":
+        from bourbonbook.litellm_provider import warm_vision_model
 
         await warm_vision_model(settings)

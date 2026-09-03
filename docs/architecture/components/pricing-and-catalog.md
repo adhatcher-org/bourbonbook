@@ -53,7 +53,8 @@ async def refresh_prices(session, bottle, settings, *, force=False, price_index=
   `openai_provider.search_prices()` (OpenAI's hosted web-search tool) or
   `ollama_search.search_prices()` (a tool-calling loop against Ollama Cloud). See
   [AI analysis](ai-analysis.md) for both adapters. The shared pricing prompt
-  (`analysis.price_search_prompt()`) instructs the model to check OHLQ.com first, reject
+  (`analysis.price_search_prompt()`) instructs the model to use producer listings, official state
+  price books, or reputable whiskey publications -- explicitly excluding `ohlq.com` -- reject
   size/edition mismatches, and return exactly one USD price with a source it actually retrieved.
 - **Writeback**: any Tier 3 result with `status == "complete"` and an `http(s)` source URL is
   persisted into `CatalogPrice` (`cache_catalog_price()`) and, if Qdrant is enabled, upserted into

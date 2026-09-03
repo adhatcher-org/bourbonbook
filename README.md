@@ -34,13 +34,30 @@ ANALYSIS_PROVIDER=ollama
 ANALYSIS_PROVIDER=openai
 OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=gpt-5.5
+
+# Or the same local models reached through a LiteLLM proxy
+ANALYSIS_PROVIDER=litellm
+LITELLM_URL=http://litellm:4000/v1
+LITELLM_API_KEY=your-litellm-key
+LITELLM_MODEL=ollama/qwen3.6:35b
+LITELLM_VISION_MODEL=ollama/qwen3-vl:8b
 ```
+
+`litellm` talks the OpenAI `/chat/completions` surface to a LiteLLM proxy that fronts Ollama, so
+photo analysis, name analysis, refinement, catalog extraction, and the vision warm-up all go
+through the gateway. It has the same model roles as Ollama -- vision, text, and a shared fallback
+-- plus its own context windows (`LITELLM_*_NUM_CTX`, forwarded to Ollama as `num_ctx`) and
+optional output-token caps (`LITELLM_*_MAX_TOKENS`). The model names are separate settings because
+a LiteLLM route is an alias its own config defines, not the raw Ollama tag. Grounded price search
+still calls Ollama Cloud's `web_search`/`web_fetch` directly and needs `OLLAMA_API_KEY`; without it
+pricing falls back to the local catalog rather than guessing.
 
 Keep the real API key only in `.env` or your container's secret environment settings; do not add it to `.env.example` or commit it.
 
 Pricing is local-first, regardless of the analysis provider: an exact SQLite catalog match is used
 first, followed by an optional Qdrant fuzzy match for the same bottle size. Only a local miss calls
-OpenAI's grounded web search, which checks OHLQ first and then reliable sources. Every accepted
+the configured provider's grounded web search, which uses producer listings, official state price
+books, and reputable whiskey publications. Every accepted
 result has a consulted source URL and is written back to the reusable local catalog; Qdrant is a
 rebuildable retrieval index, not the source of truth. The edit page can explicitly refresh MSRP
 from the web without re-analyzing the photo.
@@ -120,7 +137,7 @@ the value actually configured in Unraid.
 | `PUBLIC_BASE_URL` | Variable | `PUBLIC_BASE_URL` | `https://bourbonbook.aaronhatcher.com` | Yes | No |
 | `PROXY_HEADERS` | Variable | `PROXY_HEADERS` | `true` | Yes | No |
 | `FORWARDED_ALLOW_IPS` | Variable | `FORWARDED_ALLOW_IPS` | SWAG fixed IP or smallest proxy CIDR | Yes | No |
-| `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama` or `openai` | Yes | No |
+| `ANALYSIS_PROVIDER` | Variable | `ANALYSIS_PROVIDER` | `ollama`, `openai`, or `litellm` | Yes | No |
 | `OLLAMA_URL` | Variable | `OLLAMA_URL` | `http://ollama:11434` | If using Ollama | No |
 | `OLLAMA_MODEL` | Variable | `OLLAMA_MODEL` | `qwen3.6:35b` | Fallback for either Ollama task | No |
 | `OLLAMA_NUM_CTX` | Variable | `OLLAMA_NUM_CTX` | `4096` | Fallback/text context window | No |
@@ -128,6 +145,17 @@ the value actually configured in Unraid.
 | `OLLAMA_VISION_NUM_CTX` | Variable | `OLLAMA_VISION_NUM_CTX` | `32768` | Photo and catalog-extraction context window | No |
 | `OLLAMA_TEXT_MODEL` | Variable | `OLLAMA_TEXT_MODEL` | unset (falls back to `OLLAMA_MODEL`) | Name-only analysis | No |
 | `OLLAMA_TEXT_NUM_CTX` | Variable | `OLLAMA_TEXT_NUM_CTX` | unset (falls back to `OLLAMA_NUM_CTX`) | Optional text-model context window | No |
+| `LITELLM_URL` | Variable | `LITELLM_URL` | `http://litellm:4000/v1` | If using LiteLLM | No |
+| `LITELLM_API_KEY` | Variable | `LITELLM_API_KEY` | masked value | If the proxy requires a key | Yes |
+| `LITELLM_MODEL` | Variable | `LITELLM_MODEL` | `ollama/qwen3.6:35b` | Fallback for either LiteLLM task | No |
+| `LITELLM_VISION_MODEL` | Variable | `LITELLM_VISION_MODEL` | unset (falls back to `LITELLM_MODEL`) | Photo analysis and catalog extraction | No |
+| `LITELLM_TEXT_MODEL` | Variable | `LITELLM_TEXT_MODEL` | unset (falls back to `LITELLM_MODEL`) | Name-only analysis | No |
+| `LITELLM_NUM_CTX` | Variable | `LITELLM_NUM_CTX` | `4096` | Fallback/text context window | No |
+| `LITELLM_VISION_NUM_CTX` | Variable | `LITELLM_VISION_NUM_CTX` | `32768` | Photo and catalog-extraction context window | No |
+| `LITELLM_TEXT_NUM_CTX` | Variable | `LITELLM_TEXT_NUM_CTX` | unset (falls back to `LITELLM_NUM_CTX`) | Optional text-model context window | No |
+| `LITELLM_MAX_TOKENS` | Variable | `LITELLM_MAX_TOKENS` | unset (model decides) | Optional output-token cap | No |
+| `LITELLM_VISION_MAX_TOKENS` | Variable | `LITELLM_VISION_MAX_TOKENS` | unset (falls back to `LITELLM_MAX_TOKENS`) | Optional vision output cap | No |
+| `LITELLM_TEXT_MAX_TOKENS` | Variable | `LITELLM_TEXT_MAX_TOKENS` | unset (falls back to `LITELLM_MAX_TOKENS`) | Optional text output cap | No |
 | `QDRANT_URL` | Variable | `QDRANT_URL` | `http://qdrant:6333` | Local price search index | No |
 | `QDRANT_API_KEY` | Variable | `QDRANT_API_KEY` | masked value | If Qdrant requires authentication | Yes |
 | `QDRANT_PRICE_COLLECTION` | Variable | `QDRANT_PRICE_COLLECTION` | `bourbonbook_prices` | Local price-search collection | No |

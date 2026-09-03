@@ -12,6 +12,22 @@ from urllib.parse import urlsplit
 logger = logging.getLogger(__name__)
 
 
+def openai_compatible_base(raw: str) -> str | None:
+    """Return an OpenAI-compatible base URL, or ``None`` when unset.
+
+    LiteLLM serves the OpenAI surface under ``/v1``; an operator who configures the bare
+    origin would otherwise get 404s from every request with nothing pointing at the cause.
+    A URL that already carries a path is left exactly as written, so a proxy mounted
+    somewhere other than ``/v1`` still works.
+    """
+    value = raw.strip().rstrip("/")
+    if not value:
+        return None
+    if urlsplit(value).scheme and not urlsplit(value).path:
+        return f"{value}/v1"
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -41,6 +57,17 @@ class Settings:
     ollama_num_ctx: int = 4096
     ollama_vision_num_ctx: int = 32768
     ollama_text_num_ctx: int | None = None
+    litellm_url: str | None = None
+    litellm_api_key: str | None = None
+    litellm_model: str = "ollama/qwen3.6:35b"
+    litellm_vision_model: str | None = None
+    litellm_text_model: str | None = None
+    litellm_num_ctx: int = 4096
+    litellm_vision_num_ctx: int = 32768
+    litellm_text_num_ctx: int | None = None
+    litellm_max_tokens: int | None = None
+    litellm_vision_max_tokens: int | None = None
+    litellm_text_max_tokens: int | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_price_collection: str = "bourbonbook_prices"
@@ -89,6 +116,11 @@ class Settings:
         overrides = load_managed_overrides() if include_managed else {}
         values: Mapping[str, str] = {**os.environ, **overrides}
         get = values.get
+
+        def optional_int(key: str) -> int | None:
+            raw = get(key, "").strip()
+            return int(raw) if raw else None
+
         data_dir = Path(get("DATA_DIR", "./data")).resolve()
         return cls(
             data_dir=data_dir,
@@ -104,6 +136,17 @@ class Settings:
             ollama_text_num_ctx=(
                 int(get("OLLAMA_TEXT_NUM_CTX", "")) if get("OLLAMA_TEXT_NUM_CTX") else None
             ),
+            litellm_url=openai_compatible_base(get("LITELLM_URL", "")),
+            litellm_api_key=get("LITELLM_API_KEY") or None,
+            litellm_model=get("LITELLM_MODEL", "ollama/qwen3.6:35b"),
+            litellm_vision_model=get("LITELLM_VISION_MODEL") or None,
+            litellm_text_model=get("LITELLM_TEXT_MODEL") or None,
+            litellm_num_ctx=int(get("LITELLM_NUM_CTX", "4096")),
+            litellm_vision_num_ctx=int(get("LITELLM_VISION_NUM_CTX", "32768")),
+            litellm_text_num_ctx=optional_int("LITELLM_TEXT_NUM_CTX"),
+            litellm_max_tokens=optional_int("LITELLM_MAX_TOKENS"),
+            litellm_vision_max_tokens=optional_int("LITELLM_VISION_MAX_TOKENS"),
+            litellm_text_max_tokens=optional_int("LITELLM_TEXT_MAX_TOKENS"),
             qdrant_url=get("QDRANT_URL", "").rstrip("/") or None,
             qdrant_api_key=get("QDRANT_API_KEY") or None,
             qdrant_price_collection=get("QDRANT_PRICE_COLLECTION", "bourbonbook_prices"),
@@ -223,6 +266,21 @@ class Settings:
             raise ValueError("OLLAMA_VISION_NUM_CTX must be positive")
         if self.ollama_text_num_ctx is not None and self.ollama_text_num_ctx < 1:
             raise ValueError("OLLAMA_TEXT_NUM_CTX must be positive")
+        if self.analysis_provider == "litellm" and not self.litellm_url:
+            raise ValueError("LITELLM_URL is required when ANALYSIS_PROVIDER=litellm")
+        if self.litellm_num_ctx < 1:
+            raise ValueError("LITELLM_NUM_CTX must be positive")
+        if self.litellm_vision_num_ctx < 1:
+            raise ValueError("LITELLM_VISION_NUM_CTX must be positive")
+        if self.litellm_text_num_ctx is not None and self.litellm_text_num_ctx < 1:
+            raise ValueError("LITELLM_TEXT_NUM_CTX must be positive")
+        for key, limit in (
+            ("LITELLM_MAX_TOKENS", self.litellm_max_tokens),
+            ("LITELLM_VISION_MAX_TOKENS", self.litellm_vision_max_tokens),
+            ("LITELLM_TEXT_MAX_TOKENS", self.litellm_text_max_tokens),
+        ):
+            if limit is not None and limit < 1:
+                raise ValueError(f"{key} must be positive")
         self._warn_if_ollama_url_is_https_on_a_private_host()
 
     def ollama_context_window(self, *, vision: bool) -> int:
@@ -230,6 +288,29 @@ class Settings:
         if vision:
             return self.ollama_vision_num_ctx
         return self.ollama_text_num_ctx or self.ollama_num_ctx
+
+    def litellm_model_for(self, *, vision: bool) -> str:
+        """Return the LiteLLM model name for one fixed role.
+
+        The roles mirror the Ollama ones -- vision, text, and a shared fallback -- because
+        LiteLLM fronts the same local models; only the naming changes, since a LiteLLM route
+        is an alias its own config defines rather than a raw Ollama tag.
+        """
+        if vision:
+            return self.litellm_vision_model or self.litellm_model
+        return self.litellm_text_model or self.litellm_model
+
+    def litellm_context_window(self, *, vision: bool) -> int:
+        """Return the configured context window for one fixed LiteLLM model role."""
+        if vision:
+            return self.litellm_vision_num_ctx
+        return self.litellm_text_num_ctx or self.litellm_num_ctx
+
+    def litellm_max_output_tokens(self, *, vision: bool) -> int | None:
+        """Return the output-token cap for one role, or ``None`` to leave it to the model."""
+        if vision:
+            return self.litellm_vision_max_tokens or self.litellm_max_tokens
+        return self.litellm_text_max_tokens or self.litellm_max_tokens
 
     def _warn_if_ollama_url_is_https_on_a_private_host(self) -> None:
         if self.analysis_provider != "ollama":

@@ -73,9 +73,14 @@ def _tool_arguments(call: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
-async def _run_cloud_tool(
+async def run_cloud_tool(
     client: httpx.AsyncClient, path: str, payload: dict[str, Any], settings: Settings
 ) -> dict[str, Any]:
+    """Call one Ollama Cloud research endpoint.
+
+    Public because the LiteLLM provider runs the same grounded-search tool loop: the cloud
+    search service is independent of whichever host actually serves the chat model.
+    """
     response = await client.post(
         f"{OLLAMA_CLOUD_URL}{path}",
         json=payload,
@@ -85,16 +90,21 @@ async def _run_cloud_tool(
     return response.json()
 
 
-async def _execute_tool_call(
+async def execute_tool_call(
     client: httpx.AsyncClient,
     call: dict[str, Any],
     settings: Settings,
     consulted_urls: set[str],
 ) -> dict[str, Any]:
+    """Run one model-requested tool call and record every URL it consulted.
+
+    Ollama and the OpenAI-compatible LiteLLM surface describe a tool call with the same
+    ``function.name`` / ``function.arguments`` shape, so both providers share this.
+    """
     name = (call.get("function") or {}).get("name")
     arguments = _tool_arguments(call)
     if name == "web_search":
-        result = await _run_cloud_tool(
+        result = await run_cloud_tool(
             client, "/api/web_search", {"query": arguments.get("query", "")}, settings
         )
         for item in result.get("results") or []:
@@ -103,16 +113,20 @@ async def _execute_tool_call(
         return result
     if name == "web_fetch":
         url = arguments.get("url", "")
-        result = await _run_cloud_tool(client, "/api/web_fetch", {"url": url}, settings)
+        result = await run_cloud_tool(client, "/api/web_fetch", {"url": url}, settings)
         if url:
             consulted_urls.add(canonical_url(url))
         return result
     return {"error": f"unknown tool: {name}"}
 
 
-def _extract_prices(
+def extract_prices(
     parsed: dict[str, Any], consulted_urls: set[str]
 ) -> tuple[dict[str, float], list[dict[str, str]]]:
+    """Keep only a price whose cited source the model actually consulted.
+
+    Shared with the LiteLLM provider: provenance is a pricing rule, not a transport detail.
+    """
     prices: dict[str, float] = {}
     sources: list[dict[str, str]] = []
     msrp = parsed.get("msrp")
@@ -180,7 +194,7 @@ async def search_prices(
                         parsed = json.loads(message.get("content") or "")
                     except json.JSONDecodeError:
                         parsed = {}
-                    prices, sources = _extract_prices(parsed, consulted_urls)
+                    prices, sources = extract_prices(parsed, consulted_urls)
                     status = "complete" if prices else "unavailable"
                     if recorder:
                         recorder.record(
@@ -207,7 +221,7 @@ async def search_prices(
                 messages.append(message)
                 last_endpoint_url = OLLAMA_CLOUD_URL
                 for call in tool_calls:
-                    result = await _execute_tool_call(client, call, settings, consulted_urls)
+                    result = await execute_tool_call(client, call, settings, consulted_urls)
                     messages.append({"role": "tool", "content": json.dumps(result)})
 
             duration_ms = round((time.perf_counter() - start) * 1000)

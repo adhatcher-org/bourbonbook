@@ -150,13 +150,47 @@ def test_settings_from_environment_parses_and_normalizes(monkeypatch, tmp_path: 
         ({"ollama_num_ctx": 0}, "OLLAMA_NUM_CTX"),
         ({"ollama_vision_num_ctx": 0}, "OLLAMA_VISION_NUM_CTX"),
         ({"ollama_text_num_ctx": 0}, "OLLAMA_TEXT_NUM_CTX"),
+        ({"litellm_num_ctx": 0}, "LITELLM_NUM_CTX"),
+        ({"litellm_vision_num_ctx": 0}, "LITELLM_VISION_NUM_CTX"),
+        ({"litellm_text_num_ctx": 0}, "LITELLM_TEXT_NUM_CTX"),
+        ({"litellm_max_tokens": 0}, "LITELLM_MAX_TOKENS"),
+        ({"litellm_vision_max_tokens": 0}, "LITELLM_VISION_MAX_TOKENS"),
+        ({"litellm_text_max_tokens": 0}, "LITELLM_TEXT_MAX_TOKENS"),
+        ({"analysis_provider": "litellm"}, "LITELLM_URL is required"),
     ],
 )
-def test_ollama_context_windows_must_be_positive(
+def test_model_budget_boundaries_are_rejected(
     tmp_path: Path, changes: dict[str, object], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
         settings_for(tmp_path, **changes).validate_identity()
+
+
+def test_litellm_settings_from_environment(monkeypatch, tmp_path: Path) -> None:
+    """The gateway roles are configured exactly as the Ollama ones are."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANALYSIS_PROVIDER", "litellm")
+    monkeypatch.setenv("LITELLM_URL", "http://litellm:4000")
+    monkeypatch.setenv("LITELLM_API_KEY", "sk-litellm")
+    monkeypatch.setenv("LITELLM_MODEL", "ollama/fallback")
+    monkeypatch.setenv("LITELLM_VISION_MODEL", "ollama/vision")
+    monkeypatch.setenv("LITELLM_TEXT_MODEL", "ollama/text")
+    monkeypatch.setenv("LITELLM_VISION_NUM_CTX", "32768")
+    monkeypatch.setenv("LITELLM_TEXT_NUM_CTX", "16384")
+    monkeypatch.setenv("LITELLM_VISION_MAX_TOKENS", "2048")
+
+    settings = Settings.from_env()
+    settings.validate_identity()
+
+    assert settings.analysis_provider == "litellm"
+    assert settings.litellm_url == "http://litellm:4000/v1"
+    assert settings.litellm_api_key == "sk-litellm"
+    assert settings.litellm_model_for(vision=True) == "ollama/vision"
+    assert settings.litellm_model_for(vision=False) == "ollama/text"
+    assert settings.litellm_context_window(vision=True) == 32768
+    assert settings.litellm_context_window(vision=False) == 16384
+    assert settings.litellm_max_output_tokens(vision=True) == 2048
+    assert settings.litellm_max_output_tokens(vision=False) is None
 
 
 class FakeSMTP:

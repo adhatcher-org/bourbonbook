@@ -50,3 +50,14 @@ async def ollama_client_session():
         return
     async with httpx.AsyncClient(timeout=120) as client:
         yield client
+
+
+@asynccontextmanager
+async def litellm_client_session():
+    """Reuse the lifespan-owned HTTP client for the LiteLLM proxy.
+
+    LiteLLM is reached over plain HTTP exactly as Ollama is, so it shares one pooled client
+    rather than opening a second one per request. Tests keep a single injection point.
+    """
+    async with ollama_client_session() as client:
+        yield client

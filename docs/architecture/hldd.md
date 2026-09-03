@@ -255,7 +255,7 @@ flowchart TD
   t1 -- yes --> cached[Use cached CatalogPrice]
   t1 -- no --> t2{Qdrant enabled and\nfuzzy match >= 0.82\nvector AND string similarity?}
   t2 -- yes --> localmatch[Use matched CatalogPrice]
-  t2 -- no --> t3[Grounded web search per ANALYSIS_PROVIDER\nOpenAI hosted tool, or Ollama Cloud\nweb_search / web_fetch tool loop\nOHLQ-first, cited-source required]
+  t2 -- no --> t3[Grounded web search per ANALYSIS_PROVIDER\nOpenAI hosted tool, or Ollama Cloud\nweb_search / web_fetch tool loop\nofficial sources, cited-source required]
   t3 --> t3ok{Accepted price\nwith consulted URL?}
   t3ok -- yes --> writeback[Write back to CatalogPrice\n+ upsert Qdrant if enabled]
   t3ok -- no --> unavailable[status = unavailable]

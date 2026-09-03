@@ -42,6 +42,8 @@ def settings_for(tmp_path, provider: str) -> Settings:
         analysis_provider=provider,
         openai_api_key="test-key",
         openai_model="test-openai",
+        litellm_url="http://litellm.test/v1",
+        litellm_model="test-litellm",
     )
 
 
@@ -88,6 +90,49 @@ def test_ollama_provider_and_price_provider_boundaries(tmp_path, monkeypatch) ->
     assert asyncio.run(search_bottle_prices("Bottle", settings, size="750ml"))[0] == {"msrp": 50.0}
 
 
+def test_litellm_provider_and_price_provider_boundaries(tmp_path, monkeypatch) -> None:
+    """A LiteLLM deployment must reach the gateway module, not the direct Ollama one."""
+    settings = settings_for(tmp_path, "litellm")
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("the direct Ollama provider must not be used for litellm")
+
+    monkeypatch.setattr("bourbonbook.ollama.request_analysis", fail_if_called)
+    monkeypatch.setattr("bourbonbook.ollama_search.search_prices", fail_if_called)
+
+    async def fake_request(prompt, settings, photo=None):
+        return {"name": "From LiteLLM", "proof": 100, "abv": 50}, "complete"
+
+    async def fake_prices(name, settings, *, size=None):
+        assert size == "750ml"
+        return {"msrp": 31.0}, [], "complete"
+
+    monkeypatch.setattr("bourbonbook.litellm_provider.request_analysis", fake_request)
+    monkeypatch.setattr("bourbonbook.litellm_provider.search_prices", fake_prices)
+
+    assert asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings)).values["name"] == (
+        "From LiteLLM"
+    )
+    assert asyncio.run(analyze_bottle_name("Bottle", settings))[1] == "complete"
+    assert asyncio.run(search_bottle_prices("Bottle", settings, size="750ml"))[0] == {"msrp": 31.0}
+
+
+def test_litellm_photo_analysis_refines_like_a_local_model(tmp_path, monkeypatch) -> None:
+    """The gateway fronts the same local models, so it earns the same second pass."""
+    settings = settings_for(tmp_path, "litellm")
+    calls: list[str] = []
+
+    async def fake_request(prompt, configured_settings, photo=None):
+        calls.append("vision" if photo else "text")
+        return {"name": "Uncatalogued Bottle"}, "complete"
+
+    monkeypatch.setattr("bourbonbook.litellm_provider.request_analysis", fake_request)
+
+    asyncio.run(analyze_bottle(tmp_path / "photo.jpg", settings))
+
+    assert calls == ["vision", "text"]
+
+
 def test_openai_price_provider_is_selected(tmp_path, monkeypatch) -> None:
     settings = settings_for(tmp_path, "openai")
 
@@ -105,21 +150,24 @@ def test_unknown_price_provider_is_unavailable(tmp_path) -> None:
     assert asyncio.run(search_bottle_prices("Bottle", settings)) == ({}, [], "unavailable")
 
 
-def test_warm_analysis_model_only_dispatches_for_ollama(tmp_path, monkeypatch) -> None:
+def test_warm_analysis_model_only_dispatches_for_local_model_hosts(tmp_path, monkeypatch) -> None:
     calls: list[object] = []
 
     async def fake_warm(settings):
         calls.append(settings)
 
     monkeypatch.setattr("bourbonbook.ollama.warm_vision_model", fake_warm)
+    monkeypatch.setattr("bourbonbook.litellm_provider.warm_vision_model", fake_warm)
 
     ollama_settings = settings_for(tmp_path, "ollama")
+    litellm_settings = settings_for(tmp_path, "litellm")
     asyncio.run(warm_analysis_model(ollama_settings))
-    assert calls == [ollama_settings]
+    asyncio.run(warm_analysis_model(litellm_settings))
+    assert calls == [ollama_settings, litellm_settings]
 
     asyncio.run(warm_analysis_model(settings_for(tmp_path, "openai")))
     asyncio.run(warm_analysis_model(settings_for(tmp_path, "other")))
-    assert calls == [ollama_settings]
+    assert calls == [ollama_settings, litellm_settings]
 
 
 def test_partial_ollama_photo_analysis_refines_with_text_model_only(tmp_path, monkeypatch) -> None:

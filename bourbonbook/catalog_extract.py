@@ -52,7 +52,11 @@ SIZE_PATTERN = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(ml|l)\s*$", re.IGNORECA
 
 
 class CatalogOllamaClient(Protocol):
-    """The deliberately small interface required from an injected local Ollama client."""
+    """The deliberately small interface required from the injected vision HTTP client.
+
+    The same shape serves a direct Ollama host and a LiteLLM proxy; only the request built
+    for it differs, which is why it stays a bare ``post``.
+    """
 
     async def post(self, url: str, **kwargs: Any) -> httpx.Response: ...
 
@@ -206,6 +210,66 @@ def document_chunks(
     return chunks
 
 
+def extraction_model(settings: Settings) -> str:
+    """Return the vision model this deployment extracts catalogs with."""
+    if settings.analysis_provider == "litellm":
+        return settings.litellm_model_for(vision=True)
+    return settings.ollama_vision_model or settings.ollama_model
+
+
+def _chunk_request(settings: Settings, image: bytes) -> tuple[str, dict[str, Any], dict[str, str]]:
+    """Build the vision request for the configured provider.
+
+    Catalog extraction is a vision call like any other, so it follows ``ANALYSIS_PROVIDER``
+    rather than reaching past it to Ollama directly -- otherwise a LiteLLM-only deployment
+    would have a working add-bottle flow and a catalog importer aimed at nothing.
+    """
+    encoded = base64.b64encode(image).decode("ascii")
+    if settings.analysis_provider == "litellm":
+        from bourbonbook.litellm_provider import chat_payload, completions_url, request_headers
+
+        payload = chat_payload(
+            settings,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": CATALOG_EXTRACTION_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+                        },
+                    ],
+                }
+            ],
+            vision=True,
+            temperature=0,
+        )
+        return completions_url(settings), payload, request_headers(settings)
+    payload = {
+        "model": extraction_model(settings),
+        "prompt": CATALOG_EXTRACTION_PROMPT,
+        "images": [encoded],
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "options": {"temperature": 0, "num_ctx": settings.ollama_context_window(vision=True)},
+    }
+    return f"{settings.ollama_url}/api/generate", payload, {}
+
+
+def _chunk_output(settings: Settings, body: dict[str, Any]) -> str:
+    """Return the JSON text a vision response carried, in that provider's shape."""
+    if settings.analysis_provider == "litellm":
+        from bourbonbook.litellm_provider import message_content
+
+        return message_content(body)
+    raw = body.get("response") or body.get("thinking")
+    if not isinstance(raw, str):
+        raise TypeError("Ollama response is missing JSON output")
+    return raw
+
+
 async def extract_catalog_chunk(
     client: CatalogOllamaClient,
     settings: Settings,
@@ -216,30 +280,19 @@ async def extract_catalog_chunk(
     """Request one vision chunk with a fake-injectable client and bounded safe failures."""
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
-    model = settings.ollama_vision_model or settings.ollama_model
+    model = extraction_model(settings)
     started = time.perf_counter()
-    payload = {
-        "model": model,
-        "prompt": CATALOG_EXTRACTION_PROMPT,
-        "images": [base64.b64encode(image).decode("ascii")],
-        "stream": False,
-        "think": False,
-        "format": "json",
-        "options": {"temperature": 0, "num_ctx": settings.ollama_context_window(vision=True)},
-    }
+    url, payload, headers = _chunk_request(settings, image)
     try:
         async with asyncio.timeout(timeout_seconds):
             response = await client.post(
-                f"{settings.ollama_url}/api/generate", json=payload, timeout=timeout_seconds
+                url, json=payload, headers=headers, timeout=timeout_seconds
             )
         response.raise_for_status()
         body = response.json()
         if not isinstance(body, dict):
-            raise TypeError("Ollama response must be an object")
-        raw = body.get("response") or body.get("thinking")
-        if not isinstance(raw, str):
-            raise TypeError("Ollama response is missing JSON output")
-        result = parse_catalog_items(raw)
+            raise TypeError("Vision response must be an object")
+        result = parse_catalog_items(_chunk_output(settings, body))
     except asyncio.CancelledError:
         raise
     except TimeoutError as exc:
@@ -356,13 +409,16 @@ def _log_failure(
     started: float,
     http_status: int | None = None,
 ) -> None:
-    endpoint = urlsplit(settings.ollama_url)
+    provider = settings.analysis_provider
+    endpoint = urlsplit(
+        settings.litellm_url or "" if provider == "litellm" else settings.ollama_url
+    )
     log_event(
         logger,
         logging.WARNING,
         "catalog_extraction_chunk_failed",
         "Catalog extraction chunk failed",
-        provider="ollama",
+        provider=provider,
         operation="catalog_extraction",
         model=model,
         endpoint_scheme=endpoint.scheme or "unknown",

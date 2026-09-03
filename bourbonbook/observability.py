@@ -149,6 +149,25 @@ def ollama_usage_metadata(body: dict[str, Any]) -> UsageMetadata:
     return UsageMetadata(input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total)
 
 
+def chat_completion_usage_metadata(body: dict[str, Any]) -> UsageMetadata:
+    """Read the OpenAI chat-completions ``usage`` block returned by a LiteLLM proxy.
+
+    LiteLLM normalizes every backend -- Ollama included -- onto these field names, so the
+    counts land in the same usage ledger as the native providers instead of being lost.
+    """
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return UsageMetadata()
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    return UsageMetadata(
+        input_tokens=_optional_int(usage.get("prompt_tokens")),
+        output_tokens=_optional_int(usage.get("completion_tokens")),
+        total_tokens=_optional_int(usage.get("total_tokens")),
+        cached_input_tokens=_optional_int(cached),
+    )
+
+
 def ollama_duration_ms(body: dict[str, Any], fallback_ms: int) -> int:
     total_duration = _optional_int(body.get("total_duration"))
     if total_duration is None:

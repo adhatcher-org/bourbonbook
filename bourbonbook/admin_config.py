@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
-from bourbonbook.config import Settings
+from bourbonbook.config import Settings, openai_compatible_base
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ CONFIG_FIELDS = (
         "Analysis provider",
         "Analysis",
         "choice",
-        ("ollama", "openai"),
+        ("ollama", "openai", "litellm"),
     ),
     ConfigField("OLLAMA_URL", "ollama_url", "Ollama URL", "Analysis", "url"),
     ConfigField("OLLAMA_MODEL", "ollama_model", "Ollama fallback model", "Analysis"),
@@ -91,6 +91,89 @@ CONFIG_FIELDS = (
         "Ollama Cloud API key",
         "Analysis",
         secret=True,
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_URL",
+        "litellm_url",
+        "LiteLLM base URL (OpenAI-compatible)",
+        "Analysis",
+        "url",
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_API_KEY",
+        "litellm_api_key",
+        "LiteLLM API key",
+        "Analysis",
+        secret=True,
+        optional=True,
+    ),
+    ConfigField("LITELLM_MODEL", "litellm_model", "LiteLLM fallback model", "Analysis"),
+    ConfigField(
+        "LITELLM_VISION_MODEL",
+        "litellm_vision_model",
+        "LiteLLM vision model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_TEXT_MODEL",
+        "litellm_text_model",
+        "LiteLLM text model",
+        "Analysis",
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_NUM_CTX",
+        "litellm_num_ctx",
+        "LiteLLM fallback/text context window",
+        "Analysis",
+        "integer",
+        minimum=1,
+    ),
+    ConfigField(
+        "LITELLM_VISION_NUM_CTX",
+        "litellm_vision_num_ctx",
+        "LiteLLM vision context window",
+        "Analysis",
+        "integer",
+        minimum=1,
+    ),
+    ConfigField(
+        "LITELLM_TEXT_NUM_CTX",
+        "litellm_text_num_ctx",
+        "LiteLLM text context window",
+        "Analysis",
+        "integer",
+        minimum=1,
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_MAX_TOKENS",
+        "litellm_max_tokens",
+        "LiteLLM fallback max output tokens",
+        "Analysis",
+        "integer",
+        minimum=1,
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_VISION_MAX_TOKENS",
+        "litellm_vision_max_tokens",
+        "LiteLLM vision max output tokens",
+        "Analysis",
+        "integer",
+        minimum=1,
+        optional=True,
+    ),
+    ConfigField(
+        "LITELLM_TEXT_MAX_TOKENS",
+        "litellm_text_max_tokens",
+        "LiteLLM text max output tokens",
+        "Analysis",
+        "integer",
+        minimum=1,
         optional=True,
     ),
     ConfigField("QDRANT_URL", "qdrant_url", "Qdrant URL", "Pricing", "url", optional=True),
@@ -551,6 +634,8 @@ def parse_config_form(
     candidate.validate_identity()
     if candidate.analysis_provider == "openai" and not candidate.openai_api_key:
         raise ValueError("OPENAI_API_KEY is required when ANALYSIS_PROVIDER=openai")
+    if candidate.analysis_provider == "litellm" and not candidate.litellm_url:
+        raise ValueError("LITELLM_URL is required when ANALYSIS_PROVIDER=litellm")
     return values, candidate
 
 
@@ -583,6 +668,11 @@ def _parse_field(field: ConfigField, raw: str) -> tuple[Any, str]:
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise ValueError(f"{field.key} must be a valid HTTP or HTTPS URL.")
         raw = raw.rstrip("/")
+        if field.key == "LITELLM_URL":
+            # Normalize here as well as in Settings.from_env, so the value the admin sees
+            # saved is the one the running process will use rather than a bare origin that
+            # only grows its /v1 suffix on the next restart.
+            raw = openai_compatible_base(raw) or raw
     if field.kind == "email" and ("@" not in raw or raw.startswith("@") or raw.endswith("@")):
         raise ValueError(f"{field.key} must be a valid email address.")
     if field.key == "SESSION_SECRET" and len(raw) < 32:

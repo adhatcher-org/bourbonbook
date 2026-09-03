@@ -1341,86 +1341,65 @@ def test_admin_can_save_validated_configuration_and_secrets_are_masked(
     assert reloaded.openai_model == "gpt-test"
 
 
-def test_admin_config_round_trips_the_ollama_structured_output_switch(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The rollout switch must be flippable and rollback-able through the admin surface."""
-    client, app = make_client(tmp_path)
-    with client:
-        register(client, "admin")
-        promote_admin(app, "admin@example.com")
-
-        page = client.get("/admin/config")
-        assert "Ollama structured output" in page.text
-
-        enabled = client.post(
-            "/admin/config",
-            data={
-                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="true"),
-                "csrf_token": csrf(page),
-            },
-        )
-        assert enabled.status_code == 200
-        assert read_managed_config(tmp_path / ".env")["OLLAMA_STRUCTURED_OUTPUT"] == "true"
-
-        disabled = client.post(
-            "/admin/config",
-            data={
-                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="false"),
-                "csrf_token": csrf(page),
-            },
-        )
-        assert disabled.status_code == 200
-
-    # The byte on disk is JSON-quoted; assert the decoded round trip, not the raw line.
-    assert read_managed_config(tmp_path / ".env")["OLLAMA_STRUCTURED_OUTPUT"] == "false"
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    assert Settings.from_env().ollama_structured_output is False
-
-
-def test_admin_config_rejects_an_unparseable_structured_output_value(tmp_path: Path) -> None:
+def test_admin_config_requires_a_litellm_url_for_the_litellm_provider(tmp_path: Path) -> None:
+    """Selecting the gateway without an endpoint would silently disable analysis."""
     client, app = make_client(tmp_path)
     with client:
         register(client, "admin")
         promote_admin(app, "admin@example.com")
         page = client.get("/admin/config")
-
         response = client.post(
             "/admin/config",
             data={
-                **config_form(app, OLLAMA_STRUCTURED_OUTPUT="maybe"),
+                **config_form(app, ANALYSIS_PROVIDER="litellm", LITELLM_URL=""),
                 "csrf_token": csrf(page),
             },
         )
 
         assert response.status_code == 400
-        assert "OLLAMA_STRUCTURED_OUTPUT must be true or false" in response.text
+        assert "LITELLM_URL is required" in response.text
         assert not (tmp_path / ".env").exists()
 
 
-def test_ollama_structured_output_is_not_a_secret_field() -> None:
-    field = next(f for f in CONFIG_FIELDS if f.key == "OLLAMA_STRUCTURED_OUTPUT")
-
-    assert field.secret is False
-    assert field.optional is False
-    assert field.kind == "boolean"
-    assert field.group == "Analysis"
-
-
-def test_admin_config_page_renders_with_a_quoted_managed_boolean(
+def test_admin_config_saves_litellm_roles_and_normalizes_a_bare_origin(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """The baseline column parses os.environ directly, quotes and all."""
-    monkeypatch.setenv("OLLAMA_STRUCTURED_OUTPUT", '"true"')
     client, app = make_client(tmp_path)
     with client:
         register(client, "admin")
         promote_admin(app, "admin@example.com")
-
         page = client.get("/admin/config")
+        response = client.post(
+            "/admin/config",
+            data={
+                **config_form(
+                    app,
+                    ANALYSIS_PROVIDER="litellm",
+                    LITELLM_URL="http://litellm:4000",
+                    LITELLM_MODEL="ollama/fallback",
+                    LITELLM_VISION_MODEL="ollama/vision",
+                    LITELLM_VISION_NUM_CTX="32768",
+                    LITELLM_VISION_MAX_TOKENS="2048",
+                ),
+                "csrf_token": csrf(page),
+                "LITELLM_API_KEY": "sk-litellm-secret",
+            },
+        )
+        assert response.status_code == 200
+        assert "Configuration saved" in response.text
+        assert "sk-litellm-secret" not in response.text
 
-        assert page.status_code == 200
-        assert "Ollama structured output" in page.text
+    stored = read_managed_config(tmp_path / ".env")
+    assert stored["LITELLM_URL"] == "http://litellm:4000/v1"
+    assert stored["LITELLM_API_KEY"] == "sk-litellm-secret"
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    reloaded = Settings.from_env()
+    assert reloaded.analysis_provider == "litellm"
+    assert reloaded.litellm_url == "http://litellm:4000/v1"
+    assert reloaded.litellm_model_for(vision=True) == "ollama/vision"
+    assert reloaded.litellm_model_for(vision=False) == "ollama/fallback"
+    assert reloaded.litellm_max_output_tokens(vision=True) == 2048
 
 
 def test_admin_config_rejects_invalid_choices_without_writing(tmp_path: Path) -> None:

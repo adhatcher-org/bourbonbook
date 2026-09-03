@@ -11,6 +11,7 @@ docker run -d \
   --name bourbonbook \
   --rm \
   --network bridge \
+  --add-host litellm:192.168.50.4 \
   -p 8000:8000 \
   --env DATA_DIR=/data \
   --volume "$HOST_DATA_DIR:/data" \

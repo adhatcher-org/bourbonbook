@@ -116,7 +116,7 @@ Behavior:
   canonicalized into a `consulted_urls` set; `_extract_prices()` accepts the model's `msrp` only if
   it is a real number (explicitly rejecting `bool`) *and* its `msrp_source_url` is in that set.
 - **Prompt reuse**: the same `analysis.price_search_prompt()` as the OpenAI branch, with
-  `TOOL_USE_INSTRUCTIONS` appended, so both providers are held to the same OHLQ-first,
+  `TOOL_USE_INSTRUCTIONS` appended, so both providers are held to the same official-source,
   exact-size, single-USD-value contract.
 - **Failure handling**: `httpx.HTTPError`, `KeyError`, `TypeError`, and `json.JSONDecodeError` are
   caught and classified through the shared `ollama.failure_context()` helper; the log records

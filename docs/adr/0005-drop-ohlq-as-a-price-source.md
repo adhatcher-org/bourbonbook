@@ -1,6 +1,6 @@
 # ADR 0005: Drop OHLQ as a Grounded Price Source
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-02
 
 This ADR narrows [ADR 0002](0002-local-first-pricing-catalog.md), which established the shared

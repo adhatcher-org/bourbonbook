@@ -1,10 +1,13 @@
 # Component Design: AI Analysis Orchestration
 
 Modules: `bourbonbook/analysis.py`, `bourbonbook/ollama.py`, `bourbonbook/ollama_search.py`,
-`bourbonbook/openai_provider.py`, `bourbonbook/provider_clients.py`
+`bourbonbook/openai_provider.py`, `bourbonbook/litellm_provider.py`,
+`bourbonbook/product_attributions.py`, `bourbonbook/provider_clients.py`
 Related: [HLDD](../hldd.md) · [Pricing & catalog](pricing-and-catalog.md) ·
 [Model evaluation & benchmarking](model-evaluation-and-benchmarking.md) ·
-[ADR 0003: Fixed Local Model, No Benchmark Gate](../../adr/0003-fixed-local-model-no-benchmark-gate.md)
+[ADR 0003: Fixed Local Model, No Benchmark Gate](../../adr/0003-fixed-local-model-no-benchmark-gate.md) ·
+[ADR 0004: Source-Grounded Product Attributions](../../adr/0004-source-grounded-product-attributions.md) ·
+[ADR 0006: LiteLLM Gateway Provider](../../adr/0006-litellm-gateway-provider.md)
 
 ## Responsibility
 
@@ -18,16 +21,18 @@ grounded price search; when and whether that search runs is the pricing componen
 
 There are two dispatch points, both keyed on the same global `settings.analysis_provider` (one
 setting for the whole app, never per-request) and both returning a defined answer for any
-unrecognized value:
+unrecognized value. [ADR 0006](../../adr/0006-litellm-gateway-provider.md) added `litellm` as a
+third value:
 
-| Function | `openai` | `ollama` | other/unset |
-| --- | --- | --- | --- |
-| `analysis._request_provider_analysis()` | `openai_provider.request_analysis` | `ollama.request_analysis` | `({}, "unavailable")` |
-| `analysis.search_bottle_prices()` | `openai_provider.search_prices` | `ollama_search.search_prices` | `({}, [], "unavailable")` |
+| Function | `openai` | `ollama` | `litellm` | other/unset |
+| --- | --- | --- | --- | --- |
+| `analysis._request_provider_analysis()` | `openai_provider.request_analysis` | `ollama.request_analysis` | `litellm_provider.request_analysis` | `({}, "unavailable")` |
+| `analysis.search_bottle_prices()` | `openai_provider.search_prices` | `ollama_search.search_prices` | `litellm_provider.search_prices` | `({}, [], "unavailable")` |
 
-Adapters are imported lazily inside each branch so neither provider's client library is required at
+Adapters are imported lazily inside each branch so no provider's client library is required at
 import time. `analysis.warm_analysis_model()` is a third, smaller dispatch: it pre-loads the vision
-model for Ollama only, because OpenAI has no model-load cost to hide.
+model for the two local-model providers (Ollama directly, LiteLLM via a one-token completion),
+because OpenAI has no model-load cost to hide.
 
 Price search being provider-dispatched is a change from the earlier design, where it was OpenAI-only
 regardless of `ANALYSIS_PROVIDER`. Both branches must stay implemented — a pricing path that only
@@ -41,16 +46,18 @@ works under OpenAI is a regression against the local-first direction.
 2. On empty results, returns immediately with `"unavailable"`.
 3. `enrich_from_verified_catalog()` merges in any hardcoded `VERIFIED_PRODUCTS` match
    (`catalog.py`) by exact alias or OCR-substring match, forcing `status="verified"` when it hits.
-4. **Ollama-only refinement**: if required fields (`MISSING_FIELDS`) are still empty, a second
-   text-only Ollama pass runs using the transcribed `ocr_text` as context. OpenAI results are never
-   re-refined this way — its structured output is treated as sufficiently complete in one pass.
+4. **Local-model refinement**: if required fields (`MISSING_FIELDS`) are still empty, a second
+   text-only pass runs using the transcribed `ocr_text` as context. The gate is
+   `analysis.uses_local_models()`, not a bare `== "ollama"` test, so LiteLLM earns the same second
+   pass — it fronts the same local models. Metered remote APIs get one pass: OpenAI results are
+   never re-refined this way, since its structured output is treated as sufficiently complete.
 
 ## `analyze_bottle_name(name, settings)`
 
 Same shape for name-only entry: checks the verified catalog first (short-circuits immediately on a
 hit), otherwise calls the provider with an "ungrounded lookup" prompt that explicitly forbids
-inventing barrel-specific facts and forces `msrp` null, merges, re-checks the catalog, and (Ollama
-only) runs the same refinement pass.
+inventing barrel-specific facts and forces `msrp` null, merges, re-checks the catalog, and (local
+providers only) runs the same refinement pass.
 
 ## Field normalization
 
@@ -83,9 +90,11 @@ only) runs the same refinement pass.
   and vision warm-up use `OLLAMA_VISION_NUM_CTX` (default `32768`). Name analysis, refinement, and
   Ollama price chat use `OLLAMA_TEXT_NUM_CTX` when set, otherwise `OLLAMA_NUM_CTX` (default `4096`).
   All configured values are positive integers and are managed by the admin configuration screen.
-- `request_analysis()` POSTs to `{OLLAMA_URL}/api/generate` with `format: "json"`, `think: false`,
+- `request_analysis()` POSTs to `{OLLAMA_URL}/api/generate` with `think: false`,
   `temperature: 0.1`, the role-resolved `num_ctx`, and a base64-encoded image when a photo is
-  supplied. Uses the shared/one-off `httpx.AsyncClient` from
+  supplied. `format` is `analysis_schema(photo=...)` — a full JSON Schema — when
+  `OLLAMA_STRUCTURED_OUTPUT` is enabled, and the unconstrained `"json"` when it is not. The switch
+  ships **disabled**; enabling it is gated on an operator probe of their own Ollama version. Uses the shared/one-off `httpx.AsyncClient` from
   `provider_clients.ollama_client_session()` (120s timeout).
 - Failures (`httpx.HTTPError`, `KeyError`/`TypeError`, `json.JSONDecodeError`, `OSError`) are
   classified by `failure_context()`/`connection_reason()` into a bounded `failure_kind`
@@ -134,9 +143,51 @@ Behavior:
   provider/operation/model/duration and a bounded error type — see
   [Observability & operations](observability-and-operations.md).
 
+### LiteLLM gateway (`litellm_provider.py`)
+
+The third provider, added by [ADR 0006](../../adr/0006-litellm-gateway-provider.md). It speaks
+OpenAI-compatible `/chat/completions` to a self-hosted proxy at `LITELLM_URL`, which in practice
+fronts the same local Ollama models the direct path reaches — so it is a *peer* of `ollama.py`, not
+a transport option on it.
+
+- **Gate**: no `LITELLM_URL` → `({}, "unavailable")` with a warning, mirroring the other adapters.
+  `Settings` additionally refuses to start when `ANALYSIS_PROVIDER=litellm` and `LITELLM_URL` is
+  unset.
+- **Auth**: `Authorization: Bearer` is sent only when `LITELLM_API_KEY` is set — a self-hosted proxy
+  may legitimately run with no master key, so the header is omitted rather than sent empty.
+- **Per-gateway configuration**: `litellm_model_for()`, `litellm_context_window()`, and
+  `litellm_max_output_tokens()` resolve vision/text roles independently of the `OLLAMA_*` keys.
+  `num_ctx` is passed through as an Ollama-native option that LiteLLM forwards to the backing model;
+  a future proxy that drops unrecognized parameters would silently fall back to the model default.
+- **Output constraint**: `chat_payload()` sends `response_format: {"type": "json_object"}` for
+  analysis, and no `response_format` at all for the price-chat tool loop and the vision warm-up.
+  This is weaker than the direct-Ollama path's JSON Schema, so the two local-model providers do not
+  currently constrain output equally.
+- **Response reading**: `message_content()` requires a non-empty `choices[0].message.content` and
+  raises `TypeError` otherwise.
+
+## Source-grounded product attributions (`product_attributions.py`)
+
+[ADR 0004](../../adr/0004-source-grounded-product-attributions.md) permits *bounded* automatic
+filling of two fields — `distilled_by` and `mash_bill` — from grounded web search, and this module
+is where that boundary lives.
+
+- **Shared cache with a TTL**: results are keyed by `product_key` + `field` in
+  `product_attribution_facts` and reused across users for `TTL = 365 days`. A miss or a stale row
+  dispatches to the provider's `search_product_attributions` adapter (`ollama_search` or
+  `openai_provider`).
+- **Provenance is the guard**: `bottle_attribution_provenance` records the `authority` behind each
+  bottle's value. `_may_automate()` consults it, so a hand-verified or verified-catalog value is
+  never overwritten by a later grounded result — the exact defect PR #74 fixed after review found
+  the name-mode re-analysis path stamping catalog provenance as `provider_recall`.
+- **Grounding, not recall**: `valid_result()` rejects placeholder values (`""`, `"unknown"`,
+  `"n/a"`, ...) and enforces per-field length limits; `canonical_public_url()` normalizes the cited
+  source URL.
+- It operates on a caller-supplied `Session` and never opens its own.
+
 `provider_clients.py` provides context-var-backed shared HTTP clients
-(`openai_client_session()`/`ollama_client_session()`) so tests and benchmark tooling can inject a
-fake client, and so a single request-scoped client is reused rather than opened per call.
+(`openai_client_session()`/`ollama_client_session()`/`litellm_client_session()`) so tests and
+benchmark tooling can inject a fake client, and so a single request-scoped client is reused rather than opened per call.
 
 ## Manual-fallback guarantee
 

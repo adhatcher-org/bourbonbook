@@ -1,7 +1,7 @@
 # Component Design: Persistence & Migrations
 
 Modules: `bourbonbook/database.py`, `bourbonbook/models.py`, `bourbonbook/migrations.py`,
-`migrations/versions/0001`-`0009`
+`migrations/versions/0001`-`0011`
 Related: [HLDD](../hldd.md) · [C3 Components](../c3-components.md)
 
 ## Responsibility
@@ -27,7 +27,7 @@ startup.
 
 ## Schema (`models.py`)
 
-Eight tables:
+Ten tables:
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -36,16 +36,19 @@ Eight tables:
 | `bottles` | `owner_id` FK, ~25 collection-tracking columns, `on_shopping_list`, `status`, `fill_level`, `analysis_status`, `processing_stage` (indexed), `processing_error` | `UniqueConstraint(owner_id, photo_name)`; `estimated_value` is a computed property (`msrp or purchase_price, times quantity`), not a stored column |
 | `price_sources` | `bottle_id` FK, `kind`, `title`, `url`, `basis`, `checked_at` | Per-bottle price evidence; ordered by `kind` on load |
 | `catalog_prices` | `product_key` + `size_key` (unique together), `msrp`, `title`, `url`, `basis`, `checked_at` | Shared, cross-user MSRP cache — see [Pricing & catalog](pricing-and-catalog.md) and ADR 0002 |
+| `product_attribution_facts` | `product_key` + `field` (unique together), `value`, `outcome`, `title`, `url`, `basis`, `checked_at` | Shared, cross-user grounded producer/mash-bill cache with a 365-day TTL (`product_attributions.TTL`) — see [AI analysis](ai-analysis.md) and ADR 0004 |
+| `bottle_attribution_provenance` | `bottle_id` FK (`CASCADE`) + `field` (unique together), `authority`, `observed_at`, `fact_id` FK (`SET NULL`) | Per-bottle record of where each attribution came from; `authority` is what protects a hand-verified value from being overwritten |
 | `catalog_import_batches` | `created_by_user_id` FK, `state` (indexed), `requested_price_updated_at`, `source_file_count`, `attempt_count`, `lease_expires_at` (indexed), `error_summary`, `applied_at` | Durable import job state; see [Catalog import pipeline](catalog-import.md) |
 | `catalog_import_proposals` | `batch_id` FK (`CASCADE`), `position` (unique with `batch_id`), `included`, `name`, `product_key` (indexed), `size_key`, `msrp`, `price_updated_at`, `validation_error` | Editable extracted rows; **never** a user bottle and never a price until applied |
 | `api_usage` | `provider`, `operation`, `model`, `success`, `error_type`, `duration_ms`, token-count columns, `user_id` FK (`SET NULL`) | AI/API usage ledger; deliberately excludes prompts/responses/PII |
 
 `Bottle.estimated_value` is the only computed (non-persisted) property on any model.
 
-Two columns carry enum-like values that are defined in Python but stored as plain `String`, so the
-database will not reject a bad value: `Bottle.processing_stage`
-(`bottle_processing.BottleProcessingStage`) and `CatalogImportBatch.state`
-(`catalog_imports.CatalogImportState`). The integrity guarantee for the latter comes from
+Several columns carry enum-like values that are defined in Python but stored as plain `String`, so
+the database will not reject a bad value: `Bottle.processing_stage`
+(`bottle_processing.BottleProcessingStage`), `CatalogImportBatch.state`
+(`catalog_imports.CatalogImportState`), and the attribution tables' `field`/`outcome`/`authority`
+columns (`product_attributions`). The integrity guarantee for the latter comes from
 `transition_batch()` and the predicated `UPDATE`s in the routes and worker, not from a constraint.
 
 ## Schema evolution
@@ -61,11 +64,13 @@ database will not reject a bad value: `Bottle.processing_stage`
 | `0007_catalog_prices` | New `catalog_prices` table, backfilled from existing OHLQ-sourced `price_sources` rows |
 | `0008_catalog_import_persistence` | New `catalog_import_batches` and `catalog_import_proposals` tables (+ indexes) |
 | `0009_bottle_processing_stage` | `bottles.processing_stage` (`NOT NULL`, `server_default="idle"`, indexed) and `bottles.processing_error` |
+| `0010_bottle_lifecycle_dates` | `bottles.date_bottled` and `bottles.date_purchased` (both nullable `Date`) |
+| `0011_product_attributions` | New `product_attribution_facts` and `bottle_attribution_provenance` tables (+ indexes) |
 
 `HEAD_REVISION` in `migrations.py` is kept in sync with the latest file
-(`"0009_bottle_processing_stage"`) and is what `/readyz` compares against. `0009` is the pattern to
-copy for a new non-nullable column: a `server_default` so existing rows migrate without a backfill
-pass, added via `op.add_column` on SQLite.
+(`"0011_product_attributions"`) and is what `/readyz` compares against. `0009` is still the pattern
+to copy for a new non-nullable column: a `server_default` so existing rows migrate without a
+backfill pass, added via `op.add_column` on SQLite.
 
 `EXPECTED_SCHEMA` in `migrations.py` deliberately does **not** track these later tables — it
 describes the *pre-Alembic legacy* shape (`users`, `bottles`, `price_sources` as they existed at

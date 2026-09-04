@@ -1,6 +1,6 @@
 # ADR 0006: LiteLLM Gateway as a Third Analysis Provider
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-02
 
 This ADR extends [ADR 0001](0001-current-architecture-baseline.md)'s two-provider analysis boundary

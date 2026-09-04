@@ -46,6 +46,8 @@ flowchart LR
       ollama_mod[ollama.py]
       ollama_search[ollama_search.py]
       openai_mod[openai_provider.py]
+      litellm_mod[litellm_provider.py]
+      attributions[product_attributions.py]
     end
 
     subgraph pricing["Pricing and catalog"]
@@ -93,6 +95,7 @@ flowchart LR
   ollama[Ollama - self-hosted]
   ollama_cloud[Ollama Cloud search/fetch]
   openai[OpenAI]
+  litellm[LiteLLM gateway]
   qdrant[(Qdrant - optional)]
   prometheus[Prometheus]
   loki[(Loki)]
@@ -121,10 +124,16 @@ flowchart LR
   analysis --> ollama_search
   provider_clients --> ollama_mod
   provider_clients --> openai_mod
+  provider_clients --> litellm_mod
+  analysis --> litellm_mod
   ollama_mod --> ollama
   ollama_search --> ollama
   ollama_search --> ollama_cloud
   openai_mod --> openai
+  litellm_mod --> litellm
+  routes --> attributions
+  attributions --> ollama_search
+  attributions --> openai_mod
   qdrant_mod --> qdrant
 
   admin_routes --> admin_config
@@ -140,6 +149,7 @@ flowchart LR
   import_worker --> catalog_extract
   import_worker --> catalog_uploads
   catalog_extract --> ollama_mod
+  catalog_extract --> litellm_mod
   catalog_uploads --> import_sources
   catalog_imports --> database
   import_worker --> database
@@ -170,7 +180,7 @@ flowchart LR
 ## Notes
 
 - `main.py` owns the app assembly and route registration; it is by far the largest module
-  (~2,780 lines, roughly a third of the Python in `bourbonbook/`) and directly hosts most route
+  (~2,950 lines, roughly a third of the Python in `bourbonbook/`) and directly hosts most route
   handlers plus the pricing-orchestration helper functions (`refresh_prices`,
   `cached_catalog_price`, `qdrant_catalog_price`, `cache_catalog_price`, `apply_user_purchase_price`)
   rather than delegating them to `catalog.py`. Because those helpers live in `main.py`,
@@ -198,8 +208,8 @@ flowchart LR
   `main.py`'s `refresh_prices()` orchestration. See
   [ADR 0002](../adr/0002-local-first-pricing-catalog.md).
 - The grounded-search tier is **provider-dispatched**, not OpenAI-only:
-  `analysis.search_bottle_prices()` selects `openai_provider.search_prices()` or
-  `ollama_search.search_prices()` from `ANALYSIS_PROVIDER`. `ollama_search.py` is the newer of the
+  `analysis.search_bottle_prices()` selects `openai_provider.search_prices()`,
+  `ollama_search.search_prices()`, or `litellm_provider.search_prices()` from `ANALYSIS_PROVIDER`. `ollama_search.py` is the newer of the
   two and is the one component that talks to two different Ollama endpoints — the self-hosted
   `OLLAMA_URL` for `/api/chat`, and Ollama Cloud for the `web_search`/`web_fetch` tool calls the
   model emits.
@@ -209,6 +219,19 @@ flowchart LR
   lease-guarded single-lane worker), and `catalog_extract.py` (chunked screenshot/PDF extraction via
   Ollama vision). `catalog_extract.py` is also still reachable from
   `scripts/extract_catalog_screenshots.py`, so it has both an in-app and an offline caller.
+- `litellm_provider.py` is the **third** analysis provider, added by
+  [ADR 0006](../adr/0006-litellm-gateway-provider.md): an OpenAI-compatible `/chat/completions`
+  client aimed at a self-hosted LiteLLM proxy (`LITELLM_URL`) that fronts the same local models
+  `ollama.py` reaches directly. It is a separate provider rather than a transport flag on
+  `ollama.py` precisely so model names, context windows, and token budgets stay per-gateway facts.
+  `catalog_extract.py` also calls into it directly for price-sheet extraction, so it has both an
+  analysis and an extraction caller.
+- `product_attributions.py` owns the bounded automatic producer/mash-bill grounding permitted by
+  [ADR 0004](../adr/0004-source-grounded-product-attributions.md). It resolves `distilled_by` and
+  `mash_bill` against the shared `product_attribution_facts` cache (365-day TTL), falls back to the
+  provider's `search_product_attributions` adapter, and records per-bottle authority in
+  `bottle_attribution_provenance` so a hand-verified value is never overwritten by a later grounded
+  result. It persists through a caller-supplied `Session` rather than opening its own.
 - `provider_clients.py` holds the shared, request-scoped `httpx`/`AsyncOpenAI` client instances used
   by both provider adapters and by `catalog_extract.py`/CLI tooling. A `provider_client_context`
   HTTP middleware binds them into context vars for the duration of each request; the import worker
@@ -218,7 +241,7 @@ flowchart LR
   unless-stopped`) to bring the process back up with the new config.
 - `database.py`, `models.py`, and `migrations.py` form the persistence layer; `migrations.py`'s
   `bootstrap_database()` safely handles fresh, pre-Alembic, and already-versioned databases.
-  `HEAD_REVISION` is `0009_bottle_processing_stage`.
+  `HEAD_REVISION` is `0011_product_attributions`.
 - `observability.py`, `logging_config.py`, and `email.py` handle metrics, structured/redacted
   logging, AI usage accounting, and observed email delivery (capture in development, SMTP in
   production).

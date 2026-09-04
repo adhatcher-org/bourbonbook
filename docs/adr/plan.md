@@ -96,7 +96,9 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A12 | Add user-authorized manual and browser-assisted imports | Deferred | `codex/manual-source-import` | No import session, authorized upload route, artifact parser, or browser-assisted helper is present. |
 | A13 | Complete end-to-end evaluation and Unraid operations | Deferred | `codex/pricing-pipeline-validation` | Phase 1 benchmark tooling and current Docker health documentation exist; the finished pricing-pipeline evaluation and operations gate is outstanding. |
 | A14 | Bottle instances, editable barrel details, and lifecycle dates | Complete | `codex/bottle-editability-lifecycle-dates` | [PR #68](https://github.com/adhatcher-org/bourbonbook/pull/68) (draft); lifecycle persistence, per-role context windows, and explicit empty/recorded/clear date UX are complete. `make pr-review` passed (338 tests); independent browser check passed; reviewer and validator passed at `43b88a5`. |
-| A15 | Constrain Ollama bottle-analysis output | In progress | `codex/ollama-structured-output` | Adds `OLLAMA_STRUCTURED_OUTPUT` (default **disabled**) and an explicit JSON Schema on the local analysis request. Step 0 probe passed on Ollama **0.32.13** with `qwen3-vl:8b`; that version is the stated minimum-version prerequisite for enabling the switch. |
+| A15 | Constrain Ollama bottle-analysis output | Complete | `codex/ollama-structured-output` | [PR #70](https://github.com/adhatcher-org/bourbonbook/pull/70) and [PR #71](https://github.com/adhatcher-org/bourbonbook/pull/71) merged 2026-08-25. Adds `OLLAMA_STRUCTURED_OUTPUT` and an explicit JSON Schema on the local analysis request; the switch ships **disabled** (`config.py` default `False`, `.env.example` `false`). Step 0 probe passed on Ollama **0.32.13** with `qwen3-vl:8b`; that version is the stated minimum-version prerequisite for enabling the switch. **One gate remains open before enabling**: a p95 latency observation on real photo payloads — do not enable above 60s. |
+| A16 | Source-grounded producer and mash-bill attributions | Complete | `codex/a16-source-grounded-attributions` | Implemented at `5343223`, landed via [PR #74](https://github.com/adhatcher-org/bourbonbook/pull/74) on 2026-08-27 after `bourbonbook-reviewer` returned **FAIL** on the first candidate for stamping verified-catalog provenance as `provider_recall` in the name-mode re-analysis path; [PR #75](https://github.com/adhatcher-org/bourbonbook/pull/75) followed with CI lint and deterministic A16 test fixes. Governed by [ADR 0004](0004-source-grounded-product-attributions.md); adds `product_attributions.py` and migration `0011_product_attributions`. |
+| A17 | Match a new photo to an already-owned bottle | **Retired — withdrawn before shipping (2026-08-28)** | `codex/photo-instance-match` | Built and independently verified, but never opened as a pull request. Withdrawn on measurement: six of eight photo fixtures read a fill level below 90, so the owner-confirmation prompt would have fired far more often than the design assumed. The branch retains three unmerged commits; the collision analysis and the W0 measurement design remain reusable. Per the tracker convention the row stays and the ID is **not** recycled. |
 
 ## Implementation Audit
 
@@ -1236,7 +1238,8 @@ PR and status update succeed, create a new Codex session for the next Incomplete
 
 ### A16 — Source-grounded producer and mash-bill attributions
 
-**Status:** In progress. Add exact-product, field-level SQLite facts with source provenance for
+**Status:** Complete — merged via PR #74 (2026-08-27), with PR #75 following for CI lint and
+deterministic tests. Retained below for the design rationale. Add exact-product, field-level SQLite facts with source provenance for
 `distilled_by` and `mash_bill`; run after catalog enrichment and before pricing, never fetching
 web pages. Automatic application is limited by [ADR 0004](0004-source-grounded-product-attributions.md)
 to blank or provider-recall values and only to evidence whose title and canonical public URL came

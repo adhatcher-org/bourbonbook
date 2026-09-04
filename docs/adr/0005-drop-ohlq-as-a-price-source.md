@@ -90,4 +90,4 @@ grounded web search entirely (plan.md P2-03), or if per-provider source lists ar
 ## Cross-links
 
 - [ADR 0002: Local-First Pricing Catalog](0002-local-first-pricing-catalog.md)
-- [ADR 0004: LiteLLM Gateway Provider](0004-litellm-gateway-provider.md)
+- [ADR 0006: LiteLLM Gateway Provider](0006-litellm-gateway-provider.md)

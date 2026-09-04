@@ -24,3 +24,6 @@ See also:
 - [ADR 0001: Current Architecture Baseline](../../adr/0001-current-architecture-baseline.md)
 - [ADR 0002: Local-First Pricing Catalog](../../adr/0002-local-first-pricing-catalog.md)
 - [ADR 0003: Fixed Local Model Selection, No Benchmark Gate](../../adr/0003-fixed-local-model-no-benchmark-gate.md)
+- [ADR 0004: Source-Grounded Product Attributions](../../adr/0004-source-grounded-product-attributions.md) (Proposed)
+- [ADR 0005: Drop OHLQ as a Grounded Price Source](../../adr/0005-drop-ohlq-as-a-price-source.md) (Proposed)
+- [ADR 0006: LiteLLM Gateway as a Third Analysis Provider](../../adr/0006-litellm-gateway-provider.md) (Proposed)

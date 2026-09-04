@@ -27,6 +27,7 @@ flowchart LR
   ollama[Ollama - self-hosted]
   ollama_cloud[Ollama Cloud web_search / web_fetch]
   openai[OpenAI]
+  litellm[LiteLLM gateway]
   qdrant[(Qdrant - optional sidecar/service)]
   smtp[SMTP relay]
   prometheus[Prometheus]
@@ -44,6 +45,7 @@ flowchart LR
   app --> ollama
   app --> ollama_cloud
   app --> openai
+  app --> litellm
   app --> qdrant
   app --> smtp
 
@@ -73,10 +75,15 @@ flowchart LR
   (never exposed through the public SWAG route). It is optional infrastructure: every Qdrant call in
   the app degrades to a no-op on timeout/HTTP error, and the whole collection can be rebuilt from
   SQLite at any time via `make price-catalog-reindex`.
-- External services (self-hosted Ollama, Ollama Cloud, OpenAI, Qdrant, SMTP,
-  Prometheus/Promtail/Loki) stay outside the app container boundary. Ollama Cloud is reached over
-  the public internet and is only contacted when `ANALYSIS_PROVIDER=ollama` and `OLLAMA_API_KEY` is
-  set — it is not part of the self-hosted Ollama deployment.
+- External services (self-hosted Ollama, Ollama Cloud, OpenAI, a self-hosted LiteLLM gateway,
+  Qdrant, SMTP, Prometheus/Promtail/Loki) stay outside the app container boundary. Ollama Cloud is
+  reached over the public internet and is only contacted when `OLLAMA_API_KEY` is set and
+  `ANALYSIS_PROVIDER` is `ollama` or `litellm` — grounded search stays Ollama Cloud's even when the
+  chat model is proxied. It is not part of the self-hosted Ollama deployment.
+- The **LiteLLM gateway** (`LITELLM_URL`) is typically another container on the same host that
+  fronts the same Ollama instance, but it is a separate deployable with its own configuration and
+  is modelled as an external system — see
+  [ADR 0006](../adr/0006-litellm-gateway-provider.md).
 
 ## Cross-links
 

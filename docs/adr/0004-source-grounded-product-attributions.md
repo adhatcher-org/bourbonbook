@@ -1,6 +1,6 @@
 # ADR 0004: Permit bounded automatic source-grounded product attributions
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-25
 
 ## Decision

@@ -42,7 +42,7 @@ reverse proxy the operator already runs for other services.
   (`static/app.js`) handles previews, the add-bottle progress poller, the empty-bottle confirm
   dialog, catalog-import review bulk selection, and share-link copy-to-clipboard. A lightweight
   service worker caches only the static shell for offline installability, not application data.
-- **Application/domain logic**: mostly inside `bourbonbook/main.py` (~2,780 lines) as route handlers
+- **Application/domain logic**: mostly inside `bourbonbook/main.py` (~2,950 lines) as route handlers
   plus a set of module-level orchestration functions (form parsing, pricing tiers, catalog lookups),
   supported by focused single-purpose modules (`auth.py`, `identity.py`, `tokens.py`,
   `rate_limit.py`, `photos.py`, `analysis.py`, `bottle_processing.py`, `catalog.py`,
@@ -55,10 +55,11 @@ reverse proxy the operator already runs for other services.
   pipeline (`bottle_processing.py`), and one lifespan-owned `asyncio` worker task that drains the
   durable catalog-import queue (`catalog_import_worker.py`). There is no Redis, Celery, or external
   scheduler.
-- **AI providers**: pluggable analysis provider (Ollama local vision/text models, or OpenAI
-  structured outputs), selected globally via `ANALYSIS_PROVIDER`. Grounded price research follows
-  the same setting: OpenAI's hosted web-search tool, or Ollama's tool-calling loop against Ollama
-  Cloud's `/api/web_search` and `/api/web_fetch`. Either way it is the last tier, gated behind the
+- **AI providers**: pluggable analysis provider — Ollama local vision/text models, OpenAI
+  structured outputs, or a self-hosted LiteLLM gateway fronting the same local models
+  ([ADR 0006](../adr/0006-litellm-gateway-provider.md)) — selected globally via
+  `ANALYSIS_PROVIDER`. Grounded price research follows the same setting: OpenAI's hosted web-search
+  tool, or a tool-calling loop against Ollama Cloud's `/api/web_search` and `/api/web_fetch`. Either way it is the last tier, gated behind the
   local-first pricing cache (ADR 0002).
 - **Deployment**: one Docker image, one container, `restart: unless-stopped`, all state under
   `/data`. See [C2 Containers](c2-containers.md).
@@ -75,7 +76,7 @@ section is a map, not the full detail.
 | [Identity & sessions](components/identity-and-sessions.md) | `auth.py`, `identity.py`, `tokens.py`, `rate_limit.py` | Password auth, signed-cookie sessions, CSRF, email verification, password reset, session invalidation, rate limiting |
 | [Persistence & migrations](components/persistence-and-migrations.md) | `database.py`, `models.py`, `migrations.py`, `migrations/versions/*` | SQLAlchemy engine/session, ORM models, Alembic bootstrap across fresh/legacy/versioned databases |
 | [Bottle, shopping-list & sharing workflow](components/bottle-workflow.md) | `main.py` (bottle/shopping-list/sharing/avatar routes), `photos.py`, `bottle_processing.py` | Bottle CRUD, photo upload/normalization, the staged async add-bottle pipeline, shopping list, collection sharing, avatar upload |
-| [AI analysis orchestration](components/ai-analysis.md) | `analysis.py`, `ollama.py`, `ollama_search.py`, `openai_provider.py`, `provider_clients.py` | Provider dispatch (analysis and grounded price search), prompt construction, field normalization, manual-fallback behavior |
+| [AI analysis orchestration](components/ai-analysis.md) | `analysis.py`, `ollama.py`, `ollama_search.py`, `openai_provider.py`, `litellm_provider.py`, `product_attributions.py`, `provider_clients.py` | Provider dispatch (analysis and grounded price search) across three providers, prompt construction, field normalization, bounded source-grounded attributions, manual-fallback behavior |
 | [Pricing & catalog](components/pricing-and-catalog.md) | `catalog.py`, `qdrant_prices.py`, `catalog_cli.py`, pricing helpers in `main.py` | Local-first MSRP cache, optional Qdrant fuzzy match, verified-product short-circuit (see ADR 0002) |
 | [Catalog import pipeline](components/catalog-import.md) | `catalog_uploads.py`, `catalog_imports.py`, `catalog_import_worker.py`, `catalog_extract.py` | Durable, review-first admin ingestion of price sheets: bounded upload staging, a leased single-lane extraction worker, and an atomic apply into `catalog_prices` |
 | [Model evaluation & benchmarking](components/model-evaluation-and-benchmarking.md) | `benchmark_cli.py`, `model_evaluation.py` | Offline accuracy/latency benchmarking of local Ollama models; optional/non-blocking since ADR 0003 retired its use as a model-adoption gate |
@@ -85,8 +86,8 @@ section is a map, not the full detail.
 
 ## 5. Data Model
 
-Eight tables, all in one SQLite database (`bourbonbook.db`), owned by nine Alembic migrations
-(`0001`-`0009`). Full detail in [Persistence & migrations](components/persistence-and-migrations.md).
+Ten tables, all in one SQLite database (`bourbonbook.db`), owned by eleven Alembic migrations
+(`0001`-`0011`). Full detail in [Persistence & migrations](components/persistence-and-migrations.md).
 
 ```mermaid
 erDiagram
@@ -95,6 +96,8 @@ erDiagram
   USERS ||--o{ API_USAGE : "attributed to (optional)"
   USERS ||--o{ CATALOG_IMPORT_BATCHES : "created by (admin)"
   BOTTLES ||--o{ PRICE_SOURCES : "has evidence"
+  BOTTLES ||--o{ BOTTLE_ATTRIBUTION_PROVENANCE : "attribution source"
+  PRODUCT_ATTRIBUTION_FACTS ||--o{ BOTTLE_ATTRIBUTION_PROVENANCE : "cited by"
   CATALOG_IMPORT_BATCHES ||--o{ CATALOG_IMPORT_PROPOSALS : "proposes"
 
   USERS {
@@ -166,6 +169,23 @@ erDiagram
     float msrp
     date price_updated_at
     string validation_error
+  }
+  PRODUCT_ATTRIBUTION_FACTS {
+    int id PK
+    string product_key
+    string field
+    string value
+    string outcome
+    string url
+    datetime checked_at
+  }
+  BOTTLE_ATTRIBUTION_PROVENANCE {
+    int id PK
+    int bottle_id FK
+    string field
+    string authority
+    int fact_id FK
+    datetime observed_at
   }
   API_USAGE {
     int id PK
@@ -266,9 +286,12 @@ flowchart TD
 
 Tier 3 is provider-dispatched by `analysis.search_bottle_prices()`, mirroring
 `ANALYSIS_PROVIDER`: `openai_provider.search_prices()` uses OpenAI's hosted web-search tool, while
-`ollama_search.search_prices()` runs a bounded four-round tool-calling loop over Ollama Cloud's
-`/api/web_search` and `/api/web_fetch` (requires `OLLAMA_API_KEY`; returns `unavailable` without
-one). Both accept a price only when the model's claimed source URL is one it actually consulted.
+`ollama_search.search_prices()` and `litellm_provider.search_prices()` each run a bounded
+tool-calling loop over Ollama Cloud's `/api/web_search` and `/api/web_fetch`. Both of the latter
+require `OLLAMA_API_KEY` and return `unavailable` without it — search stays Ollama Cloud's even when
+the chat model is proxied, so a gateway-only deployment with no key has no tier 3 at all
+([ADR 0006](../adr/0006-litellm-gateway-provider.md)). Every branch accepts a price only when the
+model's claimed source URL is one it actually consulted.
 
 ### 6.3.1 Catalog import (durable, review-first)
 
@@ -468,9 +491,9 @@ Recorded here for transparency rather than silently left implicit:
 - [ADR 0001: Current Architecture Baseline](../adr/0001-current-architecture-baseline.md)
 - [ADR 0002: Local-First Pricing Catalog](../adr/0002-local-first-pricing-catalog.md)
 - [ADR 0003: Fixed Local Model Selection, No Benchmark Gate](../adr/0003-fixed-local-model-no-benchmark-gate.md)
-- [ADR 0004: Source-Grounded Product Attributions](../adr/0004-source-grounded-product-attributions.md) (Proposed)
-- [ADR 0005: Drop OHLQ as a Grounded Price Source](../adr/0005-drop-ohlq-as-a-price-source.md) (Proposed)
-- [ADR 0006: LiteLLM Gateway as a Third Analysis Provider](../adr/0006-litellm-gateway-provider.md) (Proposed)
+- [ADR 0004: Source-Grounded Product Attributions](../adr/0004-source-grounded-product-attributions.md)
+- [ADR 0005: Drop OHLQ as a Grounded Price Source](../adr/0005-drop-ohlq-as-a-price-source.md)
+- [ADR 0006: LiteLLM Gateway as a Third Analysis Provider](../adr/0006-litellm-gateway-provider.md)
 - [C1 System Context](c1-system-context.md) / [C2 Containers](c2-containers.md) / [C3 Components](c3-components.md) / [C4 Code](c4-code.md)
 - [Component design docs](components/)
 - [Phase 2 roadmap (plan.md)](../adr/plan.md)

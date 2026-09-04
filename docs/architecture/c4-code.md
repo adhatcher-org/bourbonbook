@@ -3,6 +3,8 @@
 Rendered SVG: [c4-code.svg](diagrams/c4-code.svg)  
 Baseline ADR: [ADR 0001](../adr/0001-current-architecture-baseline.md)
 Pricing-catalog ADR: [ADR 0002](../adr/0002-local-first-pricing-catalog.md)
+Attribution ADR: [ADR 0004](../adr/0004-source-grounded-product-attributions.md)
+Gateway-provider ADR: [ADR 0006](../adr/0006-litellm-gateway-provider.md)
 
 This code view shows the principal modules and symbols that make the current application work. It
 is intentionally focused on the implemented runtime path, not roadmap-only features (see
@@ -54,6 +56,9 @@ flowchart LR
     openai_prices["openai_provider.search_prices()"]
     web_source_urls["openai_provider.web_source_urls()"]
     ollama_prices["ollama_search.search_prices()"]
+    litellm_request["litellm_provider.request_analysis()"]
+    litellm_prices["litellm_provider.search_prices()"]
+    resolve_attr["product_attributions.resolve_attributions()"]
   end
 
   subgraph importing["Catalog import pipeline"]
@@ -115,6 +120,7 @@ flowchart LR
   ollama[Ollama - self-hosted]
   ollama_cloud[Ollama Cloud search/fetch]
   openai[OpenAI]
+  litellm[LiteLLM gateway]
   qdrant[(Qdrant - optional)]
   smtp[SMTP relay]
 
@@ -181,10 +187,15 @@ flowchart LR
 
   analyze_bottle --> ollama_request
   analyze_bottle --> openai_request
+  analyze_bottle --> litellm_request
   analyze_bottle --> verified_product
   analyze_name --> ollama_request
   analyze_name --> openai_request
+  analyze_name --> litellm_request
   analyze_name --> verified_product
+  litellm_request --> litellm
+  resolve_attr --> ollama_prices
+  resolve_attr --> openai_prices
   openai_request --> normalize_analysis
 
   refresh_prices --> cached_catalog_price
@@ -198,9 +209,12 @@ flowchart LR
   apply_user_price --> qdrant_upsert
   search_prices --> openai_prices
   search_prices --> ollama_prices
+  search_prices --> litellm_prices
   openai_prices --> web_source_urls
   ollama_prices --> ollama
   ollama_prices --> ollama_cloud
+  litellm_prices --> litellm
+  litellm_prices --> ollama_cloud
 
   bootstrap_admin --> issue_verification
   issue_verification --> issue_token

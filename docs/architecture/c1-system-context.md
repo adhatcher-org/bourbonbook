@@ -3,6 +3,7 @@
 Rendered SVG: [c1-system-context.svg](diagrams/c1-system-context.svg)  
 Baseline ADR: [ADR 0001](../adr/0001-current-architecture-baseline.md)
 Pricing-catalog ADR: [ADR 0002](../adr/0002-local-first-pricing-catalog.md)
+Gateway-provider ADR: [ADR 0006](../adr/0006-litellm-gateway-provider.md)
 
 This context view shows the people and external systems Bourbon Book currently interacts with. It
 includes the shipped local-first pricing/catalog subsystem (SQLite catalog cache + optional
@@ -24,6 +25,7 @@ flowchart LR
   ollama[Ollama - self-hosted vision/text]
   ollama_cloud[Ollama Cloud web_search / web_fetch]
   openai[OpenAI analysis + web search]
+  litellm[LiteLLM gateway]
   qdrant[(Qdrant - optional)]
   smtp[SMTP relay]
   prometheus[Prometheus]
@@ -37,6 +39,7 @@ flowchart LR
   app --> ollama
   app --> ollama_cloud
   app --> openai
+  app --> litellm
   app --> qdrant
   app --> smtp
 
@@ -55,6 +58,12 @@ flowchart LR
   `ollama_search.py`: when `ANALYSIS_PROVIDER=ollama`, the model's `web_search`/`web_fetch` tool
   calls are executed against Ollama Cloud's HTTP API with `OLLAMA_API_KEY`. Without that key,
   Ollama-provider price search returns `unavailable` rather than falling through to OpenAI.
+- **LiteLLM** (`LITELLM_URL`, optionally `LITELLM_API_KEY`) is a self-hosted OpenAI-compatible
+  gateway used when `ANALYSIS_PROVIDER=litellm`. It is a distinct external system even though it
+  usually fronts the same local models as the direct Ollama path — see
+  [ADR 0006](../adr/0006-litellm-gateway-provider.md). Its `web_search`/`web_fetch` tool calls are
+  still executed against Ollama Cloud and still need `OLLAMA_API_KEY`, so a gateway-only deployment
+  without that key has no grounded price search.
 - OpenAI is used for grounded bottle analysis and price research when `ANALYSIS_PROVIDER=openai`.
   Grounded price search — from either provider — only runs when the local catalog and Qdrant have
   no acceptable match.

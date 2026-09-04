@@ -1,4 +1,4 @@
-# ADR 0004: LiteLLM Gateway as a Third Analysis Provider
+# ADR 0006: LiteLLM Gateway as a Third Analysis Provider
 
 Status: Proposed
 Date: 2026-09-02
@@ -81,8 +81,12 @@ are normally enforced.
 - Requests now depend on LiteLLM's parameter forwarding for `num_ctx`. If a future LiteLLM drops
   unrecognized parameters by default, the context window would silently fall back to the model
   default; the symptom would be truncated long prompts, not an error.
-- A gateway-only deployment with no `OLLAMA_API_KEY` has no web price search at all. That is a
-  deliberate narrowing, not a regression: an ungrounded price is worse than no price.
+- A gateway-only deployment with no `OLLAMA_API_KEY` has no web price search at all, because
+  Ollama Cloud is the only search backend this ADR contemplates. That is a deliberate narrowing,
+  not a regression: an ungrounded price is worse than no price. The narrowing is scoped to the
+  single-backend design and is reopened by the proposed *Aggregated Retailer Listings as Market
+  Price* ADR, which puts search behind a backend seam with a keyless primary; if that is accepted,
+  this consequence no longer holds and should be amended again to point at it.
 - `OLLAMA_URL` stays required by the admin form even for a LiteLLM deployment, matching the existing
   behavior for an OpenAI one. Tightening that is a separate change.
 
@@ -110,3 +114,4 @@ This ADR is narrowed or superseded by a future ADR if the application:
 - [ADR 0001: Current Architecture Baseline](0001-current-architecture-baseline.md)
 - [ADR 0002: Local-First Pricing Catalog](0002-local-first-pricing-catalog.md)
 - [ADR 0003: Fixed Local Model Selection](0003-fixed-local-model-no-benchmark-gate.md)
+- [ADR 0005: Drop OHLQ as a Grounded Price Source](0005-drop-ohlq-as-a-price-source.md) — merged in the same change; 0005 links back here

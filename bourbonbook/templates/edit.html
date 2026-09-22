@@ -42,7 +42,7 @@
       <label>Size<input name="size" value="{{ bottle.size }}" placeholder="750ml"></label><label>Age statement<input name="age_statement" value="{{ bottle.age_statement }}" placeholder="e.g. 10 Year"></label>
     </div></section>
     <section class="form-section"><div class="section-heading"><span>02</span><h2>Valuation &amp; status</h2></div>
-      <fieldset class="status-picker"><legend>Status</legend>{% for option in ['Empty','Opened','Unopened'] %}<label><input type="radio" name="status" value="{{ option }}" {{ 'checked' if bottle.status == option }}><span>{{ option }}</span></label>{% endfor %}</fieldset>
+      <fieldset class="status-picker"><legend>Status</legend>{% for option in ['Empty','Opened','Unopened'] %}<label><input type="radio" name="status" value="{{ option }}" {{ 'checked' if bottle.status == option }}><span>{{ option }}</span></label>{% endfor %}</fieldset><div class="sr-only" role="status" aria-live="polite" data-status-live></div>
       <label class="range-field"><span>Fill level <output data-fill-output>{{ bottle.fill_level }}%</output></span><input name="fill_level" type="range" min="0" max="100" step="5" value="{{ bottle.fill_level }}" data-fill-range></label>
       <div class="field-grid valuation-fields">
         <label class="purchase-price-field">Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="{{ bottle.purchase_price if bottle.purchase_price is not none else '' }}" inputmode="decimal"></label>

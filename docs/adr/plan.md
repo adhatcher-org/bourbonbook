@@ -99,6 +99,7 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
 | A15 | Constrain Ollama bottle-analysis output | Complete | `codex/ollama-structured-output` | [PR #70](https://github.com/adhatcher-org/bourbonbook/pull/70) and [PR #71](https://github.com/adhatcher-org/bourbonbook/pull/71) merged 2026-08-25. Adds `OLLAMA_STRUCTURED_OUTPUT` and an explicit JSON Schema on the local analysis request; the switch ships **disabled** (`config.py` default `False`, `.env.example` `false`). Step 0 probe passed on Ollama **0.32.13** with `qwen3-vl:8b`; that version is the stated minimum-version prerequisite for enabling the switch. **One gate remains open before enabling**: a p95 latency observation on real photo payloads — do not enable above 60s. |
 | A16 | Source-grounded producer and mash-bill attributions | Complete | `codex/a16-source-grounded-attributions` | Implemented at `5343223`, landed via [PR #74](https://github.com/adhatcher-org/bourbonbook/pull/74) on 2026-08-27 after `bourbonbook-reviewer` returned **FAIL** on the first candidate for stamping verified-catalog provenance as `provider_recall` in the name-mode re-analysis path; [PR #75](https://github.com/adhatcher-org/bourbonbook/pull/75) followed with CI lint and deterministic A16 test fixes. Governed by [ADR 0004](0004-source-grounded-product-attributions.md); adds `product_attributions.py` and migration `0011_product_attributions`. |
 | A17 | Match a new photo to an already-owned bottle | **Retired — withdrawn before shipping (2026-08-28)** | `codex/photo-instance-match` | Built and independently verified, but never opened as a pull request. Withdrawn on measurement: six of eight photo fixtures read a fill level below 90, so the owner-confirmation prompt would have fired far more often than the design assumed. The branch retains three unmerged commits; the collision analysis and the W0 measurement design remain reusable. Per the tracker convention the row stays and the ID is **not** recycled. |
+| A23 | Fill level drives bottle status on the edit form | Incomplete | `codex/fill-level-drives-status` | Planned 2026-09-22; `architecture-critic` returned **APPROVE** in round 2, and Aaron approved the plan on 2026-09-22. Decisions: keep A23; choosing a status moves the slider and Opened restores the last level (1d); client-only, with no server enforcement and no ADR (A); a polite status live region, with a pre-authorized fill-level fallback (B, B+); gaps 1–2 get their own actions later; the focus fix stays in scope. The work is client-side only: the slider and status sync, the live region, the status-picker focus rule, and `CACHE` v8. No route, schema, or migration change. The ID skips A18–A22 deliberately; the section explains why. |
 
 ## Implementation Audit
 
@@ -1205,6 +1206,397 @@ one.
   instead -- see "Round-4 revision" in `docs/ollama-structured-output-plan.md`. A separate
   operational note: on this endpoint the switch was verified working end to end on 2026-08-23,
   returning a complete, schema-conforming 20-field object.
+
+## A23 — Fill Level Drives Bottle Status on the Edit Form
+
+### Goal
+
+Make Status follow the fill-level slider while the user moves it, before saving. This applies on
+both **Edit bottle** and the new-bottle **Review details** step, which share
+`bourbonbook/templates/edit.html`. The rule is a fixed requirement from Aaron (2026-09-22):
+
+| Fill level | Status |
+| --- | --- |
+| 100% | Unopened |
+| Above 0% and below 100% (5–95% at the slider's 5% step) | Opened |
+| 0% | Empty |
+
+Today the two controls are independent:
+
+- `edit.html` renders the `input[name="status"]` radios and the `input[data-fill-range]` slider.
+- `bourbonbook/static/app.js` couples them only one way: choosing Empty moves the slider to 0%.
+- `update_bottle_from_form` in `bourbonbook/main.py` saves `status` and `fill_level` separately.
+
+So a user who pours from a new bottle and drags the slider to 80% saves Unopened at 80% unless they
+also switch Status, and the library's status chip then disagrees with its fill bar. Provider
+analysis couples the two in `normalize_analysis`, but it snaps any estimate of 90% or more to
+100%/Unopened, which contradicts this rule. So it is neither reused nor changed.
+
+Source: the vault feature note "Fill Level Drives Bottle Status" (2026-09-22), verified against
+`main` at `a8f534c`.
+
+### Dependencies
+
+None.
+
+**Why the ID is A23.** IDs A18–A22 are skipped on purpose:
+
+- A18 is reserved for LiteLLM structured-output parity, which adds its own tracker row when it is
+  implemented (commit `72c1869`).
+- The numbering note in the A18 plan earmarks A19–A22 for the market-price program. Its unapproved
+  draft still carries A17–A20 and ADR 0007.
+
+Aaron kept A23 at the plan gate (D0). The branch name contains no ID.
+
+### Plan-Gate Decisions (2026-09-22)
+
+Aaron approved this plan on 2026-09-22 with the answers below. The reasons are recorded so a later
+change doesn't unknowingly undo a decision.
+
+- **D0 — The action ID is A23.** The market-price earmark on A19–A22 stands.
+- **Q1 — Choosing a status moves the slider, and choosing Opened restores the last level (1d).**
+  - Unopened → 100%. Empty → 0%.
+  - Opened, chosen while the slider is at 0% or 100%, restores the last level seen in the 5–95%
+    range. That value starts as the loaded value when it is in range, and every in-range `input`
+    updates it. If no such value has been seen, Opened falls back to 95% from 100% or 5% from 0%.
+  - Opened chosen within 5–95% leaves the slider where it is.
+  - *Why:*
+    - After any interaction, the two controls can't disagree.
+    - Exploring the picker, including arrowing through its radio group, doesn't lose the fill
+      level.
+    - It fixes today's Empty → Opened round trip, which leaves a bottle Opened at 0%.
+  - *Accepted cost:* "opened but not yet poured" (Opened at 100%) can't be recorded. The rule
+    already implies that.
+- **Q2 — Client-only: the server does not enforce the rule (A).** `update_bottle_from_form`,
+  `save_bottle`, and `refresh_bottle_analysis` are unchanged, so there is no ADR.
+  - *Why:* nothing is derived on page load, so every save that doesn't touch these controls posts
+    the stored pair back. A server rule would therefore also act on untouched rows at their next
+    unrelated save.
+  - Contradictory stored pairs already exist:
+    - manual edits: Unopened at 80%, or Opened at 0%;
+    - provider analysis: Opened or Empty at 100% (a null fill keeps the model's status and the
+      column default);
+    - Opened at 1–2%, which the step-5 slider displays as 0%.
+  - On such rows, full server derivation would open the Empty dialog unexpectedly or silently take
+    an Empty bottle off the shopping list.
+  - *If a server backstop is ever wanted,* the safe variant is a boundary rule between Unopened and
+    Opened, applied only when the posted `fill_level` differs from the stored value. It must never
+    create or remove Empty, and it must be recorded in its own ADR.
+- **Q3 — A polite live region announces automatic changes, with B+ pre-authorized (B).**
+  - A pre-rendered, empty, visually hidden polite live region sits next to the status fieldset,
+    outside it.
+  - It reads "Status changed to <Status>." only when slider movement changes the status. It is
+    never written on page load or by a status choice. A status choice clears it, so a repeated
+    automatic change is announced again.
+  - When a status choice moves the slider, the existing `<output>` readout (implicit role `status`)
+    is expected to speak the new fill level. The required VoiceOver pass confirms it.
+  - If the pass shows the fill level isn't spoken, apply the B+ fallback in W3 without returning to
+    the architect.
+- **D4 — Gaps 1 and 2 below get their own actions, planned after A23's draft PR is open.** No IDs
+  are assigned now. Each gets its own design, a critic pass, and the next free ID at that time.
+  Gaps 3 and 4 are recorded only.
+- **D5 — The status-picker focus fix stays in A23, as W4.**
+
+### Scope and Exclusions
+
+- **Client-side only (Q2).** The change touches `app.js`, one element in `edit.html`, one rule in
+  `app.css`, the `sw.js` cache version, and tests. It makes no route, schema, migration,
+  configuration, provider, or `.env.example` change.
+- **Provider paths are untouched.** `normalize_analysis` and every provider path stay as they are.
+  Provider analysis (photo, name, and refinement passes) keeps its 90% snap, and on re-analysis it
+  can overwrite a pair the slider set. That is intended.
+- **No backfill of stored rows.** Reconciling them would move bottles that are Opened at 0% onto the
+  shopping list, and take Empty bottles above 0% off it, without the owner's choice.
+- **The dialog is not modified.** "What should happen to this bottle?" stays as it is.
+- **No-JS behavior is unchanged.** With JavaScript off, or on a page still running the previously
+  cached `app.js`, the form behaves exactly as it does today.
+
+### Acceptance Criteria
+
+Checked in a real browser unless marked otherwise.
+
+1. **AC1** Given Edit bottle for an Unopened bottle at 100%, when the slider moves to any value
+   from 5% to 95%, then Opened is checked and Unopened is not, before any save.
+2. **AC2** Given any status, when the slider reaches 0%, then Empty is checked.
+3. **AC3** Given any status, when the slider reaches 100%, then Unopened is checked.
+4. **AC4** Given Empty at 0%, when the slider moves to any value from 5% to 95%, then Opened is
+   checked.
+5. **AC5** Given the slider stepped 100% → 0% → 100% in 5% steps, with an `input` event after each
+   step, then after every step the checked status matches the rule.
+6. **AC6** Given the slider has keyboard focus, when the user presses ArrowLeft, ArrowRight, Home,
+   or End, then the status follows the rule and focus stays on the slider.
+7. **AC7** Given a bottle stored as non-Empty, when the slider is moved to 0% and either Save
+   button is pressed, then "What should happen to this bottle?" opens and nothing is posted.
+   - "Add to shopping list" lands on `/shopping-list` with the bottle listed.
+   - "Remove from collection" deletes the bottle and lands on `/`.
+   - Cancel leaves Empty checked and the slider at 0%.
+8. **AC8** Given any fill level, when the user chooses Empty, then the slider and readout show 0%,
+   no `input` event reaches the slider, and the console shows no errors.
+9. **AC9** Given a stored Unopened at 60%, when the page loads, then Unopened stays checked and the
+   readout shows 60% until the user interacts.
+10. **AC10** AC1–AC9 also hold on Review details (`/bottles/{id}/edit?new=1`).
+11. **AC11** *(integration)* Without JavaScript, the server saves the posted pair exactly as it does
+    today, and the existing test suite passes unmodified.
+12. **AC12** `sw.js` reads `CACHE = 'bourbon-book-v8'`, a one-line diff. A fresh client's
+    `caches.keys()` returns only `bourbon-book-v8`, and the client is served the new `app.js`. The
+    upgrade from v7 relies on the unchanged `activate` purge.
+13. **AC13** Given Opened at 60%, when Unopened is chosen, then the slider moves to 100%.
+14. **AC14** When Opened is chosen, the slider ends as follows:
+
+    | Starting state | Action | Slider ends at |
+    | --- | --- | --- |
+    | Opened at 60% | Unopened, then Opened | 60% |
+    | Opened at 60% | Empty, then Opened | 60% |
+    | Opened at 60%, then moved to 35% | Unopened, then Opened | 35% |
+    | Loaded at 100%, no in-range value seen | Opened | 95% |
+    | Jumped to 0% with Home, no in-range value seen | Opened | 5% |
+    | Stored Unopened at 60% | Opened | 60% |
+15. **AC15** When slider movement changes the status, the live region names the new status.
+    - A manual choice or a page load writes nothing to the region.
+    - After a manual choice, the next automatic change is written again, even if it names the same
+      status.
+    - The VoiceOver pass records what is spoken for a slider move that changes the status, and for
+      a status choice that moves the slider.
+    - If the B+ fallback is applied (W3), a status choice that moves the slider writes the new
+      fill level to the region instead of clearing it.
+16. **AC16** An axe-core scan of the edit page at both viewports reports no violation involving the
+    status picker, the slider, or the live region.
+17. **AC17** Keyboard focus on a status radio shows a visible outline around its segment.
+
+### Expected Files
+
+- `bourbonbook/static/app.js`
+- `bourbonbook/templates/edit.html`
+- `bourbonbook/static/app.css` (W4)
+- `bourbonbook/static/sw.js`
+- `tests/test_quality_routes.py`
+- `docs/adr/plan.md` (this tracker row)
+
+### Individual Implementation Instructions
+
+**Design rules for every work item:**
+
+1. **One pure mapping function.** A single client function maps a slider value to a status: 0 →
+   Empty, 100 → Unopened, anything else → Opened.
+2. **The sync never calls `dispatchEvent`.**
+   - Status changes set `radio.checked` directly.
+   - Slider changes set `value` and call the existing readout/track render function directly.
+   - This replaces the current `dispatchEvent(new Event('input'))` in the Empty-radio handler.
+   - Because neither handler can re-enter the other, the known Empty-radio/slider recursion cannot
+     happen. (That recursion is unbounded synchronous re-entry that ends in a stack overflow.)
+3. **Derive status on any `input` event on the slider.** The app itself never dispatches one. Do
+   not filter on `event.isTrusted`, because the browser journey drives the slider with synthetic
+   events.
+4. **Derive and announce nothing on page load.** A stored contradictory pair stays as stored until
+   the user moves the slider or chooses a status. Loading a page must never change data the user
+   did not touch, and must never open the Empty dialog during an unrelated edit.
+5. **Never move focus as a side effect.** An automatic status change leaves focus on the slider,
+   and a status choice leaves it on the radio.
+6. **Leave the save flow unchanged.** An Empty reached by the slider checks the Empty radio. The
+   existing submit handler then opens the dialog, and the server's became-Empty guard stays
+   authoritative.
+
+**Work items:**
+
+| WI | Work | Verification |
+| --- | --- | --- |
+| W1 | The mapping function; slider → status sync; nothing on load; no synthetic events (`app.js`). | `vux-tester` J1–J5 and J10–J11; the existing suite passes unmodified (AC11). |
+| W2 | Status → slider sync (Q1): Unopened → 100%; Empty → 0%; Opened from 0% or 100% restores the remembered 5–95% level, otherwise 95% (from 100%) or 5% (from 0%); Opened within 5–95% leaves the slider alone. Replace the Empty handler's synthetic `input` with a direct render call (`app.js`). | `vux-tester` J6–J7. |
+| W3 | The status live region (Q3): one empty `.sr-only` element with `role="status"` and `aria-live="polite"`, next to the status fieldset and outside it. Write its text with `textContent`, from the closed status set only (`edit.html`, `app.js`). | W6 markup test; `vux-tester` J8 and J12; the **required** VoiceOver pass. |
+| W4 | Status-picker focus (D5): one `app.css` rule giving `.status-picker input:focus-visible+span` a 2px `var(--amber)` outline with an offset. Follow the `.brand-trigger:focus-visible` precedent, and use the token, never a hex value. | W6 CSS test; `vux-tester` J13. |
+| W5 | Bump `CACHE` in `sw.js` from `bourbon-book-v7` to `bourbon-book-v8`. | Manual: `git diff bourbonbook/static/sw.js` shows exactly that one line. `vux-tester` J9. |
+| W6 | Contract tests in `tests/test_quality_routes.py`, for both `/bottles/{id}/edit` and `?new=1`. See the list below the table. | TestClient integration tests in `make test` and `make coverage`. |
+
+W6's contract tests check that:
+
+- the page renders three `name="status"` radios (Empty, Opened, Unopened) and the range with
+  `data-fill-range`, `min="0"`, `max="100"`, and `step="5"`;
+- it renders exactly one empty `.sr-only` live region with the script hook;
+- `app.js` contains the mapping function and hooks (precedent: `tests/test_admin.py:554`);
+- `app.css` contains the W4 rule (precedent: `tests/test_admin.py:107`).
+
+**B+ fallback (pre-authorized; W3).** Apply it only if the required VoiceOver pass shows that the
+fill change caused by a status choice isn't spoken.
+
+- **What changes:** when a status choice moves the slider, the same region reads
+  "Fill level set to <N>%." instead of being cleared. A status choice that doesn't move the slider
+  (Opened within 5–95%) still clears the region.
+- **What stays the same:** the markup, W6, and every other rule.
+- **Verification:** re-run J8 and J8+, then have Aaron repeat step 3 of the manual check.
+
+**Verification environment.** The engineer prepares this with Bash, because `vux-tester` has no
+Bash.
+
+1. Create a throwaway `DATA_DIR` outside the repository and outside
+   `~/Development/bourbonbook/data`. That directory is Aaron's real data, and it is the default for
+   both `make run_local` and `run-docker.sh`.
+2. Write a minimal `.env` in the throwaway directory. It must set `DATA_DIR` to that absolute path
+   and `APP_ENV=development`. Never copy the real `.env`, and never use `.env.example`'s
+   `DATA_DIR=./data`.
+3. At the candidate commit, run `make run_local DATA_DIR=<throwaway>` in the background.
+4. Seed a verified dev user directly in the throwaway SQLite database, using a scratch script that
+   is never committed. Seed these bottles:
+   - B1: Unopened at 100%
+   - B2: Opened at 60%
+   - B3: Opened at 60%
+   - B4: Unopened at 60%
+5. The orchestrating session dispatches `vux-tester` with the base URL, the credentials, the bottle
+   IDs, and J1–J13 at 390×844 and 1280×800. The console must stay error-free throughout.
+6. Keep the instance running until Aaron's VoiceOver pass is done. Then stop the server and delete
+   the throwaway directory.
+
+**Commit binding.** The journey runs against the same candidate commit that `bourbonbook-reviewer`
+and `pr-validator` check, and the PR cites its SHA. Any later fix re-runs the affected J steps.
+
+**`vux-tester` journey.** Every keyboard step starts by focusing the slider with Tab or
+`element.focus()`. Never click a range: a click moves its thumb, and clicking a radio moves focus to
+that radio.
+
+- **J1** *(B1, fresh load)* Focus the slider and press ArrowLeft. Expect 95%, Opened checked, and
+  `document.activeElement` still the slider.
+- **J2** With the slider still focused: Home → 0%, Empty. ArrowRight → 5%, Opened. End → 100%,
+  Unopened.
+- **J3** Use `browser_evaluate` to step `value` 100 → 0 → 100 by 5, dispatching `input` after each
+  step, and record the checked status each time.
+- **J4** *(B4)* On load, Unopened is checked and the readout shows 60%.
+- **J5** Repeat J1–J2 on `/bottles/{B1}/edit?new=1`.
+- **J6** Install a counter for `input` events on the slider, then click Empty. Expect the slider and
+  readout at 0%, a count of 0, and a clean console.
+- **J7** Run these sequences, checking where the slider ends:
+
+  | Setup | Actions | Expected slider |
+  | --- | --- | --- |
+  | B2 | Choose Unopened, then Opened | 100%, then 60% |
+  | B2, continuing | Choose Empty, then Opened | 0%, then 60% |
+  | B2, continuing | Focus the slider, ArrowLeft ×5, then choose Unopened, then Opened | 35%, 100%, 35% |
+  | B1, reloaded | Choose Opened | 95% |
+  | B1, reloaded | Focus the slider, press Home, then choose Opened | 0%, then 5% |
+  | B4, fresh load | Choose Opened | stays at 60% |
+- **J8** *(B1, fresh load)*
+  1. The live region is empty.
+  2. Focus the slider and press ArrowLeft. The region reads "Status changed to Opened."
+  3. Click Unopened. The region is cleared.
+  4. Focus the slider again and press ArrowLeft. A MutationObserver records a new write naming
+     Opened.
+- **J8+** *(only if the B+ fallback is applied; B1, fresh load)* J10 and J11 change B2 and B3, so
+  this step uses B1.
+  1. Click Opened. The region reads "Fill level set to 95%."
+  2. Click Empty. It reads "Fill level set to 0%."
+  3. Click Unopened. It reads "Fill level set to 100%."
+  4. Focus the slider and press ArrowLeft. It reads "Status changed to Opened."
+- **J9** On a fresh client, `caches.keys()` returns `["bourbon-book-v8"]`, and `/static/app.js`
+  contains the sync code.
+- **J10** *(B2, fresh load)*
+  1. Focus the slider and press Home. Expect 0% and Empty.
+  2. Click the header Save. The dialog opens and the URL is unchanged.
+  3. Choose Cancel. The page still shows Empty at 0%.
+  4. Click Save again and choose "Add to shopping list". The browser lands on `/shopping-list`,
+     which lists B2.
+- **J11** *(B3)* Focus the slider and press Home. Click the bottom "Save bottle", then choose
+  "Remove from collection". The browser lands on `/`, and B3 is gone.
+- **J12** Run axe-core on the edit page at both viewports.
+- **J13** Using the keyboard only, Tab into the status group. At both viewports, a screenshot shows
+  a visible focus outline on the focused segment.
+
+**Required manual check.** Aaron runs this himself, because a person has to hear the speech. Use macOS Safari with VoiceOver (Cmd+F5) against the throwaway instance, on B1's edit page.
+
+1. Focus the slider and press Left Arrow once. Expect the value, then "Status changed to Opened."
+2. Press Right Arrow once. Expect the value, then "Status changed to Unopened."
+3. Choose Opened in the Status group. Expect no "Status changed" announcement. Record whether the
+   fill change to 95% is spoken.
+
+Record what was spoken in the PR.
+
+- If the fill change from step 3 is not spoken, apply the B+ fallback (W3). Then re-run J8 and
+  J8+, and have Aaron repeat step 3: expect "Fill level set to 95%."
+- If the `<output>` readout crowds out or duplicates the announcement, halt and return to the
+  architect. Do not remove roles to work around it.
+
+**Optional, after deploy.** On iPhone Safari or the installed PWA, drag the thumb slowly from 100%
+to 0% and back on any bottle's edit page, then press Cancel without saving. Status should update
+during the drag. This check is optional because browsers natively fire `input` while a range is
+dragged, and J3 exercises the handler on that same event stream.
+
+**Rejected verification tooling:**
+
+- A jsdom harness would add a second language toolchain to CI.
+- `pytest-playwright` would add a dev dependency, browser binaries in CI, and CI job changes, all
+  for about 40 lines of script. That is a tooling decision in its own right.
+
+### Known Pre-existing Gaps (Not in This Action)
+
+These were found while verifying the feature note. This action neither causes nor fixes any of
+them. Per D4, gaps 1 and 2 will be planned as separate actions after A23's draft PR is open. Gaps 3
+and 4 are recorded here only.
+
+1. **Re-analysis bypasses the Empty dialog.** The edit form's three re-analysis buttons post the
+   same form to `/bottles/{id}/analyze`.
+   - The client submit handler returns early for them.
+   - `refresh_bottle_analysis` calls `update_bottle_from_form` with no became-Empty guard.
+   - In `price` mode, a status of Empty is therefore committed with `on_shopping_list=False`, and
+     the bottle moves to the shopping list without the owner choosing. In `photo` and `name` mode,
+     model output may overwrite the posted status.
+   - This already happens today when Empty is chosen by hand. Moving the slider to 0% is now a
+     second way to reach it.
+2. **The `?empty=1` fallback discards the choice.** After the rollback, the page re-renders the
+   stored non-Empty status, so the dialog's `requestSubmit` posts that status and the server ignores
+   `empty_action`.
+   - Without JavaScript, the `<dialog>` never opens at all, so the Empty transition already
+     requires JavaScript end to end.
+   - `test_marking_empty_requires_a_choice_and_can_move_to_shopping_list` masks this, because it
+     re-posts `status=Empty` from the `?empty=1` page.
+3. **Off-grid provider fill values display as a different level.** `normalize_analysis` keeps any
+   integer from 1 to 89. The step-5 range rounds to the nearest step (1–2% display as 0%, 57% as
+   55%), and saving posts the rounded value.
+4. **The status and rating pickers fall short on accessibility at 620px and below.**
+   - The rating picker has no visible focus style. W4 fixes the status picker's.
+   - Both are below the 44px touch target: about 42.6px for status and 36.8px for rating. These
+     figures are computed from `app.css`, not measured.
+
+### Completion Evidence
+
+- `make pr-review` passes.
+- `bourbonbook-reviewer` and `pr-validator` return commit-bound PASS results on the same candidate
+  commit.
+- A draft PR exists, and this tracker row is updated.
+- The `vux-tester` journey J1–J13 passes against that candidate commit (plus J8+ if the B+ fallback
+  is applied), and the PR records the SHA.
+- The PR records Aaron's VoiceOver result, including whether the B+ fallback was applied.
+- The existing test suite passes unmodified (AC11). W6 tests pass.
+- **Documentation impact.** `senior-architect` handles these in the post-merge pass, using
+  `c4-diagram-update`:
+  - **`docs/architecture/hldd.md`**
+    - §3 Presentation bullet: add the fill/status sync and the status live region to the
+      JavaScript responsibilities.
+    - §6.2: Status follows the slider client-side, by the exact rule.
+      - Choosing a status moves the slider: Unopened → 100%, Empty → 0%, and Opened restores the
+        last level in the 5–95% range, falling back to 95% or 5%.
+      - The server still saves the posted pair unchanged.
+      - Provider analysis (photo, name, and refinement passes) keeps the 90% snap and can overwrite
+        the pair.
+    - §6.2: correct "or block via a client-side confirm dialog until the user chooses", per gaps
+      1–2.
+    - §9: record gaps 1–3 if they are still open.
+  - **`docs/architecture/components/pwa-frontend.md`**
+    - Update the Responsibility sentence.
+    - Update the "Client-side JavaScript" list: the sync, no synthetic events, no derivation on
+      load, the live region, and the fact that automatic changes do not fire `change`.
+    - Change the cache name to `bourbon-book-v8` in both places.
+    - Update the `app.js` line count.
+    - Correct the claims that the add-bottle poller is the only place JavaScript is load-bearing
+      (the JavaScript section and "Design properties"), per gap 2.
+    - Add the status-picker focus rule (W4).
+  - **`docs/architecture/components/bottle-workflow.md`**
+    - Update the `GET/POST /bottles/{id}/edit` inventory row.
+    - "Shopping list model": moving the slider to 0% reaches Empty, and on Save the dialog gates it.
+      Moving a shopping item's slider off 0% clears `on_shopping_list`.
+    - Correct "blocked from saving until the user picks one of those choices", per gaps 1–2.
+  - **`docs/architecture/components/ai-analysis.md`**, `normalize_analysis()` bullet: it runs in
+    every provider response (photo, name, and refinement passes), and the manual form's exact rule
+    can disagree with it at 90–95%.
+  - **C1–C4 and their SVGs:** no change. C3 shows only generic template and static-asset nodes, and
+    C4 covers the analysis and pricing code path.
+  - **ADR:** none. With Q2 answered A, no data contract changes.
 
 ## Plan-Review Prompt
 

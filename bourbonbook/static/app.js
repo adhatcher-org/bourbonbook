@@ -96,14 +96,57 @@ if (uploadForm) {
   });
 }
 
+// The one client rule from fill level to status: exactly 0% is Empty, exactly 100% is Unopened,
+// and anything in between is Opened.
+const statusForFillLevel = (fillLevel) => {
+  if (fillLevel === 0) return 'Empty';
+  if (fillLevel === 100) return 'Unopened';
+  return 'Opened';
+};
+
 const fillRange = document.querySelector('[data-fill-range]');
 if (fillRange) {
   const output = document.querySelector('[data-fill-output]');
+  const statusInputs = [...document.querySelectorAll('input[name="status"]')];
+  const statusLive = document.querySelector('[data-status-live]');
   const updateFill = () => {
     output.value = `${fillRange.value}%`;
     fillRange.style.setProperty('--range-progress', `${fillRange.value}%`);
   };
-  fillRange.addEventListener('input', updateFill);
+  const isOpenedLevel = (fillLevel) => fillLevel > 0 && fillLevel < 100;
+  // Choosing Opened after Unopened or Empty puts back the last level the slider reported between
+  // 5% and 95%: the loaded level when it is in that range, then every in-range input.
+  const loadedLevel = Number(fillRange.value);
+  let lastOpenedLevel = isOpenedLevel(loadedLevel) ? loadedLevel : null;
+  const fillLevelForStatus = (status, fillLevel) => {
+    if (status === 'Unopened') return 100;
+    if (status === 'Empty') return 0;
+    if (isOpenedLevel(fillLevel)) return fillLevel;
+    return lastOpenedLevel ?? (fillLevel === 100 ? 95 : 5);
+  };
+  // Neither direction dispatches an event, so the slider and status handlers never re-enter each
+  // other. Nothing is derived on load, so a stored pair shows exactly as it was saved.
+  fillRange.addEventListener('input', () => {
+    updateFill();
+    const fillLevel = Number(fillRange.value);
+    if (isOpenedLevel(fillLevel)) lastOpenedLevel = fillLevel;
+    const status = statusForFillLevel(fillLevel);
+    const input = statusInputs.find((candidate) => candidate.value === status);
+    if (!input || input.checked) return;
+    input.checked = true;
+    if (statusLive) statusLive.textContent = `Status changed to ${status}.`;
+  });
+  statusInputs.forEach((input) => {
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      if (statusLive) statusLive.textContent = '';
+      const fillLevel = Number(fillRange.value);
+      const nextLevel = fillLevelForStatus(input.value, fillLevel);
+      if (nextLevel === fillLevel) return;
+      fillRange.value = String(nextLevel);
+      updateFill();
+    });
+  });
   updateFill();
 }
 
@@ -216,15 +259,6 @@ emptyDialog?.addEventListener('close', () => {
 });
 
 if (emptyDialog?.hasAttribute('data-open-on-load')) emptyDialog.showModal();
-
-document.querySelectorAll('input[name="status"]').forEach((input) => {
-  input.addEventListener('change', () => {
-    if (input.checked && input.value === 'Empty' && fillRange) {
-      fillRange.value = '0';
-      fillRange.dispatchEvent(new Event('input'));
-    }
-  });
-});
 
 document.querySelector('[data-share-form]')?.addEventListener('submit', (event) => {
   if (

@@ -62,3 +62,12 @@ a{color:inherit}button,input,select,textarea{font:inherit}button,a{touch-action:
 
 /* Keep the sticky editor controls below iPhone's top safe area. */
 .editor-bar{top:env(safe-area-inset-top)}
+
+/* Keep every page visibly below the phone's status area, including browsers that report no inset. */
+body{padding-top:max(14px,env(safe-area-inset-top))}
+
+@media(max-width:620px){
+  .mobile-nav{grid-template-columns:1fr 44px 1fr;width:min(300px,calc(100% - 56px));height:56px;border-radius:20px;overflow:hidden}
+  .mobile-nav-collection{display:contents}
+  .nav-add{position:static;width:44px;height:44px;transform:none;border:0;font-size:1.5rem}
+}

@@ -73,7 +73,7 @@ Merge the subagent's findings with anything from the logs and present:
 
 **Do not fix anything.** Unlike `e2e-bottle-test`, this skill has no diagnose-and-repair loop —
 a UX sweep produces a findings report, and remediation goes to `senior-architect` (if it is a design
-question) or `senior-engineer` (if it is a defect) as a separate, reviewable piece of work. Say
+question) or `bourbonbook-engineer` (if it is a defect) as a separate, reviewable piece of work. Say
 which findings you are routing where.
 
 ## Ground rules

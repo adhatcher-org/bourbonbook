@@ -57,7 +57,7 @@ Notes:
 
 A `make diagrams` target that renders all four and a `pr-check` assertion that the SVGs are current
 would make this deterministic instead of a discipline problem. That is a code change, so it belongs
-to `senior-engineer` as a roadmap action rather than being slipped in here.
+to `bourbonbook-engineer` as a roadmap action rather than being slipped in here.
 
 ## Which document owns what
 

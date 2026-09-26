@@ -630,8 +630,8 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         )
         styles = client.get("/static/app.css")
         assert "body{margin:0;padding-top:env(safe-area-inset-top)" in styles.text
-        assert "body{padding-top:max(14px,env(safe-area-inset-top))}" in styles.text
-        assert ".editor-bar{top:max(14px,env(safe-area-inset-top))}" in styles.text
+        assert "body{padding-top:max(54px,env(safe-area-inset-top))}" in styles.text
+        assert ".editor-bar{top:max(54px,env(safe-area-inset-top))}" in styles.text
         assert "bottom:max(8px,env(safe-area-inset-bottom))" in styles.text
         assert "width:min(300px,calc(100% - 56px));height:56px" in styles.text
         assert ".nav-add{position:static;width:44px;height:44px" in styles.text

@@ -481,10 +481,10 @@ PRR -->|approve| GD --> DOC --> Done
 | --- | --- | --- |
 | `senior-architect` | Reviews the request against the existing design, plans the change, owns ADRs and the architecture docs | Docs and plans only |
 | `architecture-critic` | Independent design review; returns `APPROVE` or `REVISE` with evidence | No |
-| `senior-engineer` | Implements one action end to end with tests, runs the local gates | Code, tests, migrations |
+| `bourbonbook-engineer` | Implements one action end to end with tests, runs the local gates | Code, tests, migrations |
 | `bourbonbook-reviewer` | Independent code review bound to an exact commit | No |
-| `pr-validator` | Runs the full `make pr-review` gate; the only agent that may approve a PR | Approval only |
-| `pr-manager` | Writes the PR body, opens the draft, triages CI, updates the tracker | PR text and tracker |
+| `bourbonbook-pr-validator` | Runs the full `make pr-review` gate; the only agent that may approve a PR | Approval only |
+| `bourbonbook-pr-manager` | Writes the PR body, opens the draft, triages CI, updates the tracker | PR text and tracker |
 | `vux-tester` | Browser sweep of whole journeys: layout, accessibility, console health, visual diffs | No |
 | `e2e-bottle-tester` | Photo-analysis field accuracy against the image fixtures | No |
 
@@ -504,12 +504,12 @@ It investigates, drafts a proposal, sends it to the critic itself, and comes bac
 to approve. You do not need to invoke the critic by hand.
 
 ```text
-@senior-engineer   Implement A03. Follow the roadmap-action skill.
+@bourbonbook-engineer   Implement A03. Follow the roadmap-action skill.
 @vux-tester        Sweep the admin journeys at 390px against https://bourbonbook.orb.local
-@pr-manager        Open the draft PR for this branch.
+@bourbonbook-pr-manager        Open the draft PR for this branch.
 ```
 
-Small, obvious fixes do not need the chain — ask `senior-engineer` directly. The chain earns its
+Small, obvious fixes do not need the chain — ask `bourbonbook-engineer` directly. The chain earns its
 overhead when a change touches the schema, a provider, the security boundary, or the design.
 
 ### What stops on its own

@@ -9,10 +9,10 @@ reads `.claude/agents/*.md`. Names below are equivalent — use whichever form y
 |------|-------|-------------|
 | Design, planning, and architecture docs | — | `senior-architect` |
 | Independent design critique | — | `architecture-critic` |
-| Implementation | (primary session) | `senior-engineer` |
+| Implementation | (primary session) | `bourbonbook-engineer` |
 | Independent code review | `bourbonbook_reviewer` | `bourbonbook-reviewer` |
-| PR authoring and CI triage | — | `pr-manager` |
-| PR validation and approval | `pr_validator` | `pr-validator` |
+| PR authoring and CI triage | — | `bourbonbook-pr-manager` |
+| PR validation and approval | `pr_validator` | `bourbonbook-pr-validator` |
 | End-to-end UX and accessibility testing | — | `vux-tester` |
 
 Claude Code also has `e2e-bottle-tester`, invoked only by the `e2e-bottle-test` skill.
@@ -22,9 +22,9 @@ whole journeys, viewports, accessibility, and console health across the app; `e2
 measures photo-analysis field accuracy against `tests/images/ImageTestValidation.md`. Neither treats
 vision-model output variance as a defect.
 
-Both require the Playwright MCP server defined in `.mcp.json`. `pr-manager` and `pr-validator` use
+Both require the Playwright MCP server defined in `.mcp.json`. `bourbonbook-pr-manager` and `bourbonbook-pr-validator` use
 the GitHub MCP when it is connected and authorized, and fall back to `gh` with `GH_TOKEN` mapped
-from `GITHUB_PAT`. Approval remains a commit-pinned `gh api` call in `pr-validator` only.
+from `GITHUB_PAT`. Approval remains a commit-pinned `gh api` call in `bourbonbook-pr-validator` only.
 
 ### Design-to-delivery chain
 
@@ -44,10 +44,10 @@ For any change that is not a small, obvious fix:
    criteria, work items, verification methods, migrations, documentation impact, risks — and stops.
    No implementation begins without an explicit go-ahead. This is the last cheap place to change
    direction; everything after it costs code.
-6. The architect hands the action ID, branch, and dependencies to `senior-engineer`, which
+6. The architect hands the action ID, branch, and dependencies to `bourbonbook-engineer`, which
    implements it under the `$roadmap-action` skill and the PR sequence below.
-7. Once both commit-bound verdicts pass, `pr-manager` writes the PR body, opens the draft, triages
-   CI check failures, routes review comments, and updates the tracker row. `pr-validator` in remote
+7. Once both commit-bound verdicts pass, `bourbonbook-pr-manager` writes the PR body, opens the draft, triages
+   CI check failures, routes review comments, and updates the tracker row. `bourbonbook-pr-validator` in remote
    approval mode is the only agent permitted to approve, and nothing may merge automatically —
    a merge to the default branch triggers `docker-publish.yml` and tags a release.
 8. **After the change merges**, the architect updates the as-built documentation named in the plan's

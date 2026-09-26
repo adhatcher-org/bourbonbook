@@ -98,7 +98,7 @@ git status --short
 Stage only files belonging to this action. Commit with a terse action-specific message.
 
 Then run the commit-bound gates from `AGENTS.md`: `bourbonbook-reviewer` must return `PASS` with
-`reviewed_commit: <sha>`, and `pr-validator` in local mode must return `PASS` with
+`reviewed_commit: <sha>`, and `bourbonbook-pr-validator` in local mode must return `PASS` with
 `validated_commit: <sha>` — both matching the candidate commit. Any fix means a new candidate commit
 and fresh runs of both.
 

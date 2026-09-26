@@ -619,13 +619,10 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         assert 'href="/collection/compact"' in library.text
         assert 'href="/shopping-list"' in library.text
         assert 'class="mobile-nav-link active" href="/" aria-current="page"' in library.text
-        assert 'class="mobile-nav-link" href="/collection/compact"' in library.text
+        assert 'class="mobile-nav-link" href="/collection/compact"' not in library.text
         assert 'class="nav-add" href="/bottles/new" aria-label="Add bottle"' in library.text
         compact = client.get("/collection/compact")
-        assert (
-            'class="mobile-nav-link active" href="/collection/compact" aria-current="page"'
-            in compact.text
-        )
+        assert 'class="mobile-nav-link active" href="/collection/compact"' not in compact.text
         shopping = client.get("/shopping-list")
         assert (
             'class="mobile-nav-link active" href="/shopping-list" aria-current="page"'
@@ -633,10 +630,13 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         )
         styles = client.get("/static/app.css")
         assert "body{margin:0;padding-top:env(safe-area-inset-top)" in styles.text
+        assert "body{padding-top:max(14px,env(safe-area-inset-top))}" in styles.text
+        assert ".editor-bar{top:max(14px,env(safe-area-inset-top))}" in styles.text
         assert "bottom:max(8px,env(safe-area-inset-bottom))" in styles.text
-        assert "width:min(340px,calc(100% - 40px));height:72px" in styles.text
+        assert "width:min(300px,calc(100% - 56px));height:56px" in styles.text
+        assert ".nav-add{position:static;width:44px;height:44px" in styles.text
         assert "min-width:44px;min-height:44px" in styles.text
-        assert client.get("/static/sw.js").text.startswith("const CACHE = 'bourbon-book-v8';")
+        assert client.get("/static/sw.js").text.startswith("const CACHE = 'bourbon-book-v9';")
         assert client.get("/images/bourbonbook.png").status_code == 200
         response = client.post(
             "/logout", data={"csrf_token": csrf(library)}, follow_redirects=False

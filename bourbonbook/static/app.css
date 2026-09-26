@@ -61,7 +61,7 @@ a{color:inherit}button,input,select,textarea{font:inherit}button,a{touch-action:
 @media(max-width:620px){.date-clear-control{min-height:48px}.date-field-state,.date-clear-message{font-size:.78rem}}
 
 /* Keep the sticky editor controls below iPhone's top safe area. */
-.editor-bar{top:env(safe-area-inset-top)}
+.editor-bar{top:max(14px,env(safe-area-inset-top))}
 
 /* Keep every page visibly below the phone's status area, including browsers that report no inset. */
 body{padding-top:max(14px,env(safe-area-inset-top))}

@@ -1,6 +1,8 @@
 <nav class="mobile-nav" aria-label="Primary navigation">
-  <a class="{{ 'active' if active_page in ['collection', 'compact'] }}" href="/"><span aria-hidden="true">▦</span>Collection</a>
-  <a class="nav-add" href="/bottles/new" aria-label="Add bottle"><span>＋</span></a>
-  <span class="nav-spacer" aria-hidden="true"></span>
-  <a class="{{ 'active' if active_page == 'shopping' }}" href="/shopping-list"><span aria-hidden="true">☷</span>Shopping</a>
+  <div class="mobile-nav-collection">
+    <a class="mobile-nav-link{% if active_page == 'collection' %} active{% endif %}" href="/"{% if active_page == 'collection' %} aria-current="page"{% endif %}><span aria-hidden="true">▦</span>Collection</a>
+    <a class="mobile-nav-link{% if active_page == 'compact' %} active{% endif %}" href="/collection/compact"{% if active_page == 'compact' %} aria-current="page"{% endif %}><span aria-hidden="true">▤</span>Compact</a>
+  </div>
+  <a class="nav-add" href="/bottles/new" aria-label="Add bottle"><span aria-hidden="true">＋</span></a>
+  <a class="mobile-nav-link{% if active_page == 'shopping' %} active{% endif %}" href="/shopping-list"{% if active_page == 'shopping' %} aria-current="page"{% endif %}><span aria-hidden="true">☷</span>Shopping</a>
 </nav>

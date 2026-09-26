@@ -441,3 +441,66 @@ def test_resend_forgot_and_reset_validation_paths(tmp_path: Path) -> None:
         )
         assert missing_token.status_code == 400
         assert "invalid or expired" in missing_token.text
+
+
+def test_edit_pages_render_the_fill_level_status_contract(tmp_path: Path) -> None:
+    client, app = make_client(tmp_path)
+    with client:
+        register(client, "fillstatus")
+        with app.state.database.session_factory() as session:
+            owner = session.scalar(select(User).where(User.email == "fillstatus@example.com"))
+            # This stored pair contradicts the fill-level rule on purpose. The page must render it
+            # as stored, because nothing is derived until the owner moves a control.
+            bottle = Bottle(owner_id=owner.id, name="Stored Pair", status="Unopened", fill_level=60)
+            session.add(bottle)
+            session.commit()
+            bottle_id = bottle.id
+
+        live_region = (
+            '<div class="sr-only" role="status" aria-live="polite" data-status-live></div>'
+        )
+        for path, heading in (
+            (f"/bottles/{bottle_id}/edit", "Edit bottle"),
+            (f"/bottles/{bottle_id}/edit?new=1", "Review details"),
+        ):
+            page = client.get(path)
+            assert page.status_code == 200, path
+            text = page.text
+            assert f"<strong>{heading}</strong>" in text, path
+            assert text.count('type="radio" name="status"') == 3, path
+            for option in ("Empty", "Opened", "Unopened"):
+                assert f'<input type="radio" name="status" value="{option}"' in text, path
+            assert '<input type="radio" name="status" value="Unopened" checked>' in text, path
+            assert (
+                '<input name="fill_level" type="range" min="0" max="100" step="5" value="60" '
+                "data-fill-range>"
+            ) in text, path
+            # Exactly one empty live region, directly after the status fieldset and outside it.
+            assert text.count("data-status-live") == 1, path
+            assert f"</fieldset>{live_region}" in text, path
+            assert (
+                text.index('class="status-picker"')
+                < text.index(live_region)
+                < text.index("data-fill-range")
+            ), path
+
+
+def test_fill_level_status_sync_script_and_focus_style_ship() -> None:
+    script = Path("bourbonbook/static/app.js").read_text()
+    assert "const statusForFillLevel = (fillLevel) => {" in script
+    assert "if (fillLevel === 0) return 'Empty';" in script
+    assert "if (fillLevel === 100) return 'Unopened';" in script
+    assert "document.querySelector('[data-fill-range]')" in script
+    assert "document.querySelector('[data-fill-output]')" in script
+    assert "document.querySelector('[data-status-live]')" in script
+    assert "document.querySelectorAll('input[name=\"status\"]')" in script
+    assert "statusLive.textContent = `Status changed to ${status}.`" in script
+    # A synthetic event is what let the Empty radio and the slider re-enter each other's
+    # handlers; the sync sets values directly instead.
+    assert "dispatchEvent" not in script
+
+    styles = Path("bourbonbook/static/app.css").read_text()
+    assert (
+        ".status-picker input:focus-visible+span{outline:2px solid var(--amber);outline-offset:3px}"
+        in styles
+    )

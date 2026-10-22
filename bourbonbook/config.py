@@ -108,7 +108,7 @@ class Settings:
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from_email: str = "bourbonbook@example.invalid"
-    smtp_from_name: str = "Bourbon Book"
+    smtp_from_name: str = "Bourbon"
     smtp_tls_mode: str = "starttls"
     verification_ttl_hours: int = 24
     email_verification_required: bool = True
@@ -216,7 +216,7 @@ class Settings:
             smtp_username=get("SMTP_USERNAME") or None,
             smtp_password=get("SMTP_PASSWORD") or None,
             smtp_from_email=get("SMTP_FROM_EMAIL", "bourbonbook@example.invalid"),
-            smtp_from_name=get("SMTP_FROM_NAME", "Bourbon Book"),
+            smtp_from_name=get("SMTP_FROM_NAME", "Bourbon"),
             smtp_tls_mode=get("SMTP_TLS_MODE", "starttls").lower(),
             verification_ttl_hours=int(get("VERIFICATION_TTL_HOURS", "24")),
             email_verification_required=get("EMAIL_VERIFICATION_REQUIRED", "true").lower()

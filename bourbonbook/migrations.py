@@ -103,7 +103,7 @@ def _legacy_schema_error(actual_tables: set[str], inspector) -> MigrationBootstr
     description = "; ".join(details) or "schema does not match the expected legacy schema"
     return MigrationBootstrapError(
         "Refusing to migrate an unversioned database because it is not a recognized "
-        f"Bourbon Book schema ({description}). Restore from backup or inspect the database "
+        f"Bourbon schema ({description}). Restore from backup or inspect the database "
         "before retrying."
     )
 

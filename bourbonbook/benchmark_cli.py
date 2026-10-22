@@ -1,4 +1,4 @@
-"""Private, opt-in AI benchmark tooling for a Bourbon Book data volume.
+"""Private, opt-in AI benchmark tooling for a Bourbon data volume.
 
 This module deliberately has no web route.  It is intended to run in the application
 container against a user-approved collection, and stores its fixtures beneath DATA_DIR.
@@ -557,7 +557,7 @@ def private_benchmark_path(settings: Settings, path: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Private Bourbon Book AI benchmark tooling")
+    parser = argparse.ArgumentParser(description="Private Bourbon AI benchmark tooling")
     commands = parser.add_subparsers(dest="command", required=True)
     export = commands.add_parser("export", help="Snapshot one owner's bottles and photos")
     export.add_argument("--owner", required=True, help="Exact owner ID or username")

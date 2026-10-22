@@ -1,4 +1,4 @@
-# High-Level Design Document (HLDD): Bourbon Book
+# High-Level Design Document (HLDD): Bourbon
 
 Status: Accepted
 Date: 2026-08-02
@@ -10,7 +10,7 @@ Detailed component design: [components/](components/)
 
 ## 1. Purpose and Scope
 
-This document describes the current, implemented design of Bourbon Book: a private, mobile-first
+This document describes the current, implemented design of Bourbon: a private, mobile-first
 bourbon-collection Progressive Web App (PWA). It complements the C1-C4 architecture views (which
 show structure) with the *behavior* of the system: how a request flows through it, what each major
 subsystem is responsible for, the data model, and the cross-cutting concerns (security,
@@ -23,7 +23,7 @@ discovery) — that work is future-facing and not part of the current design.
 
 ## 2. System Summary
 
-Bourbon Book lets a small, private set of users (a home-lab deployment, `MAX_USERS` capped, default
+Bourbon lets a small, private set of users (a home-lab deployment, `MAX_USERS` capped, default
 10) photograph a bourbon bottle, have a vision-capable AI model read the label, and maintain an
 editable personal catalog of their collection — quantity, fill level, tasting notes, storage
 location, and an estimated value. It also tracks a shopping list of bottles the user wants but
@@ -385,7 +385,7 @@ re-reads OS env merged with the managed `.env` (managed values win) on the new p
 
 ### 7.3 Deployment & scaling posture
 
-Bourbon Book is intentionally **not** built to scale horizontally (ADR 0001). One Uvicorn worker,
+Bourbon is intentionally **not** built to scale horizontally (ADR 0001). One Uvicorn worker,
 one SQLite writer, in-process rate limiting, and (per `plan.md`) an assumed single local-GPU lane
 for Ollama model residency are all load-bearing assumptions. Scaling to multiple workers or replicas
 would require, at minimum: a shared rate-limit store, a shared session store (or continuing to rely

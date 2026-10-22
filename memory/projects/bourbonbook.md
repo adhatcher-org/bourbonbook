@@ -1,4 +1,4 @@
-# Bourbonbook
+# Bourbon
 
 ## Summary
 Main project. Building a bourbon reference application.

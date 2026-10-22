@@ -8,7 +8,7 @@
             "type": "command",
             "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_guard.py\"",
             "timeout": 5,
-            "statusMessage": "Checking Bourbon Book repository policy"
+            "statusMessage": "Checking Bourbon repository policy"
           }
         ]
       }

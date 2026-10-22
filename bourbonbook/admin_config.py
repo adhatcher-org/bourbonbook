@@ -422,7 +422,7 @@ SECRET_PLACEHOLDER = ""
 
 UNMANAGED_HEADER = "# Unregistered keys (preserved, not managed via UI)"
 
-MANAGED_HEADER = "# Managed from Bourbon Book administration. Changes require a restart."
+MANAGED_HEADER = "# Managed from Bourbon administration. Changes require a restart."
 
 # Keys that may sit in the managed .env without being a mistake. Everything in
 # ENV_ONLY_SETTINGS is deliberately absent here: those are settable from the

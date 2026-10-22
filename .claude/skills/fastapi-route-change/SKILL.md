@@ -1,6 +1,6 @@
 ---
 name: fastapi-route-change
-description: "Workflow for adding or changing a Bourbon Book HTTP route or handler in bourbonbook/main.py — authentication, CSRF, owner scoping, the admin boundary, form parsing, redirects and status codes, rate limiting, session handling, and the async job pattern. Use whenever a change touches a route decorator, a request handler, or the helpers they share. Complements pwa-visual-check, which covers the templates those routes render."
+description: "Workflow for adding or changing a Bourbon HTTP route or handler in bourbonbook/main.py — authentication, CSRF, owner scoping, the admin boundary, form parsing, redirects and status codes, rate limiting, session handling, and the async job pattern. Use whenever a change touches a route decorator, a request handler, or the helpers they share. Complements pwa-visual-check, which covers the templates those routes render."
 ---
 
 ## Context

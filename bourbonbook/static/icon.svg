@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
-  <title id="title">Bourbon Book</title>
+  <title id="title">Bourbon</title>
   <desc id="desc">A dark brown leather-bound bourbon journal with gold lettering, a barrel emblem, and a glass of amber bourbon.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -104,8 +104,6 @@
   <!-- title -->
   <text x="677" y="439" fill="#170905" stroke="#170905" stroke-width="8" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="8">BOURBON</text>
   <text x="677" y="439" fill="url(#gold)" stroke="#ffdc7a" stroke-width="1.2" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="8">BOURBON</text>
-  <path d="M454 486 H536M795 486H879" stroke="url(#gold)" stroke-width="4"/>
-  <text x="665" y="502" fill="url(#gold)" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-size="49" letter-spacing="18">BOOK</text>
 
   <!-- warm cast behind glass -->
   <ellipse cx="633" cy="895" rx="173" ry="42" fill="#d84b00" opacity=".34" filter="url(#softGlow)"/>

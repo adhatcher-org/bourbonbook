@@ -74,7 +74,7 @@ application role:
 
 ## Why this exists as its own component
 
-Bourbon Book's core promise — accurate, useful vision analysis on consumer hardware — depends on
+Bourbon's core promise — accurate, useful vision analysis on consumer hardware — depends on
 which local model is actually resident on the operator's GPU. This tooling was built so a model swap
 could be a reviewable, evidence-backed decision rather than an untested config change, while keeping
 that evaluation infrastructure fully separated from the request-serving path (no benchmark code runs

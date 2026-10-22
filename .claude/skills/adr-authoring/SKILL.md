@@ -1,6 +1,6 @@
 ---
 name: adr-authoring
-description: "Writes, numbers, and maintains Bourbon Book Architecture Decision Records in docs/adr/. Covers when a decision warrants an ADR, the established section structure, the Proposed to Accepted lifecycle, and the supersede-never-edit rule including how to narrow or retire an earlier decision. Use when recording an architectural decision, changing an existing one, or invoking $adr-authoring."
+description: "Writes, numbers, and maintains Bourbon Architecture Decision Records in docs/adr/. Covers when a decision warrants an ADR, the established section structure, the Proposed to Accepted lifecycle, and the supersede-never-edit rule including how to narrow or retire an earlier decision. Use when recording an architectural decision, changing an existing one, or invoking $adr-authoring."
 ---
 
 ## Context

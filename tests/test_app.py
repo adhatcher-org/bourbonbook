@@ -610,8 +610,10 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         library = client.get("/")
         assert library.status_code == 200
         assert "My Collection" in library.text
+        assert "My Collection · Bourbon" in library.text
+        assert "<b>Bourbon</b>" in library.text
         assert "Your shelf is waiting" in library.text
-        assert 'src="/images/bourbonbook.png"' in library.text
+        assert 'src="/images/bourbon.png"' in library.text
         assert '<details class="brand-menu"' in library.text
         assert '<details class="account-menu"' in library.text
         assert 'action="/logout"' in library.text
@@ -636,8 +638,10 @@ def test_registration_library_and_logout(tmp_path: Path) -> None:
         assert "width:min(300px,calc(100% - 56px));height:56px" in styles.text
         assert ".nav-add{position:static;width:44px;height:44px" in styles.text
         assert "min-width:44px;min-height:44px" in styles.text
-        assert client.get("/static/sw.js").text.startswith("const CACHE = 'bourbon-book-v9';")
-        assert client.get("/images/bourbonbook.png").status_code == 200
+        assert client.get("/static/sw.js").text.startswith("const CACHE = 'bourbon-book-v10';")
+        assert client.get("/images/bourbon.png").status_code == 200
+        assert client.get("/manifest.webmanifest").json()["name"] == "Bourbon"
+        assert client.get("/static/icon.svg").status_code == 200
         response = client.post(
             "/logout", data={"csrf_token": csrf(library)}, follow_redirects=False
         )

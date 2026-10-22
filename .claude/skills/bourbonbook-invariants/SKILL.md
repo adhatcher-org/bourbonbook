@@ -1,6 +1,6 @@
 ---
 name: bourbonbook-invariants
-description: "The single source of truth for Bourbon Book's architectural and security invariants — the constraints every agent designs, implements, reviews, and validates against. Read this before proposing, writing, or reviewing any change. Overturning an invariant requires a new ADR that names the consequence, never a judgment call in a single change."
+description: "The single source of truth for Bourbon's architectural and security invariants — the constraints every agent designs, implements, reviews, and validates against. Read this before proposing, writing, or reviewing any change. Overturning an invariant requires a new ADR that names the consequence, never a judgment call in a single change."
 ---
 
 ## Why this exists

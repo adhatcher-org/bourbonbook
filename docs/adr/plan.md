@@ -1,8 +1,8 @@
-# Bourbon Book TODO Implementation Plan
+# Bourbon TODO Implementation Plan
 
 ## Purpose
 
-This plan records the remaining Bourbon Book roadmap as a sequence of independently reviewable
+This plan records the remaining Bourbon roadmap as a sequence of independently reviewable
 actions. Only one action is implemented in a branch and Codex session at a time. Every action must
 finish with tests, an independent sub-agent review, `make pr-review`, a pushed branch, and a draft
 pull request before its status changes from **Incomplete** to **Complete**.
@@ -45,14 +45,14 @@ non-blocking diagnostic tooling. See ADR 0003 for full rationale and consequence
    system must not bypass a paywall, firewall, access control, or site terms.
 10. The existing `tests/images` identities seed the prototype corpus. Synthetic prototype prices
     must never populate bottle fields or be represented as sourced production evidence.
-11. Bourbon Book continues to run as one Uvicorn worker in Docker on Unraid. The durable pricing
+11. Bourbon continues to run as one Uvicorn worker in Docker on Unraid. The durable pricing
     worker runs in that process until the application adopts a database suited to multiple writers.
 12. Development environments always capture email locally and expose the generated verification
     link on the check-email page. SMTP delivery is restricted to production.
 13. The prototype stops at raw filtered vector search. Ollama synthesis, OpenAI fallback, source
     discovery, crawling, production ingestion, and user-visible recommendations remain deferred.
 14. Development supports Aaron's external Unraid Qdrant by URL plus an optional local Compose
-    service. Qdrant must not be exposed through the public Bourbon Book route.
+    service. Qdrant must not be exposed through the public Bourbon route.
 15. Admin catalog imports use a SQLite-backed durable queue with one lifespan-owned worker in the
     existing single-Uvicorn-worker process. The database is the source of truth: a request commits
     a queued batch before responding; a leased worker claims it; startup recovers expired leases.
@@ -372,7 +372,7 @@ None; may proceed after A01 merges to keep the default branch linear.
 
 ### Goal
 
-Prove that Bourbon Book can connect to Ollama and Qdrant, discover the embedding shape, and create a
+Prove that Bourbon can connect to Ollama and Qdrant, discover the embedding shape, and create a
 compatible filtered-search collection without committing to a production pricing schema.
 
 ### Dependencies
@@ -853,7 +853,7 @@ Deferred pending the post-RAG design checkpoint; rewrite this action before impl
 ### Goal
 
 Allow evidence from approved sources requiring a physical user or authenticated browser without
-storing site credentials in Bourbon Book or circumventing access controls.
+storing site credentials in Bourbon or circumventing access controls.
 
 ### Dependencies
 
@@ -1603,7 +1603,7 @@ and 4 are recorded here only.
 Use this prompt in a fresh context window before implementation:
 
 ```text
-Review the Bourbon Book implementation plan at <absolute path>/plan.md, focusing on the new
+Review the Bourbon implementation plan at <absolute path>/plan.md, focusing on the new
 RAG-first sequence in A03 and A04. Verify that the plan cleanly proves Ollama embeddings, Qdrant
 configuration, fixture loading, metadata filtering, and raw vector search without prematurely
 choosing production price sources, schemas, or recommendation behavior. Check dependencies,
@@ -1616,7 +1616,7 @@ implement the plan or reactivate A05–A13 during this review.
 Use this template after completing an action and pushing its plan-status update:
 
 ```text
-Continue the Bourbon Book implementation plan at <absolute path>/plan.md.
+Continue the Bourbon implementation plan at <absolute path>/plan.md.
 
 Take only action <ID — title> in a new branch named <branch>. Verify that all dependency PRs listed
 for the action have merged into the remote default branch before editing. Follow the action's

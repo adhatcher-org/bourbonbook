@@ -1,4 +1,4 @@
-# Bourbon Book Agent Instructions
+# Bourbon Agent Instructions
 
 ## Agent roster
 

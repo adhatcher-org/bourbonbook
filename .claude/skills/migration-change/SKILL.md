@@ -1,6 +1,6 @@
 ---
 name: migration-change
-description: "Workflow for any Bourbon Book model, schema, Alembic revision, migration-bootstrap, or persistent-data change. Covers writing a forward-only SQLite-safe revision, keeping bourbonbook/migrations.py HEAD_REVISION and EXPECTED_SCHEMA in sync, and proving fresh-database, legacy-stamp, and upgrade paths with tests. Use when editing bourbonbook/models.py, adding a revision under migrations/versions/, or invoking $migration-change."
+description: "Workflow for any Bourbon model, schema, Alembic revision, migration-bootstrap, or persistent-data change. Covers writing a forward-only SQLite-safe revision, keeping bourbonbook/migrations.py HEAD_REVISION and EXPECTED_SCHEMA in sync, and proving fresh-database, legacy-stamp, and upgrade paths with tests. Use when editing bourbonbook/models.py, adding a revision under migrations/versions/, or invoking $migration-change."
 ---
 
 ## Context

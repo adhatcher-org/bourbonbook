@@ -1,6 +1,6 @@
 {
-  "name": "Bourbon Book",
-  "short_name": "Bourbon Book",
+  "name": "Bourbon",
+  "short_name": "Bourbon",
   "description": "Your private, photo-first bourbon collection.",
   "start_url": "/",
   "display": "standalone",

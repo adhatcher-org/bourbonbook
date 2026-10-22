@@ -1,6 +1,6 @@
 ---
 name: pwa-visual-check
-description: "Workflow for Bourbon Book front-end changes — Jinja templates, app.css, app.js, forms, responsive layout, photo uploads, icons, the web manifest, and the service worker. Covers the design tokens, the two breakpoints, service-worker cache-version bumping, and how to actually look at the result in a browser instead of guessing. Use when editing anything under bourbonbook/templates/ or bourbonbook/static/, or invoking $pwa-visual-check."
+description: "Workflow for Bourbon front-end changes — Jinja templates, app.css, app.js, forms, responsive layout, photo uploads, icons, the web manifest, and the service worker. Covers the design tokens, the two breakpoints, service-worker cache-version bumping, and how to actually look at the result in a browser instead of guessing. Use when editing anything under bourbonbook/templates/ or bourbonbook/static/, or invoking $pwa-visual-check."
 ---
 
 ## Context

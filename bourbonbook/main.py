@@ -203,7 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log_event(logger, logging.INFO, "app_starting", "Bourbon Book starting")
+        log_event(logger, logging.INFO, "app_starting", "Bourbon starting")
         settings.validate_identity()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         (settings.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
@@ -250,10 +250,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await app.state.catalog_import_worker.start()
             stack.push_async_callback(app.state.catalog_import_worker.stop)
             yield
-        log_event(logger, logging.INFO, "app_stopping", "Bourbon Book stopping")
+        log_event(logger, logging.INFO, "app_stopping", "Bourbon stopping")
         database.engine.dispose()
 
-    app = FastAPI(title="Bourbon Book", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="Bourbon", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.database = database
     app.state.usage_recorder = usage_recorder
@@ -1049,7 +1049,7 @@ def register_routes(app: FastAPI) -> None:
             return too_many(request, "register")
         with app.state.database.session_factory() as session:
             if session.scalar(select(func.count(User.id))) >= app.state.settings.max_users:
-                error = "This Bourbon Book has reached its user limit."
+                error = "Bourbon has reached its user limit."
             elif session.scalar(select(User).where(User.email == email)):
                 error = "That email is already in use."
             if error:
@@ -2209,7 +2209,7 @@ def register_routes(app: FastAPI) -> None:
         return HTMLResponse(
             "<!doctype html><title>Restarting</title>"
             '<meta http-equiv="refresh" content="5;url=/admin/config">'
-            "<p>Bourbon Book is restarting. This page will reconnect shortly.</p>",
+            "<p>Bourbon is restarting. This page will reconnect shortly.</p>",
             background=BackgroundTask(app.state.restart),
         )
 

@@ -1,6 +1,6 @@
 ---
 name: roadmap-action
-description: "Implements or completes a single numbered action from the Bourbon Book roadmap in docs/adr/plan.md (A01–A13, P2-xx). Enforces the plan's Required Lifecycle: one action per branch, tracker row set to In Progress, focused tests, make pr-review, commit-bound reviewer/validator gates, draft PR, then tracker row set to Complete with evidence. Use when the user names a roadmap action ID, asks to work the plan, or invokes $roadmap-action."
+description: "Implements or completes a single numbered action from the Bourbon roadmap in docs/adr/plan.md (A01–A13, P2-xx). Enforces the plan's Required Lifecycle: one action per branch, tracker row set to In Progress, focused tests, make pr-review, commit-bound reviewer/validator gates, draft PR, then tracker row set to Complete with evidence. Use when the user names a roadmap action ID, asks to work the plan, or invokes $roadmap-action."
 ---
 
 ## Context

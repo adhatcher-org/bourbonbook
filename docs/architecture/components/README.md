@@ -1,4 +1,4 @@
-# Bourbon Book: Component Design Docs
+# Bourbon: Component Design Docs
 
 Detailed, per-component design documentation supporting the [HLDD](../hldd.md) and the
 [C1-C4 architecture views](../c1-system-context.md). Each document covers one component's

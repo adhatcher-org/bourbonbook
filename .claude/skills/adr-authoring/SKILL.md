@@ -71,14 +71,14 @@ Section rules that matter:
   not a record. State what becomes harder, what is now locked in, and what operational burden it
   adds.
 - **Alternatives Considered** needs real options with real reasons they lost. A straw man here is
-  the most common ADR failure, and `architecture-critic` is instructed to look for it.
+  the most common ADR failure, and `architect-critic` is instructed to look for it.
 - **Supersession Criteria** is what makes the record maintainable: state the conditions under which
   a future ADR should revisit this. 0003 does this well — it names the hardware and provider
   assumptions that, if they change, reopen the decision.
 
 ## Lifecycle
 
-1. **`Status: Proposed`** — written by `senior-architect` alongside the plan, before implementation.
+1. **`Status: Proposed`** — written by `architect` alongside the plan, before implementation.
    The critic reviews it as part of the proposal.
 2. **`Status: Accepted`** — flipped in the post-merge documentation pass, once the code that
    implements the decision has merged. Update the `Date` only if the decision itself changed.

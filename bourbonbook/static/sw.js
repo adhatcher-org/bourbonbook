@@ -1,4 +1,4 @@
-const CACHE = 'bourbon-book-v9';
+const CACHE = 'bourbon-book-v10';
 const SHELL = ['/static/app.css', '/static/app.js', '/static/icon.svg', '/manifest.webmanifest'];
 self.addEventListener('install', event => {
   self.skipWaiting();

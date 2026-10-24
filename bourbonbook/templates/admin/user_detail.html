@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}User · Bourbon Book{% endblock %}
+{% block title %}User · Bourbon{% endblock %}
 {% block page %}
 {% set active_page = '' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell edit-page profile-page admin-page">
@@ -23,7 +23,7 @@
   </section>
   <section class="form-section">
     <h2>Email correction</h2>
-    <p class="muted">Use this only after verifying the person outside Bourbon Book. Changing the email signs out existing sessions, revokes old email tokens, and sends verification to the new address.</p>
+    <p class="muted">Use this only after verifying the person outside Bourbon. Changing the email signs out existing sessions, revokes old email tokens, and sends verification to the new address.</p>
     <form method="post" action="/admin/users/{{ target.id }}/email" class="stack-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>New email<input type="email" name="email" required maxlength="254"></label>

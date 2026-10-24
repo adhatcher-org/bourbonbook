@@ -1,6 +1,6 @@
 ---
 name: provider-evaluation
-description: "Workflow for Bourbon Book AI and pricing provider work — Ollama, OpenAI, prompts, structured outputs, the local-first pricing path, Qdrant embeddings/retrieval, fallback behavior, and API usage accounting. Covers the provider dispatch contract, what may never leave the machine, and how to test without touching a live model. Use when editing analysis.py, ollama*.py, openai_provider.py, catalog*.py, qdrant_prices.py, provider_clients.py, or observability usage recording — or invoking $provider-evaluation."
+description: "Workflow for Bourbon AI and pricing provider work — Ollama, OpenAI, prompts, structured outputs, the local-first pricing path, Qdrant embeddings/retrieval, fallback behavior, and API usage accounting. Covers the provider dispatch contract, what may never leave the machine, and how to test without touching a live model. Use when editing analysis.py, ollama*.py, openai_provider.py, catalog*.py, qdrant_prices.py, provider_clients.py, or observability usage recording — or invoking $provider-evaluation."
 ---
 
 ## Context

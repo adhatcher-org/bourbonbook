@@ -1,1 +1,1 @@
-"""Bourbon Book application package."""
+"""Bourbon application package."""

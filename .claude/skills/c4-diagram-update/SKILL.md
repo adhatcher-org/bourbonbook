@@ -1,6 +1,6 @@
 ---
 name: c4-diagram-update
-description: "Updates Bourbon Book's as-built architecture documentation — the HLDD, the C1-C4 views, the per-component design docs, and the rendered Mermaid SVGs under docs/architecture/diagrams/. Covers which view owns what, how to regenerate an SVG so it does not drift from its Mermaid source, and the as-built rule that these docs describe only merged code. Use in the post-merge documentation pass or when invoking $c4-diagram-update."
+description: "Updates Bourbon's as-built architecture documentation — the HLDD, the C1-C4 views, the per-component design docs, and the rendered Mermaid SVGs under docs/architecture/diagrams/. Covers which view owns what, how to regenerate an SVG so it does not drift from its Mermaid source, and the as-built rule that these docs describe only merged code. Use in the post-merge documentation pass or when invoking $c4-diagram-update."
 ---
 
 ## Context

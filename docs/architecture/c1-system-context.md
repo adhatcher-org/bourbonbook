@@ -5,7 +5,7 @@ Baseline ADR: [ADR 0001](../adr/0001-current-architecture-baseline.md)
 Pricing-catalog ADR: [ADR 0002](../adr/0002-local-first-pricing-catalog.md)
 Gateway-provider ADR: [ADR 0006](../adr/0006-litellm-gateway-provider.md)
 
-This context view shows the people and external systems Bourbon Book currently interacts with. It
+This context view shows the people and external systems Bourbon currently interacts with. It
 includes the shipped local-first pricing/catalog subsystem (SQLite catalog cache + optional
 sparse-vector Qdrant fuzzy match). It does **not** include the larger, unimplemented Phase 2 RAG
 roadmap (dense-embedding evidence pipeline, governed source registry, scheduled crawling/discovery)
@@ -17,8 +17,8 @@ flowchart LR
   admin[Administrator]
   browser[Browser / installed PWA]
 
-  subgraph bourbon["Bourbon Book"]
-    app[Bourbon Book web app]
+  subgraph bourbon["Bourbon"]
+    app[Bourbon web app]
   end
 
   swag[SWAG / reverse proxy]

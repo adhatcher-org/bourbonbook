@@ -80,7 +80,7 @@ def create_email_sender(settings: Settings) -> EmailSender:
 def link_message(recipient: str, purpose: str, url: str, expiry: str) -> OutgoingEmail:
     verification = purpose == "verify_email"
     action = "Verify your email" if verification else "Reset your password"
-    subject = f"{action} for Bourbon Book"
+    subject = f"{action} for Bourbon"
     template_name = "verification" if verification else "password_reset"
     text = (
         (EMAIL_TEMPLATES / f"{template_name}.txt")
@@ -98,7 +98,7 @@ def link_message(recipient: str, purpose: str, url: str, expiry: str) -> Outgoin
 def security_message(recipient: str) -> OutgoingEmail:
     return OutgoingEmail(
         recipient,
-        "Your Bourbon Book password changed",
+        "Your Bourbon password changed",
         "Your password was changed. If this was not you, contact your administrator.",
         "<p>Your password was changed. If this was not you, contact your administrator.</p>",
     )

@@ -22,7 +22,7 @@ CATALOG_SCREENSHOT_OUTPUT ?= $(DATA_DIR)/ohlq-screenshot-prices.jsonl
 	price-catalog-extract-screenshots
 
 help: ## List development and CI targets.
-	@awk 'BEGIN {FS = ":.*## "; printf "Bourbon Book targets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "Bourbon targets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: ## Install the exact locked application and development dependencies.
 	$(UV) sync --frozen

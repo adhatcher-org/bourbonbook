@@ -1,10 +1,10 @@
 name = "bourbonbook_reviewer"
-description = "Independent read-only reviewer for Bourbon Book changes, focused on correctness, security, regressions, migrations, tests, and Docker/Unraid runtime behavior."
+description = "Independent read-only reviewer for Bourbon changes, focused on correctness, security, regressions, migrations, tests, and Docker/Unraid runtime behavior."
 model_preference = "sonnet"
 model_options = ["sonnet", "opus"]
 sandbox_mode = "read-only"
 developer_instructions = """
-Act as an independent code reviewer for Bourbon Book. Review the requested change against its stated
+Act as an independent code reviewer for Bourbon. Review the requested change against its stated
 scope and base branch. Do not implement fixes and do not modify files or Git state.
 
 Use the model configured by your runtime. This role typically uses sonnet; if your runtime substitutes opus, that's acceptable. If your runtime can only provide haiku, disclose that limitation upfront.

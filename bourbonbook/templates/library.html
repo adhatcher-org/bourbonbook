@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}My Collection · Bourbon Book{% endblock %}
+{% block title %}My Collection · Bourbon{% endblock %}
 {% block page %}
 {% set active_page = 'collection' %}{% include '_collection_header.html' %}
 <main id="main" class="app-shell library-page">
@@ -27,7 +27,7 @@
     {% for bottle in bottles %}
     <a class="bottle-card reveal" href="/bottles/{{ bottle.id }}" style="--delay: {{ loop.index0 * 45 }}ms">
       <div class="bottle-photo">
-        {% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle" loading="lazy">{% else %}<div class="bottle-placeholder" aria-hidden="true">BB</div>{% endif %}
+        {% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle" loading="lazy">{% else %}<div class="bottle-placeholder" aria-hidden="true">B</div>{% endif %}
         <span class="status-chip status-{{ bottle.status|lower }}">{{ bottle.status }}</span>
         {% if bottle.quantity > 1 %}<span class="quantity-chip">×{{ bottle.quantity }}</span>{% endif %}
       </div>
@@ -45,7 +45,7 @@
     <div class="empty-bottle" aria-hidden="true"><span></span></div>
     <p class="eyebrow">Your shelf is waiting</p>
     <h2>{{ "No matches in the cabinet" if q else "Add the bottle that starts the story." }}</h2>
-    <p>{{ "Try another name, brand, or release." if q else "Take a photo and Bourbon Book will read the label into an editable record." }}</p>
+    <p>{{ "Try another name, brand, or release." if q else "Take a photo and Bourbon will read the label into an editable record." }}</p>
     {% if q %}<a class="secondary-button" href="/">Clear search</a>{% else %}<a class="primary-button" href="/bottles/new">Photograph a bottle <span>→</span></a>{% endif %}
   </section>
   {% endif %}

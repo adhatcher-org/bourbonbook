@@ -6,7 +6,7 @@ Related: [HLDD](../hldd.md) · [Administration & configuration](admin-and-config
 
 ## Responsibility
 
-Give the operator enough signal to run Bourbon Book without an external telemetry stack being
+Give the operator enough signal to run Bourbon without an external telemetry stack being
 required: Prometheus metrics, structured/redacted logs, a local AI-usage ledger, and a safe process
 bootstrap — while deliberately never persisting sensitive content (prompts, responses, credentials,
 bottle contents, email addresses) in any of these channels.

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Edit {{ bottle.name }} · Bourbon Book{% endblock %}
+{% block title %}Edit {{ bottle.name }} · Bourbon{% endblock %}
 {% block page %}
 {% macro lifecycle_date_field(field, label, value, error) %}
   {% set field_id = field.replace('_', '-') %}

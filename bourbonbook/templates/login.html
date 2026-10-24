@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ "Join" if mode == "register" else "Sign in" }} · Bourbon Book{% endblock %}
+{% block title %}{{ "Join" if mode == "register" else "Sign in" }} · Bourbon{% endblock %}
 {% block body_class %}auth-page{% endblock %}
 {% block page %}
 <main id="main" class="auth-shell">
   <section class="auth-story" aria-labelledby="welcome-title">
-    <div class="brand-mark" aria-hidden="true"><span>BB</span></div>
+    <div class="brand-mark" aria-hidden="true"><span>B</span></div>
     <p class="eyebrow">A private bottle ledger</p>
     <h1 id="welcome-title">Keep the story<br>behind every pour.</h1>
     <p class="auth-copy">Photograph a bottle. Let local AI read the label. Keep the details, value, and fill level close at hand.</p>
@@ -24,8 +24,8 @@
       <button class="primary-button wide" type="submit">{{ "Create account" if mode == "register" else "Sign in" }} <span aria-hidden="true">→</span></button>
     </form>
     <p class="auth-switch">
-      {% if mode == "register" %}Already have a book? <a href="/login">Sign in</a>
-      {% else %}New to Bourbon Book? <a href="/register">Create an account</a><br><a href="/forgot-password">Forgot password?</a>{% endif %}
+      {% if mode == "register" %}Already have an account? <a href="/login">Sign in</a>
+      {% else %}New to Bourbon? <a href="/register">Create an account</a><br><a href="/forgot-password">Forgot password?</a>{% endif %}
     </p>
   </section>
 </main>

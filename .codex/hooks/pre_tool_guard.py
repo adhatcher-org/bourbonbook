@@ -49,7 +49,7 @@ def evaluate(command: str) -> dict[str, object] | None:
     lowered = [token.lower() for token in tokens]
 
     if re.search(r"\bgit\s+reset\s+--hard\b", command):
-        return _deny("Destructive `git reset --hard` is blocked by Bourbon Book repository policy.")
+        return _deny("Destructive `git reset --hard` is blocked by Bourbon repository policy.")
     if re.search(r"\bgit\s+clean\b[^;&|]*(?:--force\b|-[a-zA-Z]*f)", command):
         return _deny("Forced `git clean` is blocked because it can destroy untracked user work.")
     if re.search(r"\bgit\s+add\b[^;&|]*(?:\s)(?:\.|-A|--all)(?=\s|$)", command):
@@ -74,7 +74,7 @@ def evaluate(command: str) -> dict[str, object] | None:
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": (
-                    "This test command appears to reference a live provider. Bourbon Book's "
+                    "This test command appears to reference a live provider. Bourbon's "
                     "deterministic tests must use fakes and fixtures unless the user explicitly "
                     "authorized a live evaluation."
                 ),

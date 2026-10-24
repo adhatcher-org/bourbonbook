@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ bottle.name }} · Bourbon Book{% endblock %}
+{% block title %}{{ bottle.name }} · Bourbon{% endblock %}
 {% block page %}
 <header class="editor-bar detail-bar"><a class="back-button" href="/" aria-label="Back to collection">←</a><strong>{{ bottle.brand or "Bottle details" }}</strong><a class="edit-button" href="/bottles/{{ bottle.id }}/edit">Edit</a></header>
 <main id="main" class="app-shell detail-page">
   <section class="bottle-hero">
-    <div class="hero-photo">{% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle">{% else %}<div class="bottle-placeholder">BB</div>{% endif %}<span class="hero-proof">{{ bottle.proof|round(1) if bottle.proof else "—" }}<small>proof</small></span></div>
+    <div class="hero-photo">{% if bottle.photo_name %}<img src="/media/{{ bottle.photo_name }}" alt="{{ bottle.name }} bottle">{% else %}<div class="bottle-placeholder">B</div>{% endif %}<span class="hero-proof">{{ bottle.proof|round(1) if bottle.proof else "—" }}<small>proof</small></span></div>
     <div class="hero-copy"><p class="eyebrow">{{ bottle.spirit_type }}</p><h1>{{ bottle.name }}</h1><p>{{ bottle.release or bottle.distilled_by or "Personal collection" }}</p><div class="hero-value"><span>Estimated value</span><strong>{{ bottle.estimated_value|money }}</strong></div></div>
   </section>
   <div class="detail-grid">

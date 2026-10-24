@@ -1,4 +1,4 @@
-# Bourbon Book
+# Bourbon
 
 A private, mobile-first bourbon collection that photographs bottles, asks a local Ollama vision model to read the label, and keeps the result in an editable personal catalog. It is an installable web app sized for iPhone and desktop browsers.
 
@@ -75,7 +75,7 @@ the extraction date; invoke `python -m scripts.extract_catalog_screenshots --hel
 known `--price-updated-at` date or custom input/output paths. This workflow never browses the web
 and does not include a source URL in the extracted records.
 
-When a user saves a purchase price for a bottle, Bourbon Book uses it as the shared current price
+When a user saves a purchase price for a bottle, Bourbon uses it as the shared current price
 only if the matching name-and-size catalog entry is missing or more than six months old. In that
 case the bottle and catalog MSRP are both updated with the user-entered amount and the catalog date
 is reset; a fresher catalog entry is not overwritten.
@@ -168,7 +168,7 @@ the value actually configured in Unraid.
 | `SMTP_USERNAME` | Variable | `SMTP_USERNAME` | relay username | Relay-dependent | Yes |
 | `SMTP_PASSWORD` | Variable | `SMTP_PASSWORD` | masked value | Relay-dependent | Yes |
 | `SMTP_FROM_EMAIL` | Variable | `SMTP_FROM_EMAIL` | `bourbonbook@example.com` | Yes for SMTP | No |
-| `SMTP_FROM_NAME` | Variable | `SMTP_FROM_NAME` | `Bourbon Book` | No | No |
+| `SMTP_FROM_NAME` | Variable | `SMTP_FROM_NAME` | `Bourbon` | No | No |
 | `SMTP_TLS_MODE` | Variable | `SMTP_TLS_MODE` | `starttls` | Yes for SMTP | No |
 | `VERIFICATION_TTL_HOURS` | Variable | `VERIFICATION_TTL_HOURS` | `24` | No | No |
 | `EMAIL_VERIFICATION_REQUIRED` | Variable | `EMAIL_VERIFICATION_REQUIRED` | `true` | No | No |
@@ -219,7 +219,7 @@ database connectivity and that Alembic has reached the application migration hea
 
 ### Prometheus, SWAG, and Loki
 
-Prometheus should scrape Bourbon Book directly over an internal Docker network, not through the
+Prometheus should scrape Bourbon directly over an internal Docker network, not through the
 public HTTPS host. Example scrape job:
 
 ```yaml
@@ -229,7 +229,7 @@ scrape_configs:
       - targets: ["bourbonbook:8000"]
 ```
 
-If Prometheus is not on the same network as SWAG/Bourbon Book, attach both containers to a dedicated
+If Prometheus is not on the same network as SWAG/Bourbon, attach both containers to a dedicated
 internal monitoring network. Keep `/metrics`, `/healthz`, and `/readyz` off the public SWAG virtual
 host with exact-match denies, for example:
 
@@ -303,7 +303,7 @@ password argument that could leak through shell history or the process list.
 
 ### Deployment Validation Runbook
 
-Before deploying a migration-enabled image, stop the old Bourbon Book container and copy or snapshot
+Before deploying a migration-enabled image, stop the old Bourbon container and copy or snapshot
 the complete Unraid host directory configured by `DATA_PATH`, including `bourbonbook.db` and
 `uploads/`. Do not make a normal file copy of `bourbonbook.db` while the app is running. Keep the
 backup until the upgraded container has started and the catalog, ownership, price sources, and photos
@@ -344,7 +344,7 @@ database and uploads backup.
 
 ## iPhone installation
 
-Serve the app over HTTPS, open it in Safari, choose **Share → Add to Home Screen**, and launch Bourbon Book from the new icon. The photo picker uses the rear camera when supported.
+Serve the app over HTTPS, open it in Safari, choose **Share → Add to Home Screen**, and launch Bourbon from the new icon. The photo picker uses the rear camera when supported.
 
 ## Development
 

@@ -18,9 +18,7 @@ from bourbonbook.qdrant_prices import QdrantPriceIndex
 
 
 def parser() -> argparse.ArgumentParser:
-    command_parser = argparse.ArgumentParser(
-        description="Manage Bourbon Book's local price catalog."
-    )
+    command_parser = argparse.ArgumentParser(description="Manage Bourbon's local price catalog.")
     commands = command_parser.add_subparsers(dest="command", required=True)
     ingest = commands.add_parser(
         "ingest-jsonl", help="Import validated catalog prices from JSON Lines."

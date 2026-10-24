@@ -83,9 +83,11 @@ make test
 make coverage     # repo-wide floor is 80%; the plan also expects >=80% focused coverage
 ```
 
-Per the plan's lifecycle step 7, a **separate** validation pass must inspect the final diff — spawn
-`bourbonbook-reviewer` for that. Resolve every actionable finding, each with a regression test and a
-rerun of the affected checks.
+Per the plan's lifecycle step 7, a **separate** validation pass must inspect the final diff — the
+coordinator dispatches `tester` for that, and routes every actionable finding back to `engineer`.
+`pr-reviewer` is not the agent for this pass: it is read-only and terminal, so it cannot make the
+contained fixes step 7 requires. Resolve every finding with a regression test and a rerun of the
+affected checks.
 
 ### 5. Full gate and commit
 
@@ -97,20 +99,22 @@ git status --short
 
 Stage only files belonging to this action. Commit with a terse action-specific message.
 
-Then run the commit-bound gates from `AGENTS.md`: `bourbonbook-reviewer` must return `PASS` with
-`reviewed_commit: <sha>`, and `bourbonbook-pr-validator` in local mode must return `PASS` with
-`validated_commit: <sha>` — both matching the candidate commit. Any fix means a new candidate commit
-and fresh runs of both.
+Then run the commit-bound gates from `AGENTS.md`: `pr-reviewer` must return a clean review for the
+exact candidate commit, and the full local gate (`make pr-review`) must exit 0 against that same
+commit. Any fix means a new candidate commit and fresh runs of both.
 
-### 6. Draft PR, then update the tracker
+### 6. Hand off for the PR, then update the tracker
 
-Push the branch and open a **draft** PR into the default branch. The body must cover: the change,
-root cause, user impact, migrations/configuration, tests, sub-agent validation verdicts with SHAs,
-and the `make pr-review` result.
+Do **not** push or open the PR yourself: agents may not run `git push` or `gh pr create`, and
+`pr-gate` is the only sanctioned path. Hand the commit-bound candidate to the coordinator, which
+dispatches `pr-reviewer`; on a clean review it pushes and opens the **draft** PR itself. Supply the
+material the body needs: the change, root cause, user impact, migrations/configuration, tests, the
+verification results for each work item, and the `make pr-review` result.
 
 Only after the draft PR exists, update the tracker row to `Complete` with the PR URL and completion
-evidence, commit that plan update, and push it to the same branch. Match the evidence style of the
-A01/A02 rows.
+evidence, matching the evidence style of the A01/A02 rows, and commit that plan update. Because
+`pr-gate` records a review per commit, that tracker commit needs its own clean `pr-reviewer` pass
+before it can be pushed — the coordinator routes it back for a short second review.
 
 ### 7. Stop
 

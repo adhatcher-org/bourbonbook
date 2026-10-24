@@ -3,9 +3,10 @@
 ## Purpose
 
 This plan records the remaining Bourbon roadmap as a sequence of independently reviewable
-actions. Only one action is implemented in a branch and Codex session at a time. Every action must
-finish with tests, an independent sub-agent review, `make pr-review`, a pushed branch, and a draft
-pull request before its status changes from **Incomplete** to **Complete**.
+actions. Only one action is implemented in a branch and session at a time. Every action must finish
+with tests, independent verification by `tester`, `make pr-review`, and a clean `pr-reviewer`
+review, after which `pr-reviewer` pushes the branch and opens the draft pull request, before its
+status changes from **Incomplete** to **Complete**.
 
 The remaining work is intentionally RAG-infrastructure-first. A disposable prototype will prove
 Ollama embeddings, Qdrant collection management, fixture loading, metadata filtering, and raw
@@ -234,24 +235,30 @@ the tracker is updated with an approved scope.
 5. Implement only the named action and its documentation/tests. Prefer extending existing modules
    over adding parallel implementations.
 6. Run focused tests throughout development, followed by the relevant full local checks.
-7. After the implementation agent finishes, start a **new validation/fix agent**. It must inspect
-   the final diff, run focused tests and `make coverage`, report correctness/regressions/missing
-   coverage/security/scope findings, and make only contained fixes in the named action. Every fix
-   requires a regression test and a rerun of affected checks.
-8. Do not begin the next action until the validation/fix agent reports passing tests and ≥80% focused
-   coverage. Before a PR, the temporary repository-wide 80% `make coverage` gate and the separate read-only
-   `bourbonbook_reviewer` and `pr_validator`
-   commit-bound checks required by the project instructions.
+7. After `engineer` finishes, the coordinator dispatches `tester` against that candidate for the
+   named verification methods plus a diff, coverage and scope pass: focused tests and
+   `make coverage`, reporting correctness/regressions/missing coverage/security/scope findings.
+   `tester` is report-only, so the coordinator routes every actionable finding back to `engineer`,
+   which makes the contained fix in the named action. Every fix requires a regression test and a
+   rerun of affected checks.
+8. Do not begin the next action until `tester` reports passing tests and ≥80% focused
+   coverage. Before a PR, the temporary repository-wide 80% `make coverage` gate and the separate
+   commit-bound checks required by the project instructions: a clean read-only `pr-reviewer` review
+   of the exact candidate commit, and a passing `make pr-review` against that same commit.
 9. Run `make pr-review`. Fix failures and rerun until it passes. This target includes lint,
    formatting checks, branch coverage, Bandit, dependency audit, repository-integrity checks,
    migration tests, Compose validation, and a production image build.
 10. Inspect `git diff --check`, `git status --short`, and the complete staged diff. Stage only files
     belonging to the action and commit with a terse action-specific message.
-11. Push the branch and create a **draft** pull request into the repository default branch. The PR
-    body must explain the change, root cause, user impact, migrations/configuration, tests,
-    sub-agent validation, and `make pr-review` result.
+11. Hand the commit-bound candidate to the coordinator for the `pr-reviewer` gate; on a clean
+    review it pushes via `pr-gate` and creates a **draft** pull request into the repository default
+    branch. Agents never run `git push` or `gh pr create` directly. The PR body must explain the
+    change, root cause, user impact, migrations/configuration, tests, verification results, and the
+    `make pr-review` result.
 12. After the draft PR exists, update this tracker row to `Complete`, add the PR URL and validation
-    evidence, commit that plan update, and push it to the same PR branch.
+    evidence, and commit that plan update. `pr-gate` records a review per commit, so that tracker
+    commit needs its own clean `pr-reviewer` pass before it can be pushed to the same PR branch;
+    the coordinator routes it back for a short second review rather than pushing unreviewed.
 13. Create a new Codex session for the next `Incomplete` action. Its opening prompt must identify
     the action ID, branch, dependencies, relevant files, required lifecycle, and whether it must wait
     for a predecessor PR to merge. Do not begin the next action in the completed action's session.
@@ -1209,6 +1216,13 @@ one.
 
 ## A23 — Fill Level Drives Bottle Status on the Edit Form
 
+> **Agent names in this section predate the shared global roster.** A23 was planned while the
+> repo-local agents existed, and its wording is kept as written so the recorded evidence stays
+> readable. When resuming it, read `vux-tester` as `tester` in its journey-sweep mode (the J1–J13
+> journey still applies), `bourbonbook-reviewer` and `pr-validator` as `pr-reviewer` plus a passing
+> `make pr-review` against the same candidate commit, and `senior-architect` as `architect` for the
+> post-merge documentation pass. The current roster and chain are in `AGENTS.md`.
+
 ### Goal
 
 Make Status follow the fill-level slider while the user moves it, before saving. This applies on
@@ -1613,17 +1627,20 @@ implement the plan or reactivate A05–A13 during this review.
 
 ## Next-Session Implementation Prompt Template
 
-Use this template after completing an action and pushing its plan-status update:
+Use this template after an action's plan-status update has been reviewed and pushed:
 
 ```text
 Continue the Bourbon implementation plan at <absolute path>/plan.md.
 
 Take only action <ID — title> in a new branch named <branch>. Verify that all dependency PRs listed
 for the action have merged into the remote default branch before editing. Follow the action's
-individual instructions and the Required Lifecycle exactly: focused tests, independent sub-agent
-validation, resolve findings, make pr-review, scoped commit/push, draft PR, then mark the action
-Complete in plan.md and push that status update. Preserve unrelated working-tree changes. After the
-PR and status update succeed, create a new Codex session for the next Incomplete action.
+individual instructions and the Required Lifecycle exactly: focused tests, independent verification
+by tester, resolve findings, make pr-review, then a scoped commit. Do not push or open the PR
+yourself -- hand the commit-bound candidate to the coordinator for the pr-reviewer gate, which
+pushes via pr-gate and opens the draft PR. Then mark the action Complete in plan.md with the PR URL
+and commit that update, which gets its own pr-reviewer pass before it is pushed. Preserve unrelated
+working-tree changes. After the PR and status update succeed, start a new session for the next
+Incomplete action.
 ```
 
 ## Current Work

@@ -1,12 +1,12 @@
 ---
 name: vux-journey-sweep
-description: "Runs a full visual/UX and accessibility sweep of bourbonbook against a live instance: brings up the container, reads admin credentials, dispatches the vux-tester subagent across the user and admin journeys at mobile and desktop viewports, checks docker logs, and collates findings by severity. Use when the user asks to sweep the UI, check accessibility, run a UX regression pass, or invokes /vux-journey-sweep. For photo-analysis field accuracy, use e2e-bottle-test instead."
+description: "Runs a full visual/UX and accessibility sweep of bourbonbook against a live instance: brings up the container, reads admin credentials, dispatches the tester subagent across the user and admin journeys at mobile and desktop viewports, checks docker logs, and collates findings by severity. Use when the user asks to sweep the UI, check accessibility, run a UX regression pass, or invokes /vux-journey-sweep. For photo-analysis field accuracy, use e2e-bottle-test instead."
 ---
 
 ## Context
 
-This is the launcher for the `vux-tester` agent, mirroring what `e2e-bottle-test` does for
-`e2e-bottle-tester`. It exercises the real stack in a real browser, which the in-process
+This is the launcher for the `tester` agent in its journey-sweep mode, mirroring what
+`e2e-bottle-test` does for its field-accuracy mode. It exercises the real stack in a real browser, which the in-process
 `TestClient` suite cannot do. It is slow and mutates a real local database, so run it only when
 asked.
 
@@ -39,20 +39,45 @@ which target you used.
 Read `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` from the data-dir `.env`. If either is
 missing, stop — the admin journeys cannot run, and a partial sweep should be an explicit decision.
 
+Also establish a **non-admin test account** (`test_user_email` / `test_user_password`) for the
+profile journey, registering one if none exists. The profile journey must edit that account, not
+the admin account, so sweeps stay repeatable.
+
+Registering is only self-service outside production: `EMAIL_VERIFICATION_REQUIRED` defaults to
+true, so `/register` lands on `/check-email`, which renders a "Local development link" when
+`APP_ENV` is not `production` — follow that link to verify, then log in. Reuse an existing test
+account when there is one: `MAX_USERS` defaults to 10, so registering a fresh account on every
+sweep will eventually hit the limit.
+
 ### 3. Decide scope
 
-Default: all seven journeys. Narrow it when the user names an area, or when a diff clearly touches
-only one — a change to `templates/admin/` does not need the shopping-list journey. State the scope
-you chose and why.
+Default: all seven journeys, run in this order because later ones depend on earlier state:
+
+1. **Anonymous and auth** — `/login`, `/register`, `/forgot-password`; unauthenticated access to
+   `/`, `/profile`, `/admin/users`, `/bottles/new` must redirect to login without leaking content,
+   and messages must not reveal whether an account exists. Then log in as admin.
+2. **Collection** — `/` and `/collection/compact`: search, sort, card layout, empty states.
+3. **Bottle lifecycle** — upload, edit, status and fill level, delete.
+4. **Shopping list** — `/shopping-list`: add an item, attach a photo, mark purchased, delete.
+5. **Sharing** — enable a share link, check the generated `/shared/{token}` URL anonymously, then
+   log back in as admin and disable it.
+6. **Profile (test account)** — log in as `test_user_email` and exercise `/profile`, then log back
+   in as admin for the admin journey.
+7. **Admin** — `/admin/users`, `/admin/catalog`, `/admin/catalog-import`, `/admin/usage`, and
+   `/admin/config`, confirming no secret value is ever displayed.
+
+Narrow it when the user names an area, or when a diff clearly touches only one — a change to
+`templates/admin/` does not need the shopping-list journey. State the scope you chose and why.
 
 If a baseline is missing for a screen in scope, note it; do not treat it as a failure.
 
-### 4. Dispatch `vux-tester`
+### 4. Dispatch `tester`
 
-Spawn the subagent in the foreground with: `base_url`, the admin credentials, the journey scope, the
-viewport list (390×844 primary, 1440×900 secondary), the baseline directory, and an `image_path`
-from `tests/images/` for the bottle-upload step. Its contract and output format are documented in
-`.claude/agents/vux-tester.md`.
+Spawn the subagent in the foreground with: `base_url`, the admin credentials, the non-admin test
+account credentials for the profile journey, the journey scope, the viewport list (390×844 primary,
+1440×900 secondary), the baseline directory, and an `image_path` from `tests/images/` for the
+bottle-upload step. Its severity scale and output format are documented in
+`~/.agents/agents/tester.md`.
 
 It is read-only by tool list. It cannot fix anything, and it must not be asked to.
 
@@ -72,8 +97,8 @@ Merge the subagent's findings with anything from the logs and present:
 - What could not be tested, and why.
 
 **Do not fix anything.** Unlike `e2e-bottle-test`, this skill has no diagnose-and-repair loop —
-a UX sweep produces a findings report, and remediation goes to `senior-architect` (if it is a design
-question) or `bourbonbook-engineer` (if it is a defect) as a separate, reviewable piece of work. Say
+a UX sweep produces a findings report, and remediation goes to `architect` (if it is a design
+question) or `engineer` (if it is a defect) as a separate, reviewable piece of work. Say
 which findings you are routing where.
 
 ## Ground rules

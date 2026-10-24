@@ -1,6 +1,6 @@
 ---
 name: e2e-bottle-test
-description: "Runs a real browser-driven end-to-end test of bourbonbook's photo-upload pipeline against a live local Docker container: starts run-docker.sh, uploads every photo in tests/images/ through the actual /bottles/new form via the e2e-bottle-tester subagent (Playwright MCP), checks docker logs for runtime errors, and — only for hard failures (crashes/5xx/log errors/completely-failed analysis), never for ordinary field-value mismatches — automatically diagnoses, fixes, and retests, capped at 3 cycles. Use when the user asks to run/re-run the bottle-upload e2e test, or invokes /e2e-bottle-test."
+description: "Runs a real browser-driven end-to-end test of bourbonbook's photo-upload pipeline against a live local Docker container: starts run-docker.sh, uploads every photo in tests/images/ through the actual /bottles/new form via the tester subagent (Playwright MCP), checks docker logs for runtime errors, and — only for hard failures (crashes/5xx/log errors/completely-failed analysis), never for ordinary field-value mismatches — automatically diagnoses, fixes, and retests, capped at 3 cycles. Use when the user asks to run/re-run the bottle-upload e2e test, or invokes /e2e-bottle-test."
 ---
 
 ## Context
@@ -50,11 +50,70 @@ test yet).
 
 ### 3. Run the browser test
 
-Spawn the `e2e-bottle-tester` subagent (foreground — its report drives the next decision) with a
-prompt containing: `base_url=https://bourbonbook.orb.local`, the admin email/password read from
-`.env` in step-0, and the full list of records from step 1 (image paths + expected dicts). Its
-required output format is documented in `.claude/agents/e2e-bottle-tester.md` — a `## HARD_FAILURES`
-section (either `none` or an itemized list) followed by per-bottle field-by-field results.
+Spawn the `tester` subagent (foreground — its report drives the next decision) in its
+photo-analysis field-accuracy mode, with a prompt containing: `base_url=https://bourbonbook.orb.local`,
+the admin email/password read from `.env` in step-0, and the full list of records from step 1
+(image paths + expected dicts). **Mechanics for each record.** Navigate to `{base_url}/bottles/new`, read the fresh `csrf_token`
+hidden input from that page, upload the file into `input[name="photo"]`, and click
+`button[data-submit-button]` ("Analyze bottle"). Wait generously for the navigation — a cold-start
+vision model load can take a couple of minutes — then confirm the URL matches `/bottles/{id}/edit`,
+which on success carries a `?new=1` query string (`app.js` redirects to `/bottles/{id}/edit?new=1`).
+Match the path, not the whole string: a strict equality check would fail every healthy bottle.
+Read each expected field from the edit page by its `name` attribute, e.g.
+`input[name="proof"].value`, `select[name="spirit_type"].value`,
+`input[name="status"]:checked.value`, `input[name="fill_level"].value`.
+
+For this mode only, reading a field by its stable `name` attribute and clicking the
+`data-submit-button` hook are **contracts, not accessibility findings** — do not report them as
+locator defects. The journey-sweep mode's role/label locator discipline still applies there.
+
+**A bottle is a HARD FAILURE only in these cases** — this is what step 5's automated fix loop is
+gated on, so the definition has to be exact:
+
+- login fails ⇒ hard failure, stop immediately
+- after submitting, the browser lands on a path other than `/bottles/{id}/edit` (CSRF error, 500,
+  stuck on the analyzing screen, timeout) ⇒ hard failure for that bottle, recorded with the page's
+  error text, current URL and a screenshot; move on to the next record and **do not retry**
+- `name` comes back blank or literally `"Untitled bottle"` ⇒ hard failure (the analysis call failed
+  outright); skip further field comparison for that bottle
+
+**Everything else is PASS or SOFT-MISMATCH, never a hard failure.** Compare per field:
+
+- `proof`, `abv`: numeric, tolerance ±0.5
+- `fill_level`: numeric (strip `%` from expected), tolerance ±15 — this field is known to be
+  unreliable from vision analysis, so a mismatch is expected noise, not a bug
+- `size`, `status`: exact string match, case-insensitive
+- `msrp`: numeric when both present, noting the delta; a blank actual against a populated
+  expectation is a SOFT-MISMATCH noted "no price found", since this depends on live catalog and web
+  data — never a hard failure
+- `name`, `brand`, `release`, `edition`, `spirit_type`, `distilled_by`, `mash_bill`, `warehouse`,
+  `floor`, `barrel_number`: case-insensitive substring match in either direction counts as PASS;
+  anything else is a SOFT-MISMATCH
+
+Error-level `browser_console_messages` after each submission are recorded next to that bottle's
+results, informational unless they correlate with the page failing to load.
+
+Require exactly this output format so it can be parsed programmatically:
+
+```
+## HARD_FAILURES
+none
+```
+or, if any:
+```
+## HARD_FAILURES
+- <bottle_label>: <one-line reason>
+```
+
+followed by, for every record attempted:
+```
+## <bottle_label> (bottle id <id or "n/a">)
+- proof: expected=<x> actual=<y> => PASS|SOFT-MISMATCH
+- (one line per expected field)
+```
+
+Every image in the input list must appear in the output, including ones that hard-failed (with
+whatever partial info is available). No record may be summarized or omitted.
 
 ### 4. Check docker logs
 
@@ -80,7 +139,7 @@ c. Spawn a **`general-purpose`** agent with that plan, instructed to implement t
    `pytest -xvs` and `ruff check .` to confirm no regressions before reporting back. If it can't
    get tests green, it should say so rather than claim success.
 d. Go back to step 2 (rebuild/restart via `run-docker.sh`) and step 3 (retest with the same
-   `e2e-bottle-tester` subagent — this retest step is deliberately the same subagent re-invoked,
+   `tester` subagent — this retest step is deliberately the same subagent re-invoked,
    not a separate definition).
 e. If hard failures persist after 3 total cycles: stop, do not attempt a 4th change, and report to
    the user the full history — what each cycle diagnosed, what each cycle changed, and the

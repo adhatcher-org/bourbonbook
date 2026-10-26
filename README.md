@@ -399,9 +399,11 @@ The workflows under `.github/workflows` follow the current `adhatcher-org` patte
 
 ## Agent-assisted development workflow
 
-This repository ships a set of AI agents that divide the work of changing it: designing, critiquing,
-implementing, testing, and shepherding pull requests. They live in `.claude/agents/` (Claude Code)
-and `.codex/agents/` (Codex). `AGENTS.md` is the authoritative description; this section is the map.
+A set of AI agents divides the work of changing this repository: orchestrating, designing,
+critiquing, implementing, testing, and shepherding pull requests. They are not shipped per-repo
+any more — they are defined once in `~/.agents/agents/` and reused across repositories, which is
+why this repository no longer carries `.claude/agents/` or `.codex/agents/` directories.
+`AGENTS.md` is the authoritative description; this section is the map.
 
 Two ideas hold the whole thing together. **Reviewers are separate agents with fresh context** — the
 agent that wrote a plan cannot meaningfully critique it, so critics and validators start cold and
@@ -454,8 +456,8 @@ flowchart TD
       SEC["Security Reviewer<br/>SAST · dependency audit · secrets"]
   end
 
-  PRA["7 · PR Agent — GitHub MCP<br/>PR referencing ADRs · plan · issue"]
-  PRR["8 · PR Reviewer<br/>diff vs. plan and ADRs"]
+  PRR["7 · pr-reviewer<br/>pre-PR review: correctness · security<br/>format · dependencies · LLM safety"]
+  PRA["8 · Draft PR via pr-gate<br/>opened by pr-reviewer, only on a clean review"]
   GD{{"GATE D — human merge approval"}}
   DOC["9 · Docs/Release Agent<br/>ADR status → Accepted<br/>changelog · runbook"]
   Done([Merged and released])
@@ -468,48 +470,47 @@ CI -->|pass| E2E
 CI -->|pass| SEC
 E2E -.->|fail| IMP
 SEC -.->|findings| IMP
-E2E --> PRA
-SEC --> PRA
-PRA --> PRR
-PRR -.->|"request-changes · loop ≤2"| IMP
-PRR -->|approve| GD --> DOC --> Done
+E2E --> PRR
+SEC --> PRR
+PRR -.->|"findings · loop ≤3"| IMP
+PRR -->|clean| PRA --> GD --> DOC --> Done
 ```
 
 ### The agents
 
 | Agent | Does | Can write? |
 | --- | --- | --- |
-| `senior-architect` | Reviews the request against the existing design, plans the change, owns ADRs and the architecture docs | Docs and plans only |
-| `architecture-critic` | Independent design review; returns `APPROVE` or `REVISE` with evidence | No |
-| `bourbonbook-engineer` | Implements one action end to end with tests, runs the local gates | Code, tests, migrations |
-| `bourbonbook-reviewer` | Independent code review bound to an exact commit | No |
-| `bourbonbook-pr-validator` | Runs the full `make pr-review` gate; the only agent that may approve a PR | Approval only |
-| `bourbonbook-pr-manager` | Writes the PR body, opens the draft, triages CI, updates the tracker | PR text and tracker |
-| `vux-tester` | Browser sweep of whole journeys: layout, accessibility, console health, visual diffs | No |
-| `e2e-bottle-tester` | Photo-analysis field accuracy against the image fixtures | No |
+| `coordinator` | The only agent that dispatches the others; owns task-tracking state | Task state only |
+| `architect` | Reviews the request against the existing design, plans the change, owns ADRs and the architecture docs | Docs and plans only |
+| `architect-critic` | Independent design review; returns `APPROVE` or `REVISE` with evidence | No |
+| `engineer` | Implements one action end to end with tests, runs the local gates | Code, tests, migrations |
+| `tester` | Browser testing in two modes: whole-journey UX/accessibility sweeps, and photo-analysis field accuracy against the image fixtures | No |
+| `pr-reviewer` | Pre-PR review for correctness, security, format, dependencies and LLM-usage safety; opens the PR itself only if clean | `pr-gate` actions only |
 
-Four skills carry the domain rules and are applied automatically by the agents when a change crosses
-their boundary: `roadmap-action`, `migration-change`, `pwa-visual-check`, and `provider-evaluation`.
+Skills under `.claude/skills/` carry the domain rules and are applied by the agents when a change
+crosses their boundary: `bourbonbook-invariants`, `roadmap-action`, `adr-authoring`,
+`c4-diagram-update`, `fastapi-route-change`, `migration-change`, `pwa-visual-check`,
+`provider-evaluation`, and the two `tester` verification modes, `e2e-bottle-test` and
+`vux-journey-sweep`. `AGENTS.md` describes when each applies.
 
 ### Interacting with them
 
-Ask the architect first for anything non-trivial; it drives the rest of the chain.
+Ask the coordinator for anything non-trivial; it drives the rest of the chain.
 
 ```text
-@senior-architect  Bottles should support a "sample/pour" status alongside
-                   unopened/opened/empty. Plan it.
+@coordinator  Bottles should support a "sample/pour" status alongside
+              unopened/opened/empty. Plan it.
 ```
 
-It investigates, drafts a proposal, sends it to the critic itself, and comes back to you with a plan
-to approve. You do not need to invoke the critic by hand.
+It dispatches the architect, routes the proposal to the critic, and comes back to you with a plan
+to approve. No agent dispatches another, so you do not invoke the architect or critic by hand.
 
 ```text
-@bourbonbook-engineer   Implement A03. Follow the roadmap-action skill.
-@vux-tester        Sweep the admin journeys at 390px against https://bourbonbook.orb.local
-@bourbonbook-pr-manager        Open the draft PR for this branch.
+@coordinator  Implement A03. Follow the roadmap-action skill.
+@coordinator  Sweep the admin journeys at 390px against https://bourbonbook.orb.local
 ```
 
-Small, obvious fixes do not need the chain — ask `bourbonbook-engineer` directly. The chain earns its
+Small, obvious fixes do not need the chain — ask `engineer` directly. The chain earns its
 overhead when a change touches the schema, a provider, the security boundary, or the design.
 
 ### What stops on its own

@@ -173,7 +173,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=13,<14" },
     { name = "prometheus-client", specifier = ">=0.22,<1" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1" },
-    { name = "pymupdf", specifier = ">=1.26,<2" },
+    { name = "pymupdf", specifier = ">=1.26,<3" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },

@@ -17,7 +17,7 @@ CATALOG_SCREENSHOTS ?= AmericanWhiskey1.png AmericanWhiskey2.png
 CATALOG_SCREENSHOT_OUTPUT ?= $(DATA_DIR)/ohlq-screenshot-prices.jsonl
 
 .PHONY: help install build build-local check pre-ci ci test coverage run_local update lint format \
-	pr-review pr-check security dependency-check benchmark-export benchmark-run benchmark-compare \
+	pr-review pr-check security dependency-check dependency-updates benchmark-export benchmark-run benchmark-compare \
 	price-catalog-ingest price-catalog-reindex
 	price-catalog-extract-screenshots
 
@@ -62,6 +62,26 @@ dependency-check: ## Validate the lock and audit the resolved environment.
 		sleep $$((attempt * 10)); \
 	done; \
 	$(UV) run --frozen --no-sync pip-audit
+
+dependency-updates: ## Check for newer locked dependency versions without modifying the lockfile.
+	@ok=0; out=""; \
+	for attempt in 1 2 3; do \
+		if out=$$($(UV) lock --upgrade --dry-run 2>&1); then \
+			ok=1; \
+			break; \
+		fi; \
+		echo "uv lock --upgrade --dry-run failed; retrying in $${attempt}0s" >&2; \
+		sleep $$((attempt * 10)); \
+	done; \
+	printf '%s\n' "$$out"; \
+	if [ "$$ok" -ne 1 ]; then \
+		echo "uv lock --upgrade --dry-run failed after 3 attempts" >&2; \
+		exit 1; \
+	fi; \
+	if printf '%s\n' "$$out" | grep -Eq '^(Update|Add|Remove) '; then \
+		echo "Outdated dependencies detected. Run 'make update' to upgrade intentionally." >&2; \
+		exit 1; \
+	fi
 
 benchmark-export: ## Export the benchmark fixture into local data/benchmarks.
 	@BENCHMARK_OWNER=$${BENCHMARK_OWNER:?set BENCHMARK_OWNER to the exact owner ID or username}; \

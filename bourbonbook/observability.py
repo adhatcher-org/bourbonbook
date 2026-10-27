@@ -327,7 +327,10 @@ class AIUsageRecorder:
             with self.session_factory() as session:
                 result = session.execute(delete(ApiUsage).where(ApiUsage.created_at < cutoff))
                 session.commit()
-                return int(result.rowcount or 0)
+                try:
+                    return int(result.rowcount or 0)
+                finally:
+                    result.close()
         except Exception:
             logger.exception(
                 "Failed to clean API usage records",

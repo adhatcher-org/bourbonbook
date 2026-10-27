@@ -93,7 +93,10 @@ def retry_failed_catalog_import_batch(
             updated_at=now(),
         )
     )
-    return bool(result.rowcount)
+    try:
+        return bool(result.rowcount)
+    finally:
+        result.close()
 
 
 def apply_catalog_import_batch(
@@ -204,8 +207,11 @@ def apply_catalog_import_batch(
                 lease_expires_at=None,
             )
         )
-        if transitioned.rowcount != 1:
-            raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
+        try:
+            if transitioned.rowcount != 1:
+                raise CatalogImportApplyStateError("Only batches awaiting review can be applied.")
+        finally:
+            transitioned.close()
     return CatalogImportApplyResult(
         created=created,
         updated=updated,

@@ -193,4 +193,7 @@ def recover_orphaned_bottle_processing(session: Session) -> int:
             processing_error="Interrupted by server restart",
         )
     )
-    return int(result.rowcount or 0)
+    try:
+        return int(result.rowcount or 0)
+    finally:
+        result.close()

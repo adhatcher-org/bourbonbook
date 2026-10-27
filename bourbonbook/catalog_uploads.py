@@ -311,8 +311,9 @@ def cleanup_expired_catalog_import_sources(settings: Settings, session: Session)
                 continue
         shutil.rmtree(child, ignore_errors=True)
         if batch is not None and batch.state == "failed":
-            session.execute(
+            result = session.execute(
                 update(CatalogImportBatch)
                 .where(CatalogImportBatch.id == batch.id, CatalogImportBatch.state == "failed")
                 .values(state="expired", lease_expires_at=None)
             )
+            result.close()

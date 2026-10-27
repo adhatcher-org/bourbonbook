@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
+from sqlalchemy import func, select
 
 from bourbonbook.catalog_extract import CatalogExtractionError, CatalogExtractionProposal
 from bourbonbook.catalog_import_worker import (
@@ -47,7 +48,7 @@ def settings(tmp_path: Path) -> Settings:
 
 def create_batch(database: Database, configured: Settings, *, state: str = "queued") -> int:
     with database.session_factory() as session:
-        user = session.query(User).filter_by(email="admin@example.com").one_or_none()
+        user = session.scalar(select(User).filter_by(email="admin@example.com"))
         if user is None:
             user = User(
                 username="admin@example.com",
@@ -123,7 +124,8 @@ def test_independent_sessions_cannot_over_admit_capacity_one_queue(tmp_path: Pat
 
     def reserve_in_own_session() -> int | None:
         with database.session_factory() as session:
-            admin = session.query(User).filter_by(email="admin@example.com").one()
+            admin = session.scalar(select(User).filter_by(email="admin@example.com"))
+            assert admin is not None
             barrier.wait()
             batch_id = reserve_catalog_import_batch(
                 session,
@@ -141,7 +143,10 @@ def test_independent_sessions_cannot_over_admit_capacity_one_queue(tmp_path: Pat
 
     assert sum(batch_id is not None for batch_id in reservations) == 1
     with database.session_factory() as session:
-        assert session.query(CatalogImportBatch).filter_by(state="queued").count() == 1
+        queued_count = session.scalar(
+            select(func.count()).select_from(CatalogImportBatch).filter_by(state="queued")
+        )
+        assert queued_count == 1
 
 
 def test_worker_persists_proposals_then_moves_to_review_and_removes_sources(tmp_path: Path) -> None:
@@ -160,7 +165,9 @@ def test_worker_persists_proposals_then_moves_to_review_and_removes_sources(tmp_
 
     with database.session_factory() as session:
         batch = session.get(CatalogImportBatch, batch_id)
-        proposal = session.query(CatalogImportProposal).filter_by(batch_id=batch_id).one()
+        proposal = session.execute(
+            select(CatalogImportProposal).filter_by(batch_id=batch_id)
+        ).scalar_one()
         assert batch is not None
         assert (batch.state, batch.attempt_count, batch.lease_expires_at) == ("review", 1, None)
         assert (proposal.product_key, proposal.size_key, proposal.msrp) == (

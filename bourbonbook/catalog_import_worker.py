@@ -61,7 +61,10 @@ def recover_expired_catalog_import_leases(session: Session, now: datetime) -> in
             error_summary="Interrupted extraction lease recovered.",
         )
     )
-    return int(result.rowcount or 0)
+    try:
+        return int(result.rowcount or 0)
+    finally:
+        result.close()
 
 
 def claim_next_catalog_import(
@@ -90,8 +93,11 @@ def claim_next_catalog_import(
             updated_at=now,
         )
     )
-    if not claimed.rowcount:
-        return None
+    try:
+        if not claimed.rowcount:
+            return None
+    finally:
+        claimed.close()
     return session.get(CatalogImportBatch, candidate_id)
 
 
@@ -109,7 +115,10 @@ def heartbeat_catalog_import_lease(
             updated_at=now,
         )
     )
-    return bool(result.rowcount)
+    try:
+        return bool(result.rowcount)
+    finally:
+        result.close()
 
 
 class CatalogImportWorker:
@@ -249,9 +258,10 @@ class CatalogImportWorker:
             batch = session.get(CatalogImportBatch, batch_id)
             if batch is None or batch.state != CatalogImportState.EXTRACTING.value:
                 return
-            session.execute(
+            result = session.execute(
                 delete(CatalogImportProposal).where(CatalogImportProposal.batch_id == batch_id)
             )
+            result.close()
             price_updated_at = batch.requested_price_updated_at or self._now().date()
             session.add_all(
                 CatalogImportProposal(

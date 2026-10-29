@@ -118,7 +118,7 @@ price-catalog-extract-screenshots: ## Extract local screenshot records through t
 pr-check: ## Check diff hygiene, tracked secrets, migrations, and Compose configuration.
 	$(UV) run --frozen --no-sync $(PYTHON) scripts/pr_review.py
 
-check: lint test coverage security dependency-check pr-check ## Run all non-mutating quality gates.
+check: lint test coverage security dependency-check dependency-updates pr-check ## Run all non-mutating quality gates.
 	@echo "All non-mutating quality gates passed."
 
 pre-ci: check ## Backward-compatible alias for the non-container quality gate.

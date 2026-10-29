@@ -45,7 +45,9 @@ def test_make_help_exposes_required_contract() -> None:
     }
 
     assert all(f"{target}:" in content for target in required)
-    assert "check: lint test coverage security dependency-check pr-check" in content
+    assert (
+        "check: lint test coverage security dependency-check dependency-updates pr-check"
+    ) in content
     assert content.count("--frozen --no-sync") >= 6
 
 

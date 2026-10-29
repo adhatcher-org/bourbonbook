@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import weakref
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event
@@ -38,6 +39,9 @@ class Database:
     def __init__(self, settings: Settings) -> None:
         self.engine = create_database_engine(settings.database_url)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
+        # Dispose the engine when this Database is garbage collected so test-created
+        # engines don't leak SQLite connections that surface as ResourceWarnings.
+        weakref.finalize(self, self.engine.dispose)
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)

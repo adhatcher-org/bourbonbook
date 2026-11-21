@@ -4,7 +4,7 @@ import os
 import time
 from pathlib import Path
 
-import fitz
+import pymupdf
 import pytest
 from fastapi import HTTPException
 
@@ -34,7 +34,7 @@ def settings(tmp_path: Path, **changes: int) -> Settings:
 
 
 def pdf_with_pages(page_count: int) -> bytes:
-    document = fitz.open()
+    document = pymupdf.open()
     for _ in range(page_count):
         document.new_page()
     content = document.tobytes()
@@ -148,7 +148,7 @@ def test_catalog_upload_validation_rejects_decodable_image_pixel_bomb(tmp_path: 
 def test_catalog_upload_validation_rejects_pdf_before_oversized_rasterization(
     tmp_path: Path,
 ) -> None:
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page(width=100, height=72)
     content = document.tobytes()
     document.close()

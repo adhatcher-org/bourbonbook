@@ -191,10 +191,10 @@ def document_chunks(
             )
         ]
 
-    import fitz
+    import pymupdf
 
     chunks: list[CatalogRenderChunk] = []
-    with fitz.open(path) as document:
+    with pymupdf.open(path) as document:
         for page_number, page in enumerate(document, start=1):
             validate_catalog_pdf_render_dimensions(
                 page,
@@ -202,7 +202,7 @@ def document_chunks(
                 max_dimension=max_pdf_render_dimension,
             )
             pixmap = page.get_pixmap(
-                matrix=fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False
+                matrix=pymupdf.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False
             )
             with Image.open(io.BytesIO(pixmap.tobytes("jpeg"))) as rendered:
                 for top, image in _image_chunks(rendered.convert("RGB"), chunk_height, overlap):

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-import fitz
+import pymupdf
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import update
@@ -104,7 +104,7 @@ def validate_catalog_uploads(
 
         if extension == "pdf":
             try:
-                with fitz.open(stream=content, filetype="pdf") as document:
+                with pymupdf.open(stream=content, filetype="pdf") as document:
                     page_count = document.page_count
                     for page_index, page in enumerate(document, start=1):
                         try:
@@ -117,7 +117,7 @@ def validate_catalog_uploads(
                             raise CatalogInputLimitError(f"Page {page_index}: {str(e)}") from e
             except CatalogInputLimitError as exc:
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
-            except fitz.FileDataError as exc:
+            except pymupdf.FileDataError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail="PDF file is corrupted or not a valid PDF. Please check the file.",
@@ -190,7 +190,7 @@ def validate_catalog_image_dimensions(
 
 
 def validate_catalog_pdf_render_dimensions(
-    page: fitz.Page, *, max_pixels: int, max_dimension: int
+    page: pymupdf.Page, *, max_pixels: int, max_dimension: int
 ) -> None:
     """Reject a PDF page before PyMuPDF allocates its rendered pixel buffer."""
     _validate_pdf_render_dimensions(page, max_pixels=max_pixels, max_dimension=max_dimension)
@@ -222,7 +222,7 @@ def _validate_image_dimensions(image: Image.Image, *, max_pixels: int, max_dimen
 
 
 def _validate_pdf_render_dimensions(
-    page: fitz.Page, *, max_pixels: int, max_dimension: int
+    page: pymupdf.Page, *, max_pixels: int, max_dimension: int
 ) -> None:
     bounds = page.bound()
     width = int(bounds.width * PDF_RENDER_SCALE + 0.999999)

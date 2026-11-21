@@ -3,8 +3,8 @@ import json
 import logging
 from pathlib import Path
 
-import fitz
 import httpx
+import pymupdf
 import pytest
 from PIL import Image
 from sqlalchemy import select
@@ -74,7 +74,7 @@ def generated_image(path: Path, *, height: int = 1300) -> None:
 
 
 def generated_pdf(path: Path) -> None:
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page(width=72, height=72).insert_text((12, 36), "Catalog")
     document.save(path)
     document.close()
@@ -132,7 +132,7 @@ def test_document_chunks_rejects_oversized_image_before_conversion(tmp_path: Pat
 
 def test_document_chunks_rejects_pdf_before_oversized_rasterization(tmp_path: Path) -> None:
     pdf_path = tmp_path / "oversized.pdf"
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page(width=100, height=72)
     document.save(pdf_path)
     document.close()
